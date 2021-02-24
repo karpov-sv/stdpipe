@@ -11,7 +11,9 @@ requirements = [
     'matplotlib',
     'pandas',
     'astroquery',
-    'sep'
+    'sep',
+    'statsmodels',
+    'esutil',
 ]
 
 setup(
