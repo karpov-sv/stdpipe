@@ -35,6 +35,14 @@ def imshow(image, qq=[0.5,97.5], show_colorbar=True, show_axis=True, ax=None, **
         kwargs['vmin'] = vmin1
     if not 'vmax' in kwargs:
         kwargs['vmax'] = vmax1
+
+    if not 'interpolation' in kwargs:
+        # Rough heuristic to choose interpolation method based on image dimensions
+        if image.shape[0] < 300 and image.shape[1] < 300:
+            kwargs['interpolation'] = 'nearest'
+        else:
+            kwargs['interpolation'] = 'bicubic'
+
     img = ax.imshow(image, **kwargs)
     if not show_axis:
         ax.set_axis_off()
@@ -92,9 +100,24 @@ def crop_image(data, x0, y0, r0, header=None):
 
     if header is not None:
         subheader = header.copy()
-        subheader['CRPIX1'] -= x1
-        subheader['CRPIX2'] -= y1
 
+        # Adjust the WCS keywords if present
+        if 'CRPIX1' in subheader and 'CRPIX2' in subheader:
+            subheader['CRPIX1'] -= x1
+            subheader['CRPIX2'] -= y1
+
+        # FIXME: should we use 0-based or 1-based coordinates here?..
+
+        # Crop target inside cutout
+        subheader['CROP_X'] = x0 - x1
+        subheader['CROP_Y'] = y0 - y1
+
+        # Crop center inside original frame
+        subheader['CROP_X0'] = x0
+        subheader['CROP_Y0'] = y0
+        subheader['CROP_R0'] = r0
+
+        # Crop position inside original frame
         subheader['CROP_X1'] = x1
         subheader['CROP_X2'] = x2
         subheader['CROP_Y1'] = y1

@@ -319,13 +319,14 @@ def make_series(mul=1.0, x=1.0, y=1.0, order=1, sum=False, zero=True):
     else:
         return res
 
-def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_mag, cat_magerr=None, cat_color=None, sr=3/3600, obj_x=None, obj_y=None, spatial_order=0, threshold=5.0, verbose=True, robust=True):
-    # Spherical cross-matching
+def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_mag, cat_magerr=None, cat_color=None, sr=3/3600, obj_x=None, obj_y=None, spatial_order=0, threshold=5.0, verbose=False, robust=True):
     h = htm.HTM(10)
+
     oidx,cidx,dist = h.match(obj_ra, obj_dec, cat_ra, cat_dec, sr, maxmatch=0)
 
     if verbose:
         print(len(dist), 'initial matches between', len(obj_ra), 'objects and', len(cat_ra), 'catalogue stars, sr=', sr*3600, 'arcsec')
+        print('Median separation is', np.median(dist)*3600, 'arcsec')
 
     omag, omag_err, oflags = obj_mag[oidx], obj_magerr[oidx], obj_flags[oidx]
     cmag = cat_mag[cidx].filled(fill_value=np.nan)
@@ -338,7 +339,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
         x0, y0 = 0, 0
         x, y = np.zeros_like(omag), np.zeros_like(omag)
 
-    # Spatial regressor
+    # Regressor
     X = make_series(1.0, x, y, order=spatial_order)
 
     if verbose:
@@ -348,12 +349,13 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
         else:
             print('Using weighted fitting')
 
-    # Color regressor
     if cat_color is not None:
         ccolor = cat_color[cidx].filled(fill_value=np.nan)
         X += make_series(ccolor, x, y, order=0)
         if verbose:
             print('Using color term')
+    else:
+        ccolor = np.zeros_like(cmag)
 
     X = np.vstack(X).T
     zero = cmag - omag # We will build a model for this definition of zero point
@@ -404,9 +406,18 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
 
         return np.sum(X*C.params[0:X.shape[1]], axis=1)
 
+    if cat_color is not None:
+        X = make_series(order=spatial_order)
+        color_term = C.params[len(X):][0]
+        if verbose:
+            print('Color term is', color_term)
+    else:
+        color_term = None
+
     return {'oidx': oidx, 'cidx': cidx, 'dist': dist,
             'omag': omag, 'omag_err': omag_err,
             'cmag': cmag, 'cmag_err': cmag_err,
+            'color': ccolor, 'color_term': color_term,
             'zero': zero, 'zero_err': zero_err,
             'zero_model': zero_model, 'zero_fn': zero_fn,
             'obj_zero': zero_fn(obj_x, obj_y),
