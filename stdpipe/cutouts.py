@@ -1,7 +1,11 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 import numpy as np
+import datetime
+
 from astropy.wcs import WCS
+from astropy.io import fits
+from astropy.time import Time
 
 from . import utils
 
@@ -49,7 +53,7 @@ def crop_image(data, x0, y0, r0, header=None):
     else:
         return sub
 
-def get_cutout(image, candidate, size, mask=None, bg=None, header=None, time=None):
+def get_cutout(image, candidate, size, mask=None, bg=None, header=None, time=None, filename=None):
     x0, y0 = candidate['x'], candidate['y']
 
     _ = crop_image(image, x0, y0, size, header=header)
@@ -60,7 +64,7 @@ def get_cutout(image, candidate, size, mask=None, bg=None, header=None, time=Non
 
     cutout = {'image': crop}
 
-    for _ in ['x', 'y', 'ra', 'dec', 'mag', 'magerr', 'mag_calib', 'flags', 'id']:
+    for _ in ['x', 'y', 'ra', 'dec', 'mag', 'magerr', 'mag_calib', 'flags', 'id', 'filename', 'time']:
         if _ in candidate.colnames:
             cutout[_] = candidate[_]
 
@@ -77,9 +81,63 @@ def get_cutout(image, candidate, size, mask=None, bg=None, header=None, time=Non
     if bg is not None:
         cutout['bg'] = crop_image(bg, x0, y0, size)
 
-    if 'time' in candidate.colnames:
-        cutout['time'] = candidate['time']
-    elif time is not None:
+    if not 'time' in cutout and time is not None:
         cutout['time'] = time
+
+    if not 'filename' in cutout and filename is not None:
+        cutout['filename'] = filename
+
+    return cutout
+
+def write_cutout(cutout, filename):
+    hdus = []
+
+    # Store metadata to primary header
+    hdu = fits.PrimaryHDU()
+
+    for _ in ['x', 'y', 'ra', 'dec', 'mag', 'magerr', 'mag_calib', 'flags', 'id', 'time', 'filename']:
+        if _ in cutout:
+            data = cutout[_]
+            # Special handling for unsupported FITS types
+            if _ == 'time':
+                data = Time(data).to_value('fits')
+
+            hdu.header[_] = data
+
+    hdus.append(hdu)
+
+    # Store imaging data to named extensions
+    for _ in ['image', 'mask', 'bg', 'template', 'diff']:
+        if _ in cutout:
+            data = cutout[_]
+
+            if data.dtype == np.bool:
+                data = data.astype(np.uint16)
+
+            hdu = fits.ImageHDU(data, header=cutout.get('header'), name=_)
+            hdus.append(hdu)
+
+    fits.HDUList(hdus).writeto(filename, overwrite=True)
+
+def load_cutout(filename):
+    hdus = fits.open(filename)
+
+    cutout = {}
+    for _ in ['x', 'y', 'ra', 'dec', 'mag', 'magerr', 'mag_calib', 'flags', 'id', 'filename', 'time']:
+        if _ in hdus[0].header:
+            data = hdus[0].header[_]
+
+            if _ == 'time':
+                data = Time(data)
+
+            cutout[_] = data
+
+    for hdu in hdus[1:]:
+        if 'header' not in cutout:
+            cutout['header'] = hdu.header
+
+        cutout[hdu.name.lower()] = hdu.data
+
+    hdus.close()
 
     return cutout
