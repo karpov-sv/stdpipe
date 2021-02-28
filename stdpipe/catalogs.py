@@ -3,11 +3,18 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 import os, posixpath, shutil, tempfile
 import numpy as np
 
-from astropy.table import Table
+from astropy.table import Table, MaskedColumn, vstack
 from astroquery.vizier import Vizier
 from astroquery.xmatch import XMatch
+from astroquery.imcce import Skybot
+from astroquery.ned import Ned
 from astropy.coordinates import SkyCoord
 from astropy import units as u
+from astropy.time import Time
+
+from esutil import htm
+
+from . import astrometry
 
 catalogs = {
     'ps1': {'vizier': 'II/349/ps1', 'name': 'PanSTARRS DR1'},
@@ -100,6 +107,45 @@ def xmatch_objects(obj, catalog='ps1', sr=3/3600, col_ra='ra', col_dec='dec'):
     else:
         vizier_id = catalog
 
-    xmatch = XMatch()
+    xcat = XMatch().query(cat1=obj, cat2='vizier:' + vizier_id, max_distance=sr*u.deg, colRA1=col_ra, colDec1=col_dec)
 
-    return xmatch.query(cat1=obj, cat2='vizier:' + vizier_id, max_distance=sr*u.deg, colRA1=col_ra, colDec1=col_dec)
+    return xcat
+
+def xmatch_skybot(obj, sr=10/3600, time=None, location='500', col_ra='ra', col_dec='dec', col_id='id'):
+    ra0,dec0,sr0 = astrometry.get_objects_center(obj)
+
+    try:
+        # Query SkyBot for (a bit larger than) our FOV at our time
+        xcat = Skybot.cone_search(SkyCoord(ra0, dec0, unit='deg'), (sr0 + 2.0*sr)*u.deg, Time(time))
+    except RuntimeError:
+        # Nothing fount in SkyBot
+        return None
+
+    # Cross-match objects
+    h = htm.HTM(10)
+    oidx,cidx,dist = h.match(obj[col_ra], obj[col_dec], xcat['RA'], xcat['DEC'], 10/3600)
+
+    # Annotate the table with id from objects so that it is possible to identify the matches
+    xcat['id'] = MaskedColumn(len(xcat), dtype=np.dtype(obj[col_id][0]))
+    xcat['id'].mask = True
+    xcat['id'][cidx] = obj[col_id][oidx]
+    xcat['id'][cidx].mask = False
+
+    return xcat
+
+def xmatch_ned(obj, sr=3/3600, col_ra='ra', col_dec='dec', col_id='id'):
+    xcat = []
+
+    # FIXME: is there more optimal way to query NED for multiple sky positions?..
+    for row in obj:
+        res = Ned().query_region(SkyCoord(row[col_ra], row[col_dec], unit='deg'), sr*u.deg)
+
+        if res:
+            res['id'] = row[col_id]
+
+            xcat.append(res)
+
+    if xcat:
+        xcat = vstack(xcat, join_type='exact', metadata_conflicts='silent')
+
+    return xcat

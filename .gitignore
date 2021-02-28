@@ -109,3 +109,8 @@ ENV/
 *.orig
 *.rej
 \#*\#
+*~
+
+# Project specific
+tests/
+

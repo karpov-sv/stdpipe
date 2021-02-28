@@ -14,6 +14,7 @@ from astropy.wcs import FITSFixedWarning
 # warnings.simplefilter(action='ignore', category=FutureWarning)
 
 import sep
+import photutils
 
 import statsmodels.api as sm
 from esutil import htm
@@ -206,7 +207,8 @@ def get_objects_sextractor(image, header=None, mask=None, thresh=2.0, aper=3.0, 
     params = ['MAG_APER'+size, 'MAGERR_APER'+size, 'FLUX_APER'+size, 'FLUXERR_APER'+size, 'X_IMAGE', 'Y_IMAGE', 'ERRX2_IMAGE', 'ERRY2_IMAGE', 'A_IMAGE', 'B_IMAGE', 'THETA_IMAGE', 'FLUX_RADIUS', 'FWHM_IMAGE', 'FLAGS', 'IMAFLAGS_ISO', 'BACKGROUND']
     params += extra_params
     paramname = posixpath.join(workdir, 'cfg.param')
-    open(paramname, 'w').write("\n".join(params))
+    with open(paramname, 'w') as paramfile:
+        paramfile.write("\n".join(params))
     opts['PARAMETERS_NAME'] = paramname
 
     catname = posixpath.join(workdir, 'out.cat')
@@ -383,7 +385,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
 
         idx = idx0.copy()
         if threshold:
-            idx &= (np.abs((zero - zero_model)/zero_err) < threshold)
+            idx[idx0] &= (np.abs((zero - zero_model)/zero_err)[idx0] < threshold)
 
         if verbose:
             print('Iteration', iter, ':', np.sum(idx), '/', len(idx), '-', np.std((zero - zero_model)[idx0]), np.std((zero - zero_model)[idx]), '-', np.std((zero - zero_model)[idx]/zero_err[idx]))
@@ -422,3 +424,17 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
             'zero_model': zero_model, 'zero_fn': zero_fn,
             'obj_zero': zero_fn(obj_x, obj_y),
             'idx': idx, 'idx0': idx0}
+
+def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kwargs):
+    if method == 'sep':
+        bg = sep.Background(image, mask=mask, bw=size, bh=size, **kwargs)
+
+        back,backrms = bg.back(), bg.rms()
+    else: # photutils
+        bg = photutils.Background2D(image, size, mask=mask, **kwargs)
+        back,backrms = bg.background, bg.background_rms
+
+    if get_rms:
+        return back, back_rms
+    else:
+        return back
