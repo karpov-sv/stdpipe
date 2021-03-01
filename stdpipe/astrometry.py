@@ -7,6 +7,8 @@ from esutil import coords, htm
 
 from astropy.wcs import WCS
 from astropy.io import fits
+from astropy.wcs.utils import fit_wcs_from_points
+from astropy.coordinates import SkyCoord
 
 def get_frame_center(filename=None, header=None, wcs=None, width=None, height=None):
     """
@@ -209,6 +211,9 @@ def clear_wcs(header, remove_comments=False, remove_history=False, remove_unders
                 is_delete = True
             if re.match('^(A|B|AP|BP)_\d+_\d+$', key):
                 # SIP
+                is_delete = True
+            if re.match('^PV_?\d+_\d+$', key):
+                # PV
                 is_delete = True
             if key[0] == '_' and remove_underscored:
                 is_delete = True

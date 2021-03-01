@@ -1,7 +1,6 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 import numpy as np
-import datetime
 
 from astropy.wcs import WCS
 from astropy.io import fits
@@ -26,6 +25,9 @@ def crop_image(data, x0, y0, r0, header=None):
 
     if header is not None:
         subheader = header.copy()
+
+        subheader['NAXIS1'] = sub.shape[1]
+        subheader['NAXIS2'] = sub.shape[0]
 
         # Adjust the WCS keywords if present
         if 'CRPIX1' in subheader and 'CRPIX2' in subheader:
@@ -82,7 +84,7 @@ def get_cutout(image, candidate, size, mask=None, bg=None, header=None, time=Non
         cutout['bg'] = crop_image(bg, x0, y0, size)
 
     if not 'time' in cutout and time is not None:
-        cutout['time'] = time
+        cutout['time'] = Time(time)
 
     if not 'filename' in cutout and filename is not None:
         cutout['filename'] = filename

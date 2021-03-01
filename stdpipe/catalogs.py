@@ -25,14 +25,16 @@ catalogs = {
 }
 
 def get_cat_vizier(ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}):
-    if catalog not in catalogs:
-        print('Unsupported catalogue', catalog)
-        return None
+    if catalog in catalogs:
+        # For some catalogs we have some additional information
+        vizier_id = catalogs.get(catalog).get('vizier')
+        name = catalogs.get(catalog).get('name')
 
-    vizier_id = catalogs.get(catalog).get('vizier')
-    name = catalogs.get(catalog).get('name')
-
-    columns = ['*'] + catalogs.get(catalog).get('extra', [])
+        columns = ['*'] + catalogs.get(catalog).get('extra', [])
+    else:
+        vizier_id = catalog
+        name = catalog
+        columns = ['*']
 
     vizier = Vizier(row_limit=limit, columns=columns, column_filters=filters)
     cats = vizier.query_region(SkyCoord(ra0, dec0, unit='deg'), radius=sr0*u.deg, catalog=vizier_id)

@@ -105,3 +105,32 @@ def plot_cutout(cutout, fig=None):
     if 'mag' in cutout:
         title += ': mag = %.2f $\pm$ %.2f' % (cutout['mag_calib'], cutout['magerr'])
     fig.suptitle(title)
+
+def plot_photometric_match(m, ax=None, mode='mag'):
+    if ax is None:
+        ax = plt.gca()
+
+    if mode == 'mag':
+        ax.errorbar(m['cmag'][m['idx0']], (m['zero']-m['zero_model'])[m['idx0']], m['zero_err'][m['idx0']], fmt='.', alpha=0.3)
+        ax.plot(m['cmag'][m['idx']], (m['zero']-m['zero_model'])[m['idx']], '.', alpha=1.0, color='red', label='Final fit')
+        ax.plot(m['cmag'][~m['idx0']], (m['zero']-m['zero_model'])[~m['idx0']], 'x', alpha=1.0, color='orange', label='Masked')
+
+        ax.axhline(0, ls='--', color='black', alpha=0.3)
+        ax.legend()
+
+        ax.set_xlabel('Catalogue magnitude')
+        ax.set_ylabel('Model - Instrumental')
+    elif mode == 'color':
+        ax.errorbar(m['color'][m['idx0']], (m['zero']-m['zero_model'])[m['idx0']], m['zero_err'][m['idx0']], fmt='.', alpha=0.3)
+        ax.plot(m['color'][m['idx']], (m['zero']-m['zero_model'])[m['idx']], '.', alpha=1.0, color='red', label='Final fit')
+        ax.plot(m['color'][~m['idx0']], (m['zero']-m['zero_model'])[~m['idx0']], 'x', alpha=1.0, color='orange', label='Masked')
+
+        ax.axhline(0, ls='--', color='black', alpha=0.3)
+        ax.legend()
+
+        ax.set_xlabel('Catalogue color')
+        ax.set_ylabel('Model - Instrumental')
+
+        ax.set_title('color term = %.2f' % m['color_term'])
+
+    return ax
