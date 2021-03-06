@@ -27,8 +27,6 @@ except:
     from scipy.signal import fftconvolve
     dilate = lambda image,mask: fftconvolve(image, mask, mode='same') > 0.9
 
-convolve = lambda x,y: fftconvolve(x, y, mode='same')
-
 def make_kernel(r0=1.0, ext=1.0):
     x,y = np.mgrid[np.floor(-ext*r0):np.ceil(ext*r0+1), np.floor(-ext*r0):np.ceil(ext*r0+1)]
     r = np.hypot(x,y)
@@ -36,14 +34,16 @@ def make_kernel(r0=1.0, ext=1.0):
 
     return image
 
-def get_objects_sep(image, header=None, mask=None, thresh=4.0, aper=3.0, bkgann=None, r0=0.5, gain=1, edge=0, minnthresh=2, minarea=5, relfluxradius=2.0, wcs=None, use_fwhm=False, use_mask_large=False, subtract_bg=True, npix_large=100, sn=10.0, verbose=True, **kwargs):
+def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.0, bkgann=None, r0=0.5, gain=1, edge=0, minnthresh=2, minarea=5, relfluxradius=2.0, wcs=None, use_fwhm=False, use_mask_large=False, subtract_bg=True, npix_large=100, sn=10.0, verbose=True, **kwargs):
+    # Simple wrapper around print for logging in verbose mode only
+    log = print if verbose else lambda *args,**kwargs: None
+
     if r0 > 0.0:
         kernel = make_kernel(r0)
     else:
         kernel = None
 
-    if verbose:
-        print("Preparing background mask")
+    log("Preparing background mask")
 
     if mask is None:
         mask = np.zeros_like(image, dtype=np.bool)
@@ -51,8 +51,7 @@ def get_objects_sep(image, header=None, mask=None, thresh=4.0, aper=3.0, bkgann=
     mask_bg = np.zeros_like(mask)
     mask_segm = np.zeros_like(mask)
 
-    if verbose:
-        print("Building background map")
+    log("Building background map")
 
     bg = sep.Background(image, mask=mask|mask_bg, bw=64, bh=64)
     if subtract_bg:
@@ -60,25 +59,27 @@ def get_objects_sep(image, header=None, mask=None, thresh=4.0, aper=3.0, bkgann=
     else:
         image1 = image.copy()
 
+    if err is None:
+        err = bg.rms()
+        err[~np.isfinite(err)] = 1e30
+        err[err==0] = 1e30
+
     sep.set_extract_pixstack(image.shape[0]*image.shape[1])
 
     if use_mask_large:
         # Mask regions around huge objects as they are most probably corrupted by saturation and blooming
-        if verbose:
-            print("Extracting initial objects")
+        log("Extracting initial objects")
 
-        obj0,segm = sep.extract(image1, err=bg.rms(), thresh=thresh, minarea=minarea, mask=mask|mask_bg, filter_kernel=kernel, segmentation_map=True)
+        obj0,segm = sep.extract(image1, err=err, thresh=thresh, minarea=minarea, mask=mask|mask_bg, filter_kernel=kernel, segmentation_map=True)
 
-        if verbose:
-            print("Dilating large objects")
+        log("Dilating large objects")
 
         mask_segm = np.isin(segm, [_+1 for _,npix in enumerate(obj0['npix']) if npix > npix_large])
         mask_segm = dilate(mask_segm, np.ones([10, 10]))
 
-    if verbose:
-        print("Extracting final objects")
+    log("Extracting final objects")
 
-    obj0 = sep.extract(image1, err=bg.rms(), thresh=thresh, minarea=minarea, mask=mask|mask_bg|mask_segm, filter_kernel=kernel, **kwargs)
+    obj0 = sep.extract(image1, err=err, thresh=thresh, minarea=minarea, mask=mask|mask_bg|mask_segm, filter_kernel=kernel, **kwargs)
 
     if use_fwhm:
         # Estimate FHWM and use it to get optimal aperture size
@@ -89,8 +90,7 @@ def get_objects_sep(image, header=None, mask=None, thresh=4.0, aper=3.0, bkgann=
 
         aper = max(1.5*fwhm, aper)
 
-        if verbose:
-            print("FWHM = %.2g, aperture = %.2g" % (fwhm, aper))
+        log("FWHM = %.2g, aperture = %.2g" % (fwhm, aper))
 
     # Windowed positional parameters are often biased in crowded fields, let's avoid them for now
     # xwin,ywin,flag = sep.winpos(image1, obj0['x'], obj0['y'], 0.5, mask=mask)
@@ -102,10 +102,9 @@ def get_objects_sep(image, header=None, mask=None, thresh=4.0, aper=3.0, bkgann=
     if minnthresh:
         idx &= (obj0['tnpix'] >= minnthresh)
 
-    if verbose:
-        print("Measuring final objects")
+    log("Measuring final objects")
 
-    flux,fluxerr,flag = sep.sum_circle(image1, xwin[idx], ywin[idx], aper, err=bg.rms(), gain=gain, mask=mask|mask_bg|mask_segm, bkgann=bkgann)
+    flux,fluxerr,flag = sep.sum_circle(image1, xwin[idx], ywin[idx], aper, err=err, gain=gain, mask=mask|mask_bg|mask_segm, bkgann=bkgann)
     # For debug purposes, let's make also the same aperture photometry on the background map
     bgflux,bgfluxerr,bgflag = sep.sum_circle(bg.back(), xwin[idx], ywin[idx], aper, err=bg.rms(), gain=gain, mask=mask|mask_bg|mask_segm)
 
@@ -155,7 +154,10 @@ def get_objects_sep(image, header=None, mask=None, thresh=4.0, aper=3.0, bkgann=
 
     return obj
 
-def get_objects_sextractor(image, header=None, mask=None, thresh=2.0, aper=3.0, r0=0.5, bkgann=None, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, verbose=False, checkimages=[], extra_params=[], extra_opts={}, catfile=None, _workdir=None, _tmpdir=None):
+def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, bkgann=None, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, verbose=False, checkimages=[], extra_params=[], extra_opts={}, catfile=None, _workdir=None, _tmpdir=None):
+    # Simple wrapper around print for logging in verbose mode only
+    log = print if verbose else lambda *args,**kwargs: None
+
     # Find the binary
     binname = None
     for path in ['.', '/usr/bin', '/usr/local/bin', '/opt/local/bin']:
@@ -165,8 +167,7 @@ def get_objects_sextractor(image, header=None, mask=None, thresh=2.0, aper=3.0, 
                 break
 
     if binname is None:
-        if verbose:
-            print("Can't find SExtractor binary")
+        log("Can't find SExtractor binary")
         return None
 
     workdir = _workdir if _workdir is not None else tempfile.mkdtemp(prefix='sex', dir=_tmpdir)
@@ -187,6 +188,17 @@ def get_objects_sextractor(image, header=None, mask=None, thresh=2.0, aper=3.0, 
 
     if mask is None:
         mask = np.zeros_like(image, dtype=np.bool)
+
+    if err is not None:
+        # User-provided noise model
+        err = err.copy().astype(np.double)
+        err[~np.isfinite(err)] = 1e30
+        err[err==0] = 1e30
+
+        errname = os.path.join(workdir, 'errors.fits')
+        fits.writeto(errname, err)
+        opts['WEIGHT_IMAGE'] = errname
+        opts['WEIGHT_TYPE'] = 'MAP_RMS'
 
     flagsname = posixpath.join(workdir, 'flags.fits')
     fits.writeto(flagsname, mask.astype(np.int16), overwrite=True)
@@ -231,14 +243,15 @@ def get_objects_sextractor(image, header=None, mask=None, thresh=2.0, aper=3.0, 
     cmd = binname + ' ' + imagename + ' ' + ' '.join(['-%s %s' % (_,opts[_]) for _ in opts.keys()])
     if not verbose:
         cmd += ' > /dev/null 2>/dev/null'
-    if verbose:
-        print(cmd)
+    log('Will run SExtractor like that:')
+    log(cmd)
 
     # Run the command!
 
     res = os.system(cmd)
 
-    if res == 0:
+    if res == 0 and os.path.exists(catname):
+        log('SExtractor run succeeded')
         data = fits.getdata(catname, -1)
 
         idx = (data['X_IMAGE'] > edge) & (data['X_IMAGE'] < image.shape[1] - edge)
@@ -282,12 +295,10 @@ def get_objects_sextractor(image, header=None, mask=None, thresh=2.0, aper=3.0, 
 
         if catfile is not None:
             shutil.copyfile(catname, catfile)
-            if verbose:
-                print("Catalogue stored to", catfile)
+            log("Catalogue stored to", catfile)
 
     else:
-        if verbose:
-            print("Error", res, "running SExtractor")
+        log("Error", res, "running SExtractor")
 
     result = obj
 
@@ -321,14 +332,16 @@ def make_series(mul=1.0, x=1.0, y=1.0, order=1, sum=False, zero=True):
     else:
         return res
 
-def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_mag, cat_magerr=None, cat_color=None, sr=3/3600, obj_x=None, obj_y=None, spatial_order=0, threshold=5.0, verbose=False, robust=True):
+def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_mag, cat_magerr=None, cat_color=None, sr=3/3600, obj_x=None, obj_y=None, spatial_order=0, threshold=5.0, cat_saturation=None, verbose=False, robust=True):
+    # Simple wrapper around print for logging in verbose mode only
+    log = print if verbose else lambda *args,**kwargs: None
+
     h = htm.HTM(10)
 
     oidx,cidx,dist = h.match(obj_ra, obj_dec, cat_ra, cat_dec, sr, maxmatch=0)
 
-    if verbose:
-        print(len(dist), 'initial matches between', len(obj_ra), 'objects and', len(cat_ra), 'catalogue stars, sr=', sr*3600, 'arcsec')
-        print('Median separation is', np.median(dist)*3600, 'arcsec')
+    log(len(dist), 'initial matches between', len(obj_ra), 'objects and', len(cat_ra), 'catalogue stars, sr=', sr*3600, 'arcsec')
+    log('Median separation is', np.median(dist)*3600, 'arcsec')
 
     omag, omag_err, oflags = obj_mag[oidx], obj_magerr[oidx], obj_flags[oidx]
     cmag = cat_mag[cidx].filled(fill_value=np.nan)
@@ -344,18 +357,16 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
     # Regressor
     X = make_series(1.0, x, y, order=spatial_order)
 
-    if verbose:
-        print('Fitting the model with spatial_order =', spatial_order)
-        if robust:
-            print('Using robust fitting')
-        else:
-            print('Using weighted fitting')
+    log('Fitting the model with spatial_order =', spatial_order)
+    if robust:
+        log('Using robust fitting')
+    else:
+        log('Using weighted fitting')
 
     if cat_color is not None:
         ccolor = cat_color[cidx].filled(fill_value=np.nan)
         X += make_series(ccolor, x, y, order=0)
-        if verbose:
-            print('Using color term')
+        log('Using color term')
     else:
         ccolor = np.zeros_like(cmag)
 
@@ -367,13 +378,14 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
     idx0 = np.isfinite(omag) & np.isfinite(omag_err) & np.isfinite(cmag) & np.isfinite(cmag_err) & (oflags == 0) # initial mask
     if cat_color is not None:
         idx0 &= np.isfinite(ccolor)
+    if cat_saturation is not None:
+        idx0 &= cmag >= cat_saturation
 
     idx = idx0.copy()
 
-    for iter in range(5):
+    for iter in range(1):
         if np.sum(idx) < 3:
-            if verbose:
-                print("Fit failed - %d objects remaining" % np.sum(idx))
+            log("Fit failed - %d objects remaining" % np.sum(idx))
             return None
 
         if robust:
@@ -387,14 +399,12 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
         if threshold:
             idx[idx0] &= (np.abs((zero - zero_model)/zero_err)[idx0] < threshold)
 
-        if verbose:
-            print('Iteration', iter, ':', np.sum(idx), '/', len(idx), '-', np.std((zero - zero_model)[idx0]), np.std((zero - zero_model)[idx]), '-', np.std((zero - zero_model)[idx]/zero_err[idx]))
+        log('Iteration', iter, ':', np.sum(idx), '/', len(idx), '-', np.std((zero - zero_model)[idx0]), np.std((zero - zero_model)[idx]), '-', np.std((zero - zero_model)[idx]/zero_err[idx]))
 
         if not threshold:
             break
 
-    if verbose:
-        print(np.sum(idx), 'good matches')
+    log(np.sum(idx), 'good matches')
 
     # Export the model
     def zero_fn(xx, yy):
@@ -411,8 +421,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
     if cat_color is not None:
         X = make_series(order=spatial_order)
         color_term = C.params[len(X):][0]
-        if verbose:
-            print('Color term is', color_term)
+        log('Color term is', color_term)
     else:
         color_term = None
 
@@ -435,6 +444,6 @@ def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kw
         back,backrms = bg.background, bg.background_rms
 
     if get_rms:
-        return back, back_rms
+        return back, backrms
     else:
         return back

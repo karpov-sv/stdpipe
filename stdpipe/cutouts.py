@@ -55,7 +55,7 @@ def crop_image(data, x0, y0, r0, header=None):
     else:
         return sub
 
-def get_cutout(image, candidate, size, mask=None, bg=None, header=None, time=None, filename=None):
+def get_cutout(image, candidate, size, mask=None, bg=None, diff=None, template=None, err=None, header=None, time=None, filename=None):
     x0, y0 = candidate['x'], candidate['y']
 
     _ = crop_image(image, x0, y0, size, header=header)
@@ -83,6 +83,15 @@ def get_cutout(image, candidate, size, mask=None, bg=None, header=None, time=Non
     if bg is not None:
         cutout['bg'] = crop_image(bg, x0, y0, size)
 
+    if diff is not None:
+        cutout['diff'] = crop_image(diff, x0, y0, size)
+
+    if template is not None:
+        cutout['template'] = crop_image(template, x0, y0, size)
+
+    if err is not None:
+        cutout['err'] = crop_image(err, x0, y0, size)
+
     if not 'time' in cutout and time is not None:
         cutout['time'] = Time(time)
 
@@ -109,7 +118,7 @@ def write_cutout(cutout, filename):
     hdus.append(hdu)
 
     # Store imaging data to named extensions
-    for _ in ['image', 'mask', 'bg', 'template', 'diff']:
+    for _ in ['image', 'mask', 'bg', 'template', 'diff', 'err']:
         if _ in cutout:
             data = cutout[_]
 

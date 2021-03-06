@@ -18,23 +18,23 @@ from . import astrometry
 
 catalogs = {
     'ps1': {'vizier': 'II/349/ps1', 'name': 'PanSTARRS DR1'},
-    'gaiadr2': {'vizier': 'I/345/gaia2', 'name': 'Gaia DR2', 'extra': ['RAJ2000', 'DEJ2000']},
+    'gaiadr2': {'vizier': 'I/345/gaia2', 'name': 'Gaia DR2'},
     'usnob1': {'vizier': 'I/284/out', 'name': 'USNO-B1'},
     'gsc': {'vizier': 'I/271/out', 'name': 'GSC 2.2'},
-    'skymapper': {'vizier': 'II/358/smss', 'name': 'SkyMapper DR1.1', 'extra': ['RAJ2000', 'DEJ2000']},
+    'skymapper': {'vizier': 'II/358/smss', 'name': 'SkyMapper DR1.1'},
 }
 
-def get_cat_vizier(ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}):
+def get_cat_vizier(ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}, extra=[]):
     if catalog in catalogs:
-        # For some catalogs we have some additional information
+        # For some catalogs we may have some additional information
         vizier_id = catalogs.get(catalog).get('vizier')
         name = catalogs.get(catalog).get('name')
 
-        columns = ['*'] + catalogs.get(catalog).get('extra', [])
+        columns = ['*', 'RAJ2000', 'DEJ2000'] + extra + catalogs.get(catalog).get('extra', [])
     else:
         vizier_id = catalog
         name = catalog
-        columns = ['*']
+        columns = ['*', 'RAJ2000', 'DEJ2000'] + extra
 
     vizier = Vizier(row_limit=limit, columns=columns, column_filters=filters)
     cats = vizier.query_region(SkyCoord(ra0, dec0, unit='deg'), radius=sr0*u.deg, catalog=vizier_id)

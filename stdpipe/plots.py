@@ -3,6 +3,8 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 import numpy as np
 import matplotlib.pyplot as plt
 
+from astropy.stats import mad_std
+
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.stats import binned_statistic_2d
 
@@ -25,16 +27,29 @@ def colorbar(obj=None, ax=None, size="5%", pad=0.1):
     # if should_restore:
     ax.get_figure().sca(ax)
 
-def imshow(image, qq=[0.5,97.5], show_colorbar=True, show_axis=True, ax=None, **kwargs):
+def imshow(image, qq=None, show_colorbar=True, show_axis=True, asinh=False, log=False, ax=None, **kwargs):
     """Simple wrapper around pyplot.imshow with histogram-based intensity scaling"""
     if ax is None:
         ax = plt.gca()
 
-    vmin1,vmax1 = np.percentile(image[np.isfinite(image)], qq)
-    if not 'vmin' in kwargs:
-        kwargs['vmin'] = vmin1
-    if not 'vmax' in kwargs:
-        kwargs['vmax'] = vmax1
+    image = image.astype(np.double)
+
+    if asinh:
+        data = np.arcsinh(image)
+    elif log:
+        data = image - np.nanmin(image)
+        data = image + 0.1*mad_std(image) if mad_std(image) > 0 else image + 1
+        data = np.log10(image)
+    else:
+        data = image
+
+    if qq is None and 'vmin' not in kwargs and 'vmax' not in kwargs:
+        # Sane defaults for quantiles if no manual limits provided
+        qq = [0.5, 99.5]
+
+    if qq is not None:
+        # Presente of qq quantiles overwrites vmin/vmax even if they are present
+        kwargs['vmin'],kwargs['vmax'] = np.percentile(data[np.isfinite(data)], qq)
 
     if not 'interpolation' in kwargs:
         # Rough heuristic to choose interpolation method based on image dimensions
@@ -43,7 +58,7 @@ def imshow(image, qq=[0.5,97.5], show_colorbar=True, show_axis=True, ax=None, **
         else:
             kwargs['interpolation'] = 'bicubic'
 
-    img = ax.imshow(image, **kwargs)
+    img = ax.imshow(data, **kwargs)
     if not show_axis:
         ax.set_axis_off()
     else:
@@ -75,27 +90,36 @@ def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], show_colo
         ax.set_autoscale_on(False)
         ax.plot(x, y, 'b.', alpha=0.3)
 
-def plot_cutout(cutout, fig=None):
+def plot_cutout(cutout, fig=None, nplots=3, **kwargs):
     curplot = 1
-    Nplots = 3
 
     if fig is None:
-        fig = plt.figure(figsize=[Nplots*4, 4+1.0], dpi=75)
+        fig = plt.figure(figsize=[nplots*4, 4+1.0], dpi=75)
 
-    ax = fig.add_subplot(1, Nplots, curplot)
-    curplot += 1
-    imshow(cutout['image'], [0.5, 99.5], cmap='Blues_r', show_axis=False, show_colorbar=False, ax=ax)
-    ax.set_title('Image')
+    for name in ['image', 'template', 'diff', 'mask']:
+        if name in cutout:
+            ax = fig.add_subplot(1, nplots, curplot)
+            curplot += 1
 
-    ax = fig.add_subplot(1, Nplots, curplot)
-    curplot += 1
-    imshow(cutout['mask'], vmin=0, vmax=1, cmap='Blues_r', show_axis=False, show_colorbar=False, ax=ax)
-    ax.set_title('Mask')
+            params = {'asinh': True if name in ['image', 'template'] else False,
+                      'cmap': 'Blues_r',
+                      'show_colorbar': False,
+                      'show_axis': False}
 
-    # ax = fig.add_subplot(1, Nplots, curplot)
-    # curplot += 1
-    # imshow(cutout['mask'], vmin=0, vmax=1, cmap='Blues_r', show_axis=False, show_colorbar=False, ax=ax)
-    # ax.set_title('Mask')
+            # if not kwargs.get('asinh', False) and not kwargs.get('log', False):
+            #     median,mad = np.nanmedian(cutout[name]), mad_std(cutout[name], ignore_nan=True)
+            #     params['vmin'] = median - 3*mad
+            #     params['vmax'] = median + 10*mad
+            # elif 'qq' not in kwargs:
+            #         kwargs['qq'] = [0, 100]
+
+            params.update(kwargs)
+
+            imshow(cutout[name], ax=ax, **params)
+            ax.set_title(name.upper())
+
+            if curplot > nplots:
+                break
 
     fig.tight_layout()
 

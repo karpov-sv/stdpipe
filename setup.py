@@ -27,4 +27,5 @@ setup(
 
     install_requires=requirements,
     packages=find_packages(),
+    include_package_data = True,
 )

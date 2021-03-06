@@ -75,7 +75,10 @@ def get_objects_center(obj, col_ra='ra', col_dec='dec'):
 
     return ra0, dec0, sr0
 
-def blind_match_objects(obj, order=4, extra="", verbose=False, update=True, sn=20):
+def blind_match_objects(obj, order=4, extra="", update=True, sn=20, verbose=False):
+    # Simple wrapper around print for logging in verbose mode only
+    log = print if verbose else lambda *args,**kwargs: None
+
     wcs = None
     binname = None
     ext = 0
@@ -101,10 +104,12 @@ def blind_match_objects(obj, order=4, extra="", verbose=False, update=True, sn=2
         tmpname = posixpath.join(dirname, posixpath.splitext(wcsname)[0] + '.tmp')
         wcsname = posixpath.join(dirname, posixpath.splitext(wcsname)[0] + '.wcs')
 
-        if verbose:
-            print("%s -D %s --no-verify --overwrite --no-plots -T %s %s" % (binname, dir, extra, filename))
+        command = "%s -D %s --no-verify --overwrite --no-plots -T %s %s" % (binname, dir, extra, filename)
 
-        os.system("%s -D %s --no-verify --overwrite --no-plots -T %s %s" % (binname, dir, extra, filename))
+        log('Running Astrometry.Net first iteration like that:')
+        log(command)
+
+        os.system(command)
 
         if order:
             order_str = "-t %d" % order
@@ -113,7 +118,12 @@ def blind_match_objects(obj, order=4, extra="", verbose=False, update=True, sn=2
 
         if os.path.isfile(wcsname):
             shutil.move(wcsname, tmpname)
-            os.system("%s -D %s --overwrite --no-plots %s %s --verify %s %s" % (binname, dir, order_str, extra, tmpname, filename))
+            command = "%s -D %s --overwrite --no-plots %s %s --verify %s %s" % (binname, dir, order_str, extra, tmpname, filename)
+
+            log('Running Astrometry.Net second iteration like that:')
+            log(command)
+
+            os.system(command)
 
             if os.path.isfile(wcsname):
                 header = fits.getheader(wcsname)
@@ -122,14 +132,23 @@ def blind_match_objects(obj, order=4, extra="", verbose=False, update=True, sn=2
                 if update and wcs:
                     obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
 
+                log('Second iteration succeeded')
+            else:
+                log('Second iteration failed')
+        else:
+            log('First iteration failed')
+
         shutil.rmtree(dir)
 
     else:
-        print("Astrometry.Net binary not found")
+        log("Astrometry.Net binary not found")
 
     return wcs
 
-def refine_wcs(obj, cat, order=2, match=True, sr=3/3600, update=False, cat_col_ra='RAJ2000', cat_col_dec='DEJ2000', method='astropy'):
+def refine_wcs(obj, cat, order=2, match=True, sr=3/3600, update=False, cat_col_ra='RAJ2000', cat_col_dec='DEJ2000', method='astropy', verbose=False):
+    # Simple wrapper around print for logging in verbose mode only
+    log = print if verbose else lambda *args,**kwargs: None
+
     '''Refine the WCS using detected objects and catalogue. '''
     if match:
         # Perform simple nearest-neighbor matching within given radius
@@ -171,23 +190,32 @@ def refine_wcs(obj, cat, order=2, match=True, sr=3/3600, update=False, cat_col_r
 
             tbhdu.writeto(filename, overwrite=True)
 
-            os.system("%s -c %s -o %s -W %d -H %d -C -s %d" % (binname, filename, wcsname, width, height, order))
+            command = "%s -c %s -o %s -W %d -H %d -C -s %d" % (binname, filename, wcsname, width, height, order)
+
+            log('Running Astrometry.Net WCS fitter like that:')
+            log(command)
+
+            os.system(command)
 
             if os.path.isfile(wcsname):
                 header = fits.getheader(wcsname)
                 wcs = WCS(header)
+                log('WCS fitter run succeeded')
+            else:
+                log('WCS fitter run failed')
 
             shutil.rmtree(dirname)
 
         else:
-            print("Astrometry.Net binary not found")
+            log("Astrometry.Net fit-wcs binary not found")
 
     if wcs:
         if update:
+            log('Updating object sky coordinates in-place')
             # Update the sky coordinates of objects using new wcs
             obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
     else:
-        print('Could not update wcs')
+        log('WCS refinement failed')
 
     return wcs
 
