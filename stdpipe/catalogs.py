@@ -130,10 +130,10 @@ def xmatch_skybot(obj, sr=10/3600, time=None, location='500', col_ra='ra', col_d
     oidx,cidx,dist = h.match(obj[col_ra], obj[col_dec], xcat['RA'], xcat['DEC'], 10/3600)
 
     # Annotate the table with id from objects so that it is possible to identify the matches
-    xcat['id'] = MaskedColumn(len(xcat), dtype=np.dtype(obj[col_id][0]))
-    xcat['id'].mask = True
-    xcat['id'][cidx] = obj[col_id][oidx]
-    xcat['id'][cidx].mask = False
+    xcat[col_id] = MaskedColumn(len(xcat), dtype=np.dtype(obj[col_id][0]))
+    xcat[col_id].mask = True
+    xcat[col_id][cidx] = obj[col_id][oidx]
+    xcat[col_id][cidx].mask = False
 
     return xcat
 
