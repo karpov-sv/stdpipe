@@ -1,6 +1,6 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
 
-import os, tempfile, posixpath, shutil, re
+import os, tempfile, shutil, shlex, re
 import numpy as np
 
 from esutil import coords, htm
@@ -9,6 +9,9 @@ from astropy.wcs import WCS
 from astropy.io import fits
 from astropy.wcs.utils import fit_wcs_from_points
 from astropy.coordinates import SkyCoord
+from astropy.table import Table
+
+from . import utils
 
 def get_frame_center(filename=None, header=None, wcs=None, width=None, height=None):
     """
@@ -84,8 +87,8 @@ def blind_match_objects(obj, order=4, extra="", update=True, sn=20, verbose=Fals
     ext = 0
 
     for path in ['.', '/usr/local', '/opt/local']:
-        if os.path.isfile(posixpath.join(path, 'astrometry', 'bin', 'solve-field')):
-            binname = posixpath.join(path, 'astrometry', 'bin', 'solve-field')
+        if os.path.isfile(os.path.join(path, 'astrometry', 'bin', 'solve-field')):
+            binname = os.path.join(path, 'astrometry', 'bin', 'solve-field')
             break
 
     if binname:
@@ -96,13 +99,13 @@ def blind_match_objects(obj, order=4, extra="", update=True, sn=20, verbose=Fals
                    fits.Column(name='YIMAGE', format='1D', array=obj['y'][idx]+1),
                    fits.Column(name='FLUX', format='1D', array=obj['flux'][idx])]
         tbhdu = fits.BinTableHDU.from_columns(columns)
-        filename = posixpath.join(dirname, 'list.fits')
+        filename = os.path.join(dirname, 'list.fits')
         tbhdu.writeto(filename, overwrite=True)
         extra += " --x-column XIMAGE --y-column YIMAGE --sort-column FLUX --width %d --height %d" % (np.ceil(max(obj['x']+1)), np.ceil(max(obj['y']+1)))
 
-        wcsname = posixpath.split(filename)[-1]
-        tmpname = posixpath.join(dirname, posixpath.splitext(wcsname)[0] + '.tmp')
-        wcsname = posixpath.join(dirname, posixpath.splitext(wcsname)[0] + '.wcs')
+        wcsname = os.path.split(filename)[-1]
+        tmpname = os.path.join(dirname, os.path.splitext(wcsname)[0] + '.tmp')
+        wcsname = os.path.join(dirname, os.path.splitext(wcsname)[0] + '.wcs')
 
         command = "%s -D %s --no-verify --overwrite --no-plots -T %s %s" % (binname, dir, extra, filename)
 
@@ -145,11 +148,16 @@ def blind_match_objects(obj, order=4, extra="", update=True, sn=20, verbose=Fals
 
     return wcs
 
-def refine_wcs(obj, cat, order=2, match=True, sr=3/3600, update=False, cat_col_ra='RAJ2000', cat_col_dec='DEJ2000', method='astropy', verbose=False):
+def refine_wcs(obj, cat, order=2, match=True, sr=3/3600, update=False,
+               cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
+               method='astropy', verbose=False):
+    '''
+    Refine the WCS using detected objects and catalogue.
+    '''
+
     # Simple wrapper around print for logging in verbose mode only
     log = print if verbose else lambda *args,**kwargs: None
 
-    '''Refine the WCS using detected objects and catalogue. '''
     if match:
         # Perform simple nearest-neighbor matching within given radius
         h = htm.HTM(10)
@@ -173,8 +181,8 @@ def refine_wcs(obj, cat, order=2, match=True, sr=3/3600, update=False, cat_col_r
         height = np.max(obj['y'])
 
         for path in ['.', '/usr/local', '/opt/local']:
-            if os.path.isfile(posixpath.join(path, 'astrometry', 'bin', 'fit-wcs')):
-                binname = posixpath.join(path, 'astrometry', 'bin', 'fit-wcs')
+            if os.path.isfile(os.path.join(path, 'astrometry', 'bin', 'fit-wcs')):
+                binname = os.path.join(path, 'astrometry', 'bin', 'fit-wcs')
                 break
 
         if binname:
@@ -185,8 +193,8 @@ def refine_wcs(obj, cat, order=2, match=True, sr=3/3600, update=False, cat_col_r
                        fits.Column(name='INDEX_RA', format='1D', array=cat[cat_col_ra]),
                        fits.Column(name='INDEX_DEC', format='1D', array=cat[cat_col_dec])]
             tbhdu = fits.BinTableHDU.from_columns(columns)
-            filename = posixpath.join(dirname, 'list.fits')
-            wcsname = posixpath.join(dirname, 'list.wcs')
+            filename = os.path.join(dirname, 'list.fits')
+            wcsname = os.path.join(dirname, 'list.wcs')
 
             tbhdu.writeto(filename, overwrite=True)
 
@@ -257,3 +265,180 @@ def clear_wcs(header, remove_comments=False, remove_history=False, remove_unders
         header.remove(key, remove_all=True, ignore_missing=True)
 
     return header
+
+def wcs_pv2sip(header, method='astrometrynet'):
+    """
+    TODO
+    """
+    pass
+
+def wcs_sip2pv(header, method='astrometrynet'):
+    """
+    TODO
+    """
+    pass
+
+def table_to_ldac(table, header=None, writeto=None):
+
+    primary_hdu = fits.PrimaryHDU()
+
+    header_str = header.tostring(endcard=True)
+    # FIXME: this is a quick and dirty hack to preserve final 'END     ' in the string
+    # as astropy.io.fits tends to strip trailing whitespaces from string data, and it breaks at least SCAMP
+    header_str += fits.Header().tostring(endcard=True)
+
+    header_col = fits.Column(name='Field Header Card', format='%dA' % len(header_str), array=[header_str])
+    header_hdu = fits.BinTableHDU.from_columns(fits.ColDefs([header_col]))
+    header_hdu.header['EXTNAME'] = 'LDAC_IMHEAD'
+
+    data_hdu = fits.table_to_hdu(table)
+    data_hdu.header['EXTNAME'] = 'LDAC_OBJECTS'
+
+    hdulist = fits.HDUList([primary_hdu, header_hdu, data_hdu])
+
+    if writeto is not None:
+        hdulist.writeto(writeto, overwrite=True)
+
+    return hdulist
+
+def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
+              cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
+              cat_col_ra_err='e_RAJ2000', cat_col_dec_err='e_DEJ2000',
+              cat_col_mag='rmag', cat_col_mag_err='e_rmag',
+              get_header=False, update=False,
+                     _workdir=None, _tmpdir=None, verbose=False):
+    """
+    Wrapper for running SCAMP on user-provided object list and catalogue
+    """
+
+    # Simple wrapper around print for logging in verbose mode only
+    log = print if verbose else lambda *args,**kwargs: None
+
+    # Find the binary
+    binname = None
+    for path in ['.', '/usr/bin', '/usr/local/bin', '/opt/local/bin']:
+        for exe in ['scamp']:
+            if os.path.isfile(os.path.join(path, exe)):
+                binname = os.path.join(path, exe)
+                break
+
+    if binname is None:
+        log("Can't find SCAMP binary")
+        return None
+
+    workdir = _workdir if _workdir is not None else tempfile.mkdtemp(prefix='scamp', dir=_tmpdir)
+
+    if header is None:
+        # Construct minimal FITS header covering our data points
+        header = fits.Header({'NAXIS':2, 'NAXIS1':np.max(obj['x']+1), 'NAXIS2':np.max(obj['y'] + 1), 'BITPIX':-64, 'EQUINOX': 2000.0})
+    else:
+        header = header.copy()
+
+    if wcs is not None and wcs.is_celestial:
+        # Add WCS information to the header
+        header += wcs.to_header(relax=True)
+
+    xmlname = os.path.join(workdir, 'scamp.xml')
+
+    opts = {
+        'VERBOSE_TYPE': 'QUIET',
+        'SOLVE_PHOTOM': 'N',
+        'CHECKPLOT_TYPE': 'NONE',
+        'WRITE_XML': 'Y',
+        'XML_NAME': xmlname,
+        'PROJECTION_TYPE': 'TPV',
+        'CROSSID_RADIUS': sr*3600,
+        'DISTORT_DEGREES': order,
+    }
+
+    # Minimal LDAC table with objects
+    t_obj = Table(data={
+        'XWIN_IMAGE': obj['x'] + 1, # SCAMP uses 1-based coordinates
+        'YWIN_IMAGE': obj['y'] + 1,
+
+        'ERRAWIN_IMAGE': obj['xerr'],
+        'ERRBWIN_IMAGE': obj['yerr'],
+
+        'FLUX_AUTO': obj['flux'],
+        'FLUXERR_AUTO': obj['fluxerr'],
+        'MAG_AUTO': obj['mag'],
+        'MAGERR_AUTO': obj['magerr'],
+
+        'FLAGS': obj['flags'],
+    })
+
+    objname = os.path.join(workdir, 'objects.cat')
+    table_to_ldac(t_obj, header, objname)
+
+    hdrname = os.path.join(workdir, 'objects.head')
+    opts['HEADER_NAME'] = hdrname
+    if os.path.exists(hdrname):
+        os.unlink(hdrname)
+
+    if cat:
+        if type(cat) == str:
+            # Match with network catalogue by name
+            opts['ASTREF_CATALOG'] = cat
+            log('Using', cat, 'as a network catalogue')
+        else:
+            # Match with user-provided catalogue
+            t_cat = Table(data={
+                'X_WORLD': cat[cat_col_ra],
+                'Y_WORLD': cat[cat_col_dec],
+
+                'ERRA_WORLD': utils.table_get(cat, cat_col_ra_err, 1/3600),
+                'ERRB_WORLD': utils.table_get(cat, cat_col_dec_err, 1/3600),
+
+                'MAG': cat[cat_col_mag],
+                'MAGERR': utils.table_get(cat, cat_col_mag_err, 0.01),
+                'OBSDATE': np.ones_like(cat['RAJ2000'])*2000.0
+            })
+
+            catname = os.path.join(workdir, 'catalogue.cat')
+            table_to_ldac(t_cat, header, catname)
+
+            opts['ASTREF_CATALOG'] = 'FILE'
+            opts['ASTREFCAT_NAME'] = catname
+            log('Using user-provided local catalogue')
+    else:
+        log('Using default settings for network catalogue')
+
+    # Build the command line
+    command = binname + ' ' + shlex.quote(objname) + ' ' + ' '.join(['-%s %s' % (_, shlex.quote(str(opts[_]))) for _ in opts.keys()])
+    if not verbose:
+        command += ' > /dev/null 2>/dev/null'
+    log('Will run SCAMP like that:')
+    log(command)
+
+    # Run the command!
+
+    res = os.system(command)
+
+    if res == 0 and os.path.exists(hdrname):
+        log('SCAMP run successfully')
+
+        with open(hdrname, 'r') as f:
+            h1 = fits.Header.fromstring(f.read().encode('ascii', 'ignore'), sep='\n')
+
+            # Sometimes SCAMP returns TAN type solution even despite PV keywords present
+            if h1['CTYPE1'] != 'RA---TPV':
+                log('Got WCS solution with CTYPE1 =', h1['CTYPE1'], ', fixing it')
+                h1['CTYPE1'] = 'RA---TPV'
+                h1['CTYPE2'] = 'DEC--TPV'
+
+            if get_header:
+                log('Returning raw header instead of WCS solution')
+                wcs = h1
+            else:
+                wcs = WCS(h1)
+                if update:
+                    obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
+
+    else:
+        log('Error', res, 'running SCAMP')
+        wcs = None
+
+    if _workdir is None:
+        shutil.rmtree(workdir)
+
+    return wcs

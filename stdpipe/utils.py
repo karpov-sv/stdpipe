@@ -73,7 +73,7 @@ def download(url, filename=None, overwrite=False, verbose=False):
         log('Successfully downloaded %d bytes' % length)
         return True
 
-def get_obs_time(header=None, filename=None, string=None, verbose=False):
+def get_obs_time(header=None, filename=None, string=None, get_datetime=False, verbose=False):
     """
     Extract date and time of observations from FITS headers of common formats.
     Returns astropy Time object.
@@ -82,10 +82,19 @@ def get_obs_time(header=None, filename=None, string=None, verbose=False):
     # Simple wrapper around print for logging in verbose mode only
     log = print if verbose else lambda *args,**kwargs: None
 
+    # Simple wrapper to display parsed value and convert it as necessary
+    def convert_time(time):
+        time = Time(time)
+        log('Time parsed as:', time)
+        if get_datetime:
+            return time.datetime
+        else:
+            return time
+
     if string:
-        log('Parsing user-provided string:', string)
+        log('Parsing user-provided time string:', string)
         try:
-            return Time(dateutil.parser.parse(string))
+            return convert_time(dateutil.parser.parse(string))
         except dateutil.parser.ParserError as err:
             log('Could not parse user-provided string:', err)
             return None
@@ -99,7 +108,7 @@ def get_obs_time(header=None, filename=None, string=None, verbose=False):
             log('Found ' + dkey + ':', header[dkey])
             # First try to parse standard ISO time
             try:
-                return Time(header[dkey])
+                return convert_time(header[dkey])
             except:
                 log('Could not parse ' + dkey + ' using Astropy parser')
 
@@ -107,10 +116,24 @@ def get_obs_time(header=None, filename=None, string=None, verbose=False):
                 if tkey in header:
                     log('Found ' + tkey + ':', header[tkey])
                     try:
-                        return Time(dateutil.parser.parse(header[dkey] + ' ' + header[tkey]))
+                        return convert_time(dateutil.parser.parse(header[dkey] + ' ' + header[tkey]))
                     except dateutil.parser.ParserError as err:
                         log('Could not parse ' + dkey + ' + ' + tkey + ':', err)
 
     log('Unsupported FITS header time format')
 
     return None
+
+def table_get(table, colname, default=0):
+    """
+    Simple wrapper to get table column, or default value if it is not present
+    """
+
+    if colname in table.colnames:
+        return table[colname]
+    elif hasattr(default, '__len__'):
+        # default value is array, return it
+        return default
+    else:
+        # Broadcast scalar to proper length
+        return default*np.ones(len(table), dtype=np.int)

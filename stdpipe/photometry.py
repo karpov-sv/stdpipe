@@ -1,6 +1,6 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
 
-import os, posixpath, shutil, tempfile
+import os, shutil, tempfile, shlex
 import numpy as np
 
 from astropy.wcs import WCS
@@ -154,7 +154,7 @@ def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.
 
     return obj
 
-def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, bkgann=None, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, verbose=False, checkimages=[], extra_params=[], extra_opts={}, catfile=None, _workdir=None, _tmpdir=None):
+def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, bkgann=None, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, checkimages=[], extra_params=[], extra_opts={}, catfile=None, _workdir=None, _tmpdir=None, verbose=False):
     # Simple wrapper around print for logging in verbose mode only
     log = print if verbose else lambda *args,**kwargs: None
 
@@ -162,8 +162,8 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
     binname = None
     for path in ['.', '/usr/bin', '/usr/local/bin', '/opt/local/bin']:
         for exe in ['sex', 'sextractor', 'source-extractor']:
-            if os.path.isfile(posixpath.join(path, exe)):
-                binname = posixpath.join(path, exe)
+            if os.path.isfile(os.path.join(path, exe)):
+                binname = os.path.join(path, exe)
                 break
 
     if binname is None:
@@ -174,7 +174,7 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
     obj = None
 
     # Prepare
-    imagename = posixpath.join(workdir, 'image.fits')
+    imagename = os.path.join(workdir, 'image.fits')
     fits.writeto(imagename, image, header, overwrite=True)
 
     opts = {
@@ -200,7 +200,7 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
         opts['WEIGHT_IMAGE'] = errname
         opts['WEIGHT_TYPE'] = 'MAP_RMS'
 
-    flagsname = posixpath.join(workdir, 'flags.fits')
+    flagsname = os.path.join(workdir, 'flags.fits')
     fits.writeto(flagsname, mask.astype(np.int16), overwrite=True)
     opts['FLAG_IMAGE'] = flagsname
 
@@ -211,19 +211,19 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
         opts['PHOT_APERTURES'] = ','.join([str(_*2) for _ in aper])
         size = '[%d]' % len(aper)
 
-    checknames = [posixpath.join(workdir, _.replace('-', 'M_') + '.fits') for _ in checkimages]
+    checknames = [os.path.join(workdir, _.replace('-', 'M_') + '.fits') for _ in checkimages]
     if checkimages:
         opts['CHECKIMAGE_TYPE'] = ','.join(checkimages)
         opts['CHECKIMAGE_NAME'] = ','.join(checknames)
 
     params = ['MAG_APER'+size, 'MAGERR_APER'+size, 'FLUX_APER'+size, 'FLUXERR_APER'+size, 'X_IMAGE', 'Y_IMAGE', 'ERRX2_IMAGE', 'ERRY2_IMAGE', 'A_IMAGE', 'B_IMAGE', 'THETA_IMAGE', 'FLUX_RADIUS', 'FWHM_IMAGE', 'FLAGS', 'IMAFLAGS_ISO', 'BACKGROUND']
     params += extra_params
-    paramname = posixpath.join(workdir, 'cfg.param')
+    paramname = os.path.join(workdir, 'cfg.param')
     with open(paramname, 'w') as paramfile:
         paramfile.write("\n".join(params))
     opts['PARAMETERS_NAME'] = paramname
 
-    catname = posixpath.join(workdir, 'out.cat')
+    catname = os.path.join(workdir, 'out.cat')
     opts['CATALOG_NAME'] = catname
     opts['CATALOG_TYPE'] = 'FITS_LDAC'
 
@@ -231,7 +231,7 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
         opts['FILTER'] = 'N'
     else:
         kernel = make_kernel(r0, ext=1.0)
-        kernelname = posixpath.join(workdir, 'kernel.txt')
+        kernelname = os.path.join(workdir, 'kernel.txt')
         np.savetxt(kernelname, kernel/np.sum(kernel), fmt=b'%.6f', header='CONV NORM', comments='')
         opts['FILTER'] = 'Y'
         opts['FILTER_NAME'] = kernelname
@@ -239,8 +239,7 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
     opts.update(extra_opts)
 
     # Build the command line
-    # FIXME: quote strings!
-    cmd = binname + ' ' + imagename + ' ' + ' '.join(['-%s %s' % (_,opts[_]) for _ in opts.keys()])
+    cmd = binname + ' ' + shlex.quote(imagename) + ' ' + ' '.join(['-%s %s' % (_, shlex.quote(str(opts[_]))) for _ in opts.keys()])
     if not verbose:
         cmd += ' > /dev/null 2>/dev/null'
     log('Will run SExtractor like that:')
@@ -349,9 +348,11 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
 
     if obj_x is not None and obj_y is not None:
         x0, y0 = np.mean(obj_x[oidx]), np.mean(obj_y[oidx])
+        ox, oy = obj_x[oidx], obj_y[oidx]
         x, y = obj_x[oidx] - x0, obj_y[oidx] - y0
     else:
         x0, y0 = 0, 0
+        ox, oy = np.zeros_like(omag), np.zeros_like(omag)
         x, y = np.zeros_like(omag), np.zeros_like(omag)
 
     # Regressor
@@ -432,6 +433,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
             'zero': zero, 'zero_err': zero_err,
             'zero_model': zero_model, 'zero_fn': zero_fn,
             'obj_zero': zero_fn(obj_x, obj_y),
+            'ox': ox, 'oy': oy,
             'idx': idx, 'idx0': idx0}
 
 def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kwargs):

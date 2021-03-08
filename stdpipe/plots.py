@@ -66,7 +66,7 @@ def imshow(image, qq=None, show_colorbar=True, show_axis=True, asinh=False, log=
     if show_colorbar:
         colorbar(img, ax=ax)
 
-def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], show_colorbar=True, show_dots=False, ax=None, **kwargs):
+def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], show_colorbar=True, show_axis=True, show_dots=False, ax=None, **kwargs):
     gmag0, xe, ye, binnumbers = binned_statistic_2d(x, y, value, bins=bins, statistic=statistic)
 
     vmin1,vmax1 = np.percentile(gmag0[np.isfinite(gmag0)], qq)
@@ -83,8 +83,12 @@ def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], show_colo
 
     im = ax.imshow(gmag0.T, origin='lower', extent=[xe[0], xe[-1], ye[0], ye[-1]], interpolation='nearest', **kwargs)
     if show_colorbar:
-        pass
         colorbar(im, ax=ax)
+
+    if not show_axis:
+        ax.set_axis_off()
+    else:
+        ax.set_axis_on()
 
     if show_dots:
         ax.set_autoscale_on(False)
@@ -130,7 +134,7 @@ def plot_cutout(cutout, fig=None, nplots=3, **kwargs):
         title += ': mag = %.2f $\pm$ %.2f' % (cutout['mag_calib'], cutout['magerr'])
     fig.suptitle(title)
 
-def plot_photometric_match(m, ax=None, mode='mag'):
+def plot_photometric_match(m, ax=None, mode='mag', **kwargs):
     if ax is None:
         ax = plt.gca()
 
@@ -144,6 +148,9 @@ def plot_photometric_match(m, ax=None, mode='mag'):
 
         ax.set_xlabel('Catalogue magnitude')
         ax.set_ylabel('Model - Instrumental')
+
+        ax.set_title('%d of %d unmasked stars used in final fit' % (np.sum(m['idx0']), np.sum(m['idx'])))
+
     elif mode == 'color':
         ax.errorbar(m['color'][m['idx0']], (m['zero']-m['zero_model'])[m['idx0']], m['zero_err'][m['idx0']], fmt='.', alpha=0.3)
         ax.plot(m['color'][m['idx']], (m['zero']-m['zero_model'])[m['idx']], '.', alpha=1.0, color='red', label='Final fit')
@@ -156,5 +163,9 @@ def plot_photometric_match(m, ax=None, mode='mag'):
         ax.set_ylabel('Model - Instrumental')
 
         ax.set_title('color term = %.2f' % m['color_term'])
+
+    elif mode == 'dist':
+        binned_map(m['ox'][m['idx']], m['oy'][m['idx']], m['dist'][m['idx']]*3600, statistic='mean', ax=ax, **kwargs)
+        ax.set_title('%d stars: mean displacement %.1f arcsec, median %.1f arcsec' % (np.sum(m['idx']), np.mean(m['dist'][m['idx']]*3600), np.median(m['dist'][m['idx']]*3600)))
 
     return ax

@@ -16,8 +16,11 @@ from . import catalogs
 from . import utils
 
 def refine_astrometry(obj, cat, sr=10/3600, wcs=None, order=0,
-                      cat_col_mag='V', cat_col_magerr=None, cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
-                      n_iter=3, use_photometry=True, min_matches=5, method='astropy', update=True, verbose=False):
+                      cat_col_mag='V', cat_col_mag_err=None,
+                      cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
+                      cat_col_ra_err='e_RAJ2000', cat_col_dec_err='e_DEJ2000',
+                      n_iter=3, use_photometry=True, min_matches=5, method='astropy',
+                      update=True, verbose=False):
     """
     Higher-level astrometric refinement routine.
     """
@@ -31,10 +34,18 @@ def refine_astrometry(obj, cat, sr=10/3600, wcs=None, order=0,
     if wcs is not None:
         obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
 
+    if method == 'scamp':
+        # Fall-through to SCAMP-specific variant
+        return astrometry.refine_wcs_scamp(obj, cat, sr=sr, wcs=wcs, order=order,
+                                           cat_col_mag=cat_col_mag, cat_col_mag_err=cat_col_mag_err,
+                                           cat_col_ra=cat_col_ra, cat_col_dec=cat_col_dec,
+                                           cat_col_ra_err=cat_col_ra_err, cat_col_dec_err=cat_col_dec_err,
+                                           update=update, verbose=verbose)
+
     for iter in range(n_iter):
         if use_photometry:
             # Matching involving photometric information
-            cat_magerr = cat[cat_col_magerr] if cat_col_magerr is not None else None
+            cat_magerr = cat[cat_col_mag_err] if cat_col_mag_err is not None else None
             m = photometry.match(obj['ra'], obj['dec'], obj['mag'], obj['magerr'], obj['flags'], cat[cat_col_ra], cat[cat_col_dec], cat[cat_col_mag], cat_magerr=cat_magerr, sr=sr)
             if not m or np.sum(m['idx']) < min_matches:
                 log('Too few (%d) good photometric matches, cannot refine WCS' % np.sum(m['idx']))
@@ -130,7 +141,7 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
     else:
         return cand_idx
 
-def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0,
+def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, threshold=5,
                          cat_col_mag='R', cat_col_mag1=None, cat_col_mag2=None,
                          cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
                          update=True, verbose=False):
@@ -154,7 +165,11 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0,
     if cat_col_mag1 and cat_col_mag2:
         log('Using (%s - %s) color for color term' % (cat_col_mag1, cat_col_mag2))
 
-    m = photometry.match(obj['ra'], obj['dec'], obj['mag'], obj['magerr'], obj['flags'], cat[cat_col_ra], cat[cat_col_dec], cat[cat_col_mag], sr=sr, cat_color=cat[cat_col_mag1]-cat[cat_col_mag2], verbose=False)
+    m = photometry.match(obj['ra'], obj['dec'], obj['mag'], obj['magerr'], obj['flags'],
+                         cat[cat_col_ra], cat[cat_col_dec], cat[cat_col_mag],
+                         sr=sr, cat_color=cat[cat_col_mag1]-cat[cat_col_mag2],
+                         obj_x=obj['x'], obj_y=obj['y'], spatial_order=order,
+                         threshold=threshold, verbose=False)
 
     if m:
         log('Photometric calibration finished successfully.')
