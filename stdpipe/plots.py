@@ -65,6 +65,14 @@ def imshow(image, qq=None, show_colorbar=True, show_axis=True, asinh=False, log=
         ax.set_axis_on()
     if show_colorbar:
         colorbar(img, ax=ax)
+    else:
+        # Mimic the extension of scaling limits if they are equal
+        clim = img.get_clim()
+
+        if clim[0] == clim[1]:
+            img.set_clim(clim[0] - 0.1, clim[1] + 0.1)
+
+    return img
 
 def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], show_colorbar=True, show_axis=True, show_dots=False, ax=None, **kwargs):
     gmag0, xe, ye, binnumbers = binned_statistic_2d(x, y, value, bins=bins, statistic=statistic)
