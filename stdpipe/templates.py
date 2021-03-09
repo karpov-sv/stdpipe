@@ -13,7 +13,10 @@ from astropy.table import Table
 
 from esutil import htm
 
+from scipy.ndimage import binary_dilation
+
 from . import utils
+from . import photometry
 
 # HiPS images
 
@@ -72,6 +75,63 @@ def get_hips_image(hips, ra=None, dec=None, width=None, height=None, fov=None, w
         return image, header
     else:
         return image
+
+def mask_template(tmpl, cat=None, cat_saturation_mag=None,
+                  cat_col_mag='rmag', cat_col_mag_err='e_rmag',
+                  cat_col_ra='RAJ2000', cat_col_dec='DEJ2000', cat_sr=1/3600,
+                  wcs=None, dilate=5, verbose=False):
+    """
+    Apply various masking heuristics (NaNs, saturated catalogue stars, etc) to the template.
+    """
+
+    # Simple wrapper around print for logging in verbose mode only
+    log = print if verbose else lambda *args,**kwargs: None
+
+    tmask = ~np.isfinite(tmpl)
+    log(np.sum(tmask), 'template pixels masked after NaN checking')
+
+    if cat is not None:
+        if cat_saturation_mag is None:
+            # Apply photometric match to guess catalogue saturation magnitude
+            tobj = photometry.get_objects_sextractor(tmpl, mask=tmask, sn=3, wcs=wcs, aper=3)
+
+            m = photometry.match(tobj['ra'], tobj['dec'], tobj['mag'], tobj['magerr'], tobj['flags'],
+                                 cat[cat_col_ra], cat[cat_col_dec], cat[cat_col_mag],
+                                 cat_magerr=cat[cat_col_mag_err], cat_saturation=10,
+                                 sr=cat_sr, verbose=False)
+            if m:
+                cat_saturation_mag = np.min(cat[m['cidx']][m['idx']][cat_col_mag])
+            else:
+                log('Catalogue matching failed, cannot determine saturation level')
+                cat_saturation_mag = 10
+
+            log('Catalogue saturates at %s = %.1f' % (cat_col_mag, cat_saturation_mag))
+
+        # Mask the central pixels of saturated stars
+        cx, cy = wcs.all_world2pix(cat['RAJ2000'], cat['DEJ2000'], 0)
+        cx = cx.astype(np.int)
+        cy = cy.astype(np.int)
+
+        tidx = cat[cat_col_mag].mask
+        tidx |= cat[cat_col_mag_err].mask
+
+        tidx |= cat[cat_col_mag] < cat_saturation_mag
+
+        tidx &= (cx >= 0) & (cx <= tmpl.shape[1] - 1)
+        tidx &= (cy >= 0) & (cy <= tmpl.shape[0] - 1)
+
+        tmask[cy[tidx], cx[tidx]] = True
+
+        log(np.sum(tmask), 'template pixels masked after checking saturated (%s < %.1f) stars' % (cat_col_mag, cat_saturation_mag))
+
+    if dilate and dilate > 0:
+        log('Dilating the mask with %d x %d kernel' % (dilate, dilate))
+        kernel = np.ones([dilate, dilate])
+        tmask = binary_dilation(tmask, kernel)
+
+        log(np.sum(tmask), 'template pixels masked after dilation')
+
+    return tmask
 
 # PanSTARRS images
 
