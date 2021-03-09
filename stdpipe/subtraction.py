@@ -130,6 +130,9 @@ def run_hotpants(image, template, mask=None, template_mask=None, _workdir=None, 
     if not os.path.exists(outname):
         log('HOTPANTS run failed')
         return None
+    elif not np.any(fits.getdata(outname, 0)):
+        log('HOTPANTS failed to perform subtraction')
+        return None
     else:
         log('HOTPANTS run succeeded')
 
