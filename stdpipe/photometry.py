@@ -154,7 +154,7 @@ def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.
 
     return obj
 
-def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, bkgann=None, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, checkimages=[], extra_params=[], extra_opts={}, catfile=None, _workdir=None, _tmpdir=None, verbose=False):
+def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, bkgann=None, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, sort=True, checkimages=[], extra_params=[], extra_opts={}, catfile=None, _workdir=None, _tmpdir=None, verbose=False):
     # Simple wrapper around print for logging in verbose mode only
     log = print if verbose else lambda *args,**kwargs: None
 
@@ -174,8 +174,11 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
     obj = None
 
     # Prepare
-    imagename = os.path.join(workdir, 'image.fits')
-    fits.writeto(imagename, image, header, overwrite=True)
+    if type(image) == str:
+        imagename = image
+    else:
+        imagename = os.path.join(workdir, 'image.fits')
+        fits.writeto(imagename, image, header, overwrite=True)
 
     opts = {
         'VERBOSE_TYPE': 'QUIET',
@@ -251,46 +254,57 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
 
     if res == 0 and os.path.exists(catname):
         log('SExtractor run succeeded')
-        data = fits.getdata(catname, -1)
+        obj = Table.read(catname, hdu=2)
 
-        idx = (data['X_IMAGE'] > edge) & (data['X_IMAGE'] < image.shape[1] - edge)
-        idx &= (data['Y_IMAGE'] > edge) & (data['Y_IMAGE'] < image.shape[0] - edge)
+        idx = (obj['X_IMAGE'] > edge) & (obj['X_IMAGE'] < image.shape[1] - edge)
+        idx &= (obj['Y_IMAGE'] > edge) & (obj['Y_IMAGE'] < image.shape[0] - edge)
 
         if np.isscalar(aper):
-            idx &= data['MAGERR_APER'] < 1.0/sn
-            idx &= data['FLUX_APER'] > 0
+            idx &= obj['MAGERR_APER'] < 1.0/sn
+            idx &= obj['FLUX_APER'] > 0
         else:
-            idx &= np.all(data['MAGERR_APER'] < 1.0/sn, axis=1)
-            idx &= np.all(data['FLUX_APER'] > 0, axis=1)
+            idx &= np.all(obj['MAGERR_APER'] < 1.0/sn, axis=1)
+            idx &= np.all(obj['FLUX_APER'] > 0, axis=1)
 
-        data = data[idx]
+        obj = obj[idx]
 
         if wcs is None and header is not None:
             wcs = WCS(header)
 
         if wcs is not None:
-            ra,dec = wcs.all_pix2world(data['X_IMAGE'], data['Y_IMAGE'], 1)
+            ra,dec = wcs.all_pix2world(obj['X_IMAGE'], obj['Y_IMAGE'], 1)
         else:
-            ra,dec = np.zeros_like(data['X_IMAGE']), np.zeros_like(data['Y_IMAGE'])
+            ra,dec = np.zeros_like(obj['X_IMAGE']), np.zeros_like(obj['Y_IMAGE'])
 
-        data['FLAGS'][data['IMAFLAGS_ISO'] > 0] |= 256
+        obj['FLAGS'][obj['IMAFLAGS_ISO'] > 0] |= 256
 
-        obj = Table({
-            'x': data['X_IMAGE']-1, 'y': data['Y_IMAGE']-1,
-            'xerr': np.sqrt(data['ERRX2_IMAGE']), 'yerr': np.sqrt(data['ERRY2_IMAGE']),
-            'flux': data['FLUX_APER'], 'fluxerr': data['FLUXERR_APER'],
-            'mag': data['MAG_APER'], 'magerr': data['MAGERR_APER'],
-            'flags': data['FLAGS'], 'ra':ra, 'dec': dec,
-            'bg': data['BACKGROUND'], 'fwhm': data['FWHM_IMAGE'],
-            'a': data['A_IMAGE'], 'b': data['B_IMAGE'], 'theta': data['THETA_IMAGE'],
-        })
+        for _,__ in [['X_IMAGE', 'x'],
+                     ['Y_IMAGE', 'y'],
+                     ['ERRX2_IMAGE', 'xerr'],
+                     ['ERRY2_IMAGE', 'yerr'],
+                     ['FLUX_APER', 'flux'],
+                     ['FLUXERR_APER', 'fluxerr'],
+                     ['MAG_APER', 'mag'],
+                     ['MAGERR_APER', 'magerr'],
+                     ['FLAGS', 'flags'],
+                     ['FWHM_IMAGE', 'fwhm'],
+                     ['A_IMAGE', 'a'],
+                     ['B_IMAGE', 'b'],
+                     ['THETA_IMAGE', 'theta']]:
+            obj.rename_column(_, __)
+
+        # SExtractor uses 1-based pixel coordinates
+        obj['x'] -= 1
+        obj['y'] -= 1
 
         obj.meta['aper'] = aper
 
-        obj.sort('flux', reverse=True)
-
-        for _ in extra_params:
-            obj[_] = data[_]
+        if sort:
+            if np.isscalar(aper):
+                obj.sort('flux', reverse=True)
+            else:
+                # Table sorting by vector columns seems to be broken?..
+                obj = obj[np.argsort(-obj['flux'][:,0])]
 
         if catfile is not None:
             shutil.copyfile(catname, catfile)
