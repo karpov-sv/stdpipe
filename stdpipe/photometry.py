@@ -272,9 +272,9 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
             wcs = WCS(header)
 
         if wcs is not None:
-            ra,dec = wcs.all_pix2world(obj['X_IMAGE'], obj['Y_IMAGE'], 1)
+            obj['ra'],obj['dec'] = wcs.all_pix2world(obj['X_IMAGE'], obj['Y_IMAGE'], 1)
         else:
-            ra,dec = np.zeros_like(obj['X_IMAGE']), np.zeros_like(obj['Y_IMAGE'])
+            obj['ra'],obj['dec'] = np.zeros_like(obj['X_IMAGE']), np.zeros_like(obj['Y_IMAGE'])
 
         obj['FLAGS'][obj['IMAFLAGS_ISO'] > 0] |= 256
 
@@ -286,6 +286,7 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
                      ['FLUXERR_APER', 'fluxerr'],
                      ['MAG_APER', 'mag'],
                      ['MAGERR_APER', 'magerr'],
+                     ['BACKGROUND', 'bg'],
                      ['FLAGS', 'flags'],
                      ['FWHM_IMAGE', 'fwhm'],
                      ['A_IMAGE', 'a'],

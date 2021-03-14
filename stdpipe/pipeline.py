@@ -7,12 +7,14 @@ from astropy.wcs import WCS
 from astropy.io import fits
 from astropy.coordinates import SkyCoord
 from astropy.time import Time
+from astropy.table import Table
 
 from esutil import htm
 
 from . import photometry
 from . import astrometry
 from . import catalogs
+from . import psf
 from . import utils
 
 def refine_astrometry(obj, cat, sr=10/3600, wcs=None, order=0,
@@ -182,3 +184,37 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, threshold=5,
         log('Photometric calibration failed')
 
     return m
+
+def place_random_stars(image, psf_model, nstars=100, minflux=1, maxflux=100000, gain=1, saturation=65535, wcs=None, verbose=False):
+    """
+    Randomly place artificial stars into the image.
+    Coordinates are distributed uniformly.
+    Fluxes are log-uniform between user-provided min and max values.
+
+    Returns: the catalogue of generated stars, with x, y and flux fields set.
+    """
+
+    # Simple wrapper around print for logging in verbose mode only
+    log = print if verbose else lambda *args,**kwargs: None
+
+    cat = {
+        'x': np.random.uniform(0, image.shape[1] - 1, nstars),
+        'y': np.random.uniform(0, image.shape[0] - 1, nstars),
+        'flux': 10**np.random.uniform(np.log10(minflux), np.log10(maxflux), nstars)
+    }
+    cat = Table(cat)
+
+    if wcs is not None and wcs.celestial:
+        cat['ra'], cat['dec'] = wcs.all_pix2world(cat['x'], cat['y'], 0)
+    else:
+        cat['ra'], cat['dec'] = np.nan, np.nan
+
+    cat['mag'] = -2.5*np.log10(cat['flux'])
+
+    for _ in cat:
+        psf.place_psf_stamp(image, psf_model, _['x'], _['y'], flux=_['flux'], gain=gain)
+
+    if saturation is not None:
+        image[image > saturation] = saturation
+
+    return cat

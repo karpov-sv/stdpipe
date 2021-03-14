@@ -134,6 +134,7 @@ def bilinear_interpolate(im, x, y):
     """
     Quick and dirty bilinear interpolation
     """
+
     x = np.asarray(x)
     y = np.asarray(y)
 
@@ -231,14 +232,20 @@ def get_psf_stamp(psf, x=0, y=0, dx=None, dy=None, normalize=True):
 
     return stamp
 
-def place_psf_stamp(image, psf, x0, y0, flux=1):
+def place_psf_stamp(image, psf, x0, y0, flux=1, gain=None):
     """
     Places PSF stamp, scaled to a given flux, at a given position inside the image.
-    The stamp values are added to current content of the image
+    The stamp values are added to current content of the image.
+    If gain value is set, the Poissonian noise is applied to the stamp.
     """
 
     stamp = get_psf_stamp(psf, x0, y0, normalize=True)
     stamp *= flux
+
+    if gain is not None:
+        idx = stamp > 0
+        # FIXME: what to do with negative points?..
+        stamp[idx] = np.random.poisson(stamp[idx]*gain)/gain
 
     # Integer coordinates inside the stamp
     y,x = np.mgrid[0:stamp.shape[0], 0:stamp.shape[1]]
