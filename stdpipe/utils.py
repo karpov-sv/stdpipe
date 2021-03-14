@@ -45,6 +45,7 @@ def download(url, filename=None, overwrite=False, verbose=False):
         log('Error %s downloading from %s' % (response.status_code, url))
         return False
 
+    # FIXME: if server is compressing the data, Content-Length here will be wrong?..
     size = int(response.headers.get('Content-Length', 0))
 
     if filename is None:
@@ -55,18 +56,21 @@ def download(url, filename=None, overwrite=False, verbose=False):
         else:
             filename = 'download'
 
-        # TODO: check file existence there again?..
+        # TODO: check file existence here again?..
 
     desc = os.path.basename(filename)
 
     log('Downloading %s from %s...' % (filename, url))
 
+    length = 0
+
     with open(filename, 'wb') as file, tqdm(desc=desc, total=size, unit='iB', unit_scale=True, unit_divisor=1024) as progress:
         for chunk in response.iter_content(chunk_size=1024):
-            length = file.write(chunk)
-            progress.update(length)
+            chunksize = file.write(chunk)
+            progress.update(chunksize)
+            length += len(chunk)
 
-    if size and length != size:
+    if size and length < size:
         log('Downloaded %d bytes, was expecting %d' % (length, size))
         return False
     else:

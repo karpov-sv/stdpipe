@@ -2,7 +2,9 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 
 import numpy as np
 
+import os
 import json
+import tempfile
 
 from urllib.parse import urlencode
 
@@ -137,15 +139,16 @@ def mask_template(tmpl, cat=None, cat_saturation_mag=None,
 
 __skycells = None
 
-def find_ps1_skycells(ra, dec, sr, band='r', sr0=0.3, fullpath=True):
+def find_ps1_skycells(ra, dec, sr, band='r', cell_radius=0.3, fullpath=True):
     global __skycells
 
     if __skycells is None:
-        print('Loading skycells information')
+        # Load skycells information and store to global variable
         __skycells = Table.read(utils.get_data_path('ps1skycells.txt'), format='ascii')
 
+    # FIXME: here we may select the cells that are too far from actual footprint
     h = htm.HTM(10)
-    _,idx,_ = h.match(ra, dec, __skycells['ra0'], __skycells['dec0'], sr + sr0, maxmatch=0)
+    _,idx,_ = h.match(ra, dec, __skycells['ra0'], __skycells['dec0'], sr + cell_radius, maxmatch=0)
 
     if fullpath:
         # Get full path on the server
@@ -153,3 +156,79 @@ def find_ps1_skycells(ra, dec, sr, band='r', sr0=0.3, fullpath=True):
     else:
         # Get just the file name
         return ['rings.v3.skycell.%04d.%03d.stk.%s.unconv.fits' % (_['projectionID'], _['skyCellID'], band) for _ in __skycells[idx]]
+
+def get_ps1_skycells(ra0, dec0, sr0, band='r', _cachedir='~/.stdpipe-cache/ps1/', normalize=True, verbose=False):
+    """
+    Get the list of filenames corresponding to skycells in the user-specified sky region.
+    The cells are downloaded and stored to the specified cache location.
+    Downloaded skycells are (optionally) normalized according to the parameters from their FITS headers.
+    """
+
+    # Simple wrapper around print for logging in verbose mode only
+    log = print if verbose else lambda *args,**kwargs: None
+
+    # Normalize _cachedir
+    if _cachedir is not None:
+        _cachedir = os.path.expanduser(_cachedir)
+    else:
+        _cachedir = tempfile.gettempdir()
+        log('Cache location not specified, falling back to %s', _cachedir)
+
+    filenames = []
+
+    cells = find_ps1_skycells(ra0, dec0, sr0, band=band, fullpath=True)
+
+    for cell in cells:
+        cellname = os.path.basename(cell)
+        filename = os.path.join(_cachedir, cellname)
+
+        if os.path.exists(filename) and False:
+            log('%s already downloaded' % cellname)
+        else:
+            log('Downloading %s' % cellname)
+
+            url = 'http://ps1images.stsci.edu/' + cell
+
+            if utils.download(url, filename, verbose=verbose):
+                if normalize:
+                    normalize_ps1_skycell(filename, verbose=verbose)
+
+        if os.path.exists(filename):
+            filenames.append(filename)
+
+    return filenames
+
+def normalize_ps1_skycell(filename, verbose=False):
+    """
+    Normalize PanSTARRS skycell file according to its FITS header
+    """
+
+    # Simple wrapper around print for logging in verbose mode only
+    log = print if verbose else lambda *args,**kwargs: None
+
+    header = fits.getheader(filename, -1)
+
+    if 'RADESYS' not in header and 'PC001001' in header:
+        # Normalize WCS in the header
+        log('Normalizing WCS keywords in %s' % filename)
+
+        header['RADESYS'] = 'FK5'
+        header.rename_keyword('PC001001', 'PC1_1')
+        header.rename_keyword('PC001002', 'PC1_2')
+        header.rename_keyword('PC002001', 'PC2_1')
+        header.rename_keyword('PC002002', 'PC2_2')
+
+        data = fits.getdata(filename, -1)
+
+        if 'BSOFTEN' in header and 'BOFFSET' in header:
+            # Linearize ASINH scaling
+            log('Normalizing ASINH scaling in %s' % filename)
+
+            x = data * 0.4 * np.log(10)
+            data = header['BOFFSET'] + header['BSOFTEN'] * (np.exp(x) - np.exp(-x))
+
+            for _ in ['BZERO', 'BSCALE', 'BSOFTEN', 'BOFFSET', 'BLANK']:
+                header.remove(_, ignore_missing=True)
+
+        log('Writing data back to %s', filename)
+        fits.writeto(filename, data, header, overwrite=True)
