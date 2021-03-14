@@ -118,7 +118,7 @@ def write_cutout(cutout, filename):
     hdus.append(hdu)
 
     # Store imaging data to named extensions
-    for _ in ['image', 'mask', 'bg', 'template', 'diff', 'err']:
+    for _ in ['image', 'template', 'diff', 'mask', 'err', 'bg']:
         if _ in cutout:
             data = cutout[_]
 
