@@ -182,7 +182,7 @@ def get_ps1_skycells(ra0, dec0, sr0, band='r', _cachedir='~/.stdpipe-cache/ps1/'
         cellname = os.path.basename(cell)
         filename = os.path.join(_cachedir, cellname)
 
-        if os.path.exists(filename) and False:
+        if os.path.exists(filename):
             log('%s already downloaded' % cellname)
         else:
             log('Downloading %s' % cellname)

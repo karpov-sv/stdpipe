@@ -142,35 +142,51 @@ def plot_cutout(cutout, fig=None, nplots=3, **kwargs):
         title += ': mag = %.2f $\pm$ %.2f' % (cutout['mag_calib'], cutout['magerr'])
     fig.suptitle(title)
 
-def plot_photometric_match(m, ax=None, mode='mag', **kwargs):
+def plot_photometric_match(m, ax=None, mode='mag', show_masked=True, show_final=True, **kwargs):
     if ax is None:
         ax = plt.gca()
 
     if mode == 'mag':
-        ax.errorbar(m['cmag'][m['idx0']], (m['zero']-m['zero_model'])[m['idx0']], m['zero_err'][m['idx0']], fmt='.', alpha=0.3)
-        ax.plot(m['cmag'][m['idx']], (m['zero']-m['zero_model'])[m['idx']], '.', alpha=1.0, color='red', label='Final fit')
-        ax.plot(m['cmag'][~m['idx0']], (m['zero']-m['zero_model'])[~m['idx0']], 'x', alpha=1.0, color='orange', label='Masked')
+        ax.errorbar(m['cmag'][m['idx0']], (m['zero_model']-m['zero'])[m['idx0']], m['zero_err'][m['idx0']], fmt='.', alpha=0.3)
+        if show_final:
+            ax.plot(m['cmag'][m['idx']], (m['zero_model']-m['zero'])[m['idx']], '.', alpha=1.0, color='red', label='Final fit')
+        if show_masked:
+            ax.plot(m['cmag'][~m['idx0']], (m['zero_model']-m['zero'])[~m['idx0']], 'x', alpha=1.0, color='orange', label='Masked')
 
         ax.axhline(0, ls='--', color='black', alpha=0.3)
         ax.legend()
 
         ax.set_xlabel('Catalogue magnitude')
-        ax.set_ylabel('Model - Instrumental')
+        ax.set_ylabel('Instrumental - Model')
 
         ax.set_title('%d of %d unmasked stars used in final fit' % (np.sum(m['idx0']), np.sum(m['idx'])))
 
     elif mode == 'color':
-        ax.errorbar(m['color'][m['idx0']], (m['zero']-m['zero_model'])[m['idx0']], m['zero_err'][m['idx0']], fmt='.', alpha=0.3)
-        ax.plot(m['color'][m['idx']], (m['zero']-m['zero_model'])[m['idx']], '.', alpha=1.0, color='red', label='Final fit')
-        ax.plot(m['color'][~m['idx0']], (m['zero']-m['zero_model'])[~m['idx0']], 'x', alpha=1.0, color='orange', label='Masked')
+        ax.errorbar(m['color'][m['idx0']], (m['zero_model']-m['zero'])[m['idx0']], m['zero_err'][m['idx0']], fmt='.', alpha=0.3)
+        if show_final:
+            ax.plot(m['color'][m['idx']], (m['zero_model']-m['zero'])[m['idx']], '.', alpha=1.0, color='red', label='Final fit')
+        if show_masked:
+            ax.plot(m['color'][~m['idx0']], (m['zero_model']-m['zero'])[~m['idx0']], 'x', alpha=1.0, color='orange', label='Masked')
 
         ax.axhline(0, ls='--', color='black', alpha=0.3)
         ax.legend()
 
         ax.set_xlabel('Catalogue color')
-        ax.set_ylabel('Model - Instrumental')
+        ax.set_ylabel('Instrumental - Model')
 
         ax.set_title('color term = %.2f' % m['color_term'])
+
+    elif mode == 'zero':
+        if show_final:
+            binned_map(m['ox'][m['idx']], m['oy'][m['idx']], m['zero'][m['idx']], statistic='mean', ax=ax, **kwargs)
+        else:
+            binned_map(m['ox'][m['idx0']], m['oy'][m['idx0']], m['zero'][m['idx0']], statistic='mean', ax=ax, **kwargs)
+        ax.set_title('Zero point')
+
+    elif mode == 'residuals':
+        binned_map(m['ox'][m['idx0']], m['oy'][m['idx0']], (m['zero_model']-m['zero'])[m['idx0']], statistic='mean', ax=ax, **kwargs)
+        # ax.set_title('%d stars: mean displacement %.1f arcsec, median %.1f arcsec' % (np.sum(m['idx']), np.mean(m['dist'][m['idx']]*3600), np.median(m['dist'][m['idx']]*3600)))
+        ax.set_title('Instrumental - model')
 
     elif mode == 'dist':
         binned_map(m['ox'][m['idx']], m['oy'][m['idx']], m['dist'][m['idx']]*3600, statistic='mean', ax=ax, **kwargs)

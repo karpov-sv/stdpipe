@@ -107,7 +107,7 @@ def blind_match_objects(obj, order=4, extra="", update=True, sn=20, verbose=Fals
         tmpname = os.path.join(dirname, os.path.splitext(wcsname)[0] + '.tmp')
         wcsname = os.path.join(dirname, os.path.splitext(wcsname)[0] + '.wcs')
 
-        command = "%s -D %s --no-verify --overwrite --no-plots -T %s %s" % (binname, dir, extra, filename)
+        command = "%s -D %s --no-verify --overwrite --no-plots -T %s %s" % (binname, dirname, extra, filename)
 
         log('Running Astrometry.Net first iteration like that:')
         log(command)
@@ -121,7 +121,7 @@ def blind_match_objects(obj, order=4, extra="", update=True, sn=20, verbose=Fals
 
         if os.path.isfile(wcsname):
             shutil.move(wcsname, tmpname)
-            command = "%s -D %s --overwrite --no-plots %s %s --verify %s %s" % (binname, dir, order_str, extra, tmpname, filename)
+            command = "%s -D %s --overwrite --no-plots %s %s --verify %s %s" % (binname, dirname, order_str, extra, tmpname, filename)
 
             log('Running Astrometry.Net second iteration like that:')
             log(command)
@@ -141,7 +141,7 @@ def blind_match_objects(obj, order=4, extra="", update=True, sn=20, verbose=Fals
         else:
             log('First iteration failed')
 
-        shutil.rmtree(dir)
+        shutil.rmtree(dirname)
 
     else:
         log("Astrometry.Net binary not found")
