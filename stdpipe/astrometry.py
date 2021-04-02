@@ -302,10 +302,11 @@ def table_to_ldac(table, header=None, writeto=None):
     return hdulist
 
 def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
-              cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
-              cat_col_ra_err='e_RAJ2000', cat_col_dec_err='e_DEJ2000',
-              cat_col_mag='rmag', cat_col_mag_err='e_rmag',
-              get_header=False, update=False,
+                     cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
+                     cat_col_ra_err='e_RAJ2000', cat_col_dec_err='e_DEJ2000',
+                     cat_col_mag='rmag', cat_col_mag_err='e_rmag',
+                     cat_mag_lim=99,
+                     get_header=False, update=False,
                      _workdir=None, _tmpdir=None, verbose=False):
     """
     Wrapper for running SCAMP on user-provided object list and catalogue
@@ -394,6 +395,20 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
                 'OBSDATE': np.ones_like(cat['RAJ2000'])*2000.0
             })
 
+            # Convert units of err columns to degrees, if any
+            for _ in ['ERRA_WORLD', 'ERRB_WORLD']:
+                if t_cat[_].unit and t_cat[_].unit != 'deg':
+                    t_cat[_] = t_cat[_].to('deg')
+
+            # Limit the catalogue to given magnitude range
+            if cat_mag_lim is not None:
+                if hasattr(cat_mag_lim, '__len__') and len(cat_mag_lim) == 2:
+                    # Two elements provided, treat them as lower and upper limits
+                    t_cat = t_cat[(t_cat['MAG'] >= cat_mag_lim[0]) & (t_cat['MAG'] <= cat_mag_lim[1])]
+                else:
+                    # One element provided, treat it as upper limit
+                    t_cat = t_cat[t_cat['MAG'] <= cat_mag_lim]
+
             catname = os.path.join(workdir, 'catalogue.cat')
             table_to_ldac(t_cat, header, catname)
 
@@ -433,6 +448,8 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
                 wcs = WCS(h1)
                 if update:
                     obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
+
+                log('Astrometric accuracy: %.2f" %.2f"' % (h1.get('ASTRRMS1', 0)*3600, h1.get('ASTRRMS2', 0)*3600))
 
     else:
         log('Error', res, 'running SCAMP')
