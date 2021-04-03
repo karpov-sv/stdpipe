@@ -4,6 +4,7 @@ import os
 import re
 import requests
 import dateutil
+import shlex
 
 from tqdm.auto import tqdm
 
@@ -135,9 +136,37 @@ def table_get(table, colname, default=0):
 
     if colname in table.colnames:
         return table[colname]
+    elif default is None:
+        return None
     elif hasattr(default, '__len__'):
         # default value is array, return it
         return default
     else:
         # Broadcast scalar to proper length
         return default*np.ones(len(table), dtype=np.int)
+
+def format_astromatic_opts(opts):
+    """
+    Auxiliary function to format dictionary of options into Astromatic compatible command-line string.
+    Booleans are converted to Y/N, arrays to comma separated lists, strings are quoted when necessary
+    """
+    result = []
+
+    for key in opts.keys():
+        if opts[key] is None:
+            pass
+        elif type(opts[key]) == bool:
+            result.append('-%s %s' % (key, 'Y' if opts[key] else 'N'))
+        else:
+            value = opts[key]
+
+            if type(value) == str:
+                value = shlex.quote(value)
+            elif hasattr(value, '__len__'):
+                value = ','.join([str(_) for _ in value])
+
+            result.append('-%s %s' % (key, value))
+
+    result = ' '.join(result)
+
+    return result

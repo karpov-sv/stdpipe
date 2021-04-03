@@ -11,6 +11,8 @@ from astropy.wcs.utils import fit_wcs_from_points
 from astropy.coordinates import SkyCoord
 from astropy.table import Table
 
+from scipy.stats import chi2
+
 from . import utils
 
 def get_frame_center(filename=None, header=None, wcs=None, width=None, height=None):
@@ -305,7 +307,7 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
                      cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
                      cat_col_ra_err='e_RAJ2000', cat_col_dec_err='e_DEJ2000',
                      cat_col_mag='rmag', cat_col_mag_err='e_rmag',
-                     cat_mag_lim=99,
+                     cat_mag_lim=99, extra={},
                      get_header=False, update=False,
                      _workdir=None, _tmpdir=None, verbose=False):
     """
@@ -351,6 +353,8 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
         'CROSSID_RADIUS': sr*3600,
         'DISTORT_DEGREES': order,
     }
+
+    opts.update(extra)
 
     # Minimal LDAC table with objects
     t_obj = Table(data={
@@ -419,7 +423,7 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
         log('Using default settings for network catalogue')
 
     # Build the command line
-    command = binname + ' ' + shlex.quote(objname) + ' ' + ' '.join(['-%s %s' % (_, shlex.quote(str(opts[_]))) for _ in opts.keys()])
+    command = binname + ' ' + shlex.quote(objname) + ' ' + utils.format_astromatic_opts(opts)
     if not verbose:
         command += ' > /dev/null 2>/dev/null'
     log('Will run SCAMP like that:')
@@ -429,27 +433,35 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
 
     res = os.system(command)
 
-    if res == 0 and os.path.exists(hdrname):
+    wcs = None
+
+    if res == 0 and os.path.exists(hdrname) and os.path.exists(xmlname):
         log('SCAMP run successfully')
 
-        with open(hdrname, 'r') as f:
-            h1 = fits.Header.fromstring(f.read().encode('ascii', 'ignore'), sep='\n')
+        diag = Table.read(xmlname, table_id=0)[0]
+        log('%d matches, chi2 %.1f' % (diag['NDeg_Reference'], diag['Chi2_Reference']))
+        # FIXME: is df correct here?..
+        if chi2.sf(diag['Chi2_Reference'], df=diag['NDeg_Reference']) < 1e-3:
+            log('It seems the fitting failed')
+        else:
+            with open(hdrname, 'r') as f:
+                h1 = fits.Header.fromstring(f.read().encode('ascii', 'ignore'), sep='\n')
 
-            # Sometimes SCAMP returns TAN type solution even despite PV keywords present
-            if h1['CTYPE1'] != 'RA---TPV':
-                log('Got WCS solution with CTYPE1 =', h1['CTYPE1'], ', fixing it')
-                h1['CTYPE1'] = 'RA---TPV'
-                h1['CTYPE2'] = 'DEC--TPV'
+                # Sometimes SCAMP returns TAN type solution even despite PV keywords present
+                if h1['CTYPE1'] != 'RA---TPV':
+                    log('Got WCS solution with CTYPE1 =', h1['CTYPE1'], ', fixing it')
+                    h1['CTYPE1'] = 'RA---TPV'
+                    h1['CTYPE2'] = 'DEC--TPV'
 
-            if get_header:
-                log('Returning raw header instead of WCS solution')
-                wcs = h1
-            else:
-                wcs = WCS(h1)
-                if update:
-                    obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
+                if get_header:
+                    log('Returning raw header instead of WCS solution')
+                    wcs = h1
+                else:
+                    wcs = WCS(h1)
+                    if update:
+                        obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
 
-                log('Astrometric accuracy: %.2f" %.2f"' % (h1.get('ASTRRMS1', 0)*3600, h1.get('ASTRRMS2', 0)*3600))
+                    log('Astrometric accuracy: %.2f" %.2f"' % (h1.get('ASTRRMS1', 0)*3600, h1.get('ASTRRMS2', 0)*3600))
 
     else:
         log('Error', res, 'running SCAMP')

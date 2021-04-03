@@ -7,6 +7,7 @@ from astropy.io import fits
 from astropy.table import Table
 
 from . import photometry
+from . import utils
 
 def run_psfex(image, mask=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, minarea=5, vignet_size=None, order=0, sex_opts={}, checkimages=[], extra={}, psffile=None, _workdir=None, _tmpdir=None, verbose=False):
     """
@@ -36,7 +37,7 @@ def run_psfex(image, mask=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, minarea=5,
         log('Extracting PSF using vignette size %d x %d pixels' % (vignet_size, vignet_size))
 
     # Run SExtractor on input image in current workdir so that the LDAC catalogue will be in out.cat there
-    obj = photometry.get_objects_sextractor(image, mask=mask, thresh=thresh, aper=aper, r0=r0, gain=gain, minarea=minarea, _workdir=workdir, _tmpdir=_tmpdir, verbose=verbose, extra_params=['SNR_WIN', 'ELONGATION', 'VIGNET(%d,%d)' % (vignet_size,vignet_size)], extra_opts=sex_opts)
+    obj = photometry.get_objects_sextractor(image, mask=mask, thresh=thresh, aper=aper, r0=r0, gain=gain, minarea=minarea, _workdir=workdir, _tmpdir=_tmpdir, verbose=verbose, extra_params=['SNR_WIN', 'ELONGATION', 'VIGNET(%d,%d)' % (vignet_size,vignet_size)], extra=sex_opts)
 
     catname = os.path.join(workdir, 'out.cat')
     psfname = os.path.join(workdir, 'out.psf')
@@ -57,7 +58,7 @@ def run_psfex(image, mask=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, minarea=5,
     opts.update(extra)
 
     # Build the command line
-    cmd = binname + ' ' + shlex.quote(catname) + ' ' + ' '.join(['-%s %s' % (_, shlex.quote(str(opts[_]))) for _ in opts.keys()])
+    cmd = binname + ' ' + shlex.quote(catname) + ' ' + utils.format_astromatic_opts(opts)
     if not verbose:
         cmd += ' > /dev/null 2>/dev/null'
     log('Will run PSFEx like that:')

@@ -159,7 +159,7 @@ def plot_photometric_match(m, ax=None, mode='mag', show_masked=True, show_final=
         ax.set_xlabel('Catalogue magnitude')
         ax.set_ylabel('Instrumental - Model')
 
-        ax.set_title('%d of %d unmasked stars used in final fit' % (np.sum(m['idx0']), np.sum(m['idx'])))
+        ax.set_title('%d of %d unmasked stars used in final fit' % (np.sum(m['idx']), np.sum(m['idx0'])))
 
     elif mode == 'color':
         ax.errorbar(m['color'][m['idx0']], (m['zero_model']-m['zero'])[m['idx0']], m['zero_err'][m['idx0']], fmt='.', alpha=0.3)
@@ -183,9 +183,12 @@ def plot_photometric_match(m, ax=None, mode='mag', show_masked=True, show_final=
             binned_map(m['ox'][m['idx0']], m['oy'][m['idx0']], m['zero'][m['idx0']], statistic='mean', ax=ax, **kwargs)
         ax.set_title('Zero point')
 
+    elif mode == 'model':
+        binned_map(m['ox'][m['idx0']], m['oy'][m['idx0']], m['zero_model'][m['idx0']], statistic='mean', ax=ax, **kwargs)
+        ax.set_title('Model')
+
     elif mode == 'residuals':
         binned_map(m['ox'][m['idx0']], m['oy'][m['idx0']], (m['zero_model']-m['zero'])[m['idx0']], statistic='mean', ax=ax, **kwargs)
-        # ax.set_title('%d stars: mean displacement %.1f arcsec, median %.1f arcsec' % (np.sum(m['idx']), np.mean(m['dist'][m['idx']]*3600), np.median(m['dist'][m['idx']]*3600)))
         ax.set_title('Instrumental - model')
 
     elif mode == 'dist':

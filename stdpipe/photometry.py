@@ -27,6 +27,8 @@ except:
     from scipy.signal import fftconvolve
     dilate = lambda image,mask: fftconvolve(image, mask, mode='same') > 0.9
 
+from . import utils
+
 def make_kernel(r0=1.0, ext=1.0):
     x,y = np.mgrid[np.floor(-ext*r0):np.ceil(ext*r0+1), np.floor(-ext*r0):np.ceil(ext*r0+1)]
     r = np.hypot(x,y)
@@ -154,7 +156,7 @@ def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.
 
     return obj
 
-def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, bkgann=None, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, sort=True, checkimages=[], extra_params=[], extra_opts={}, catfile=None, _workdir=None, _tmpdir=None, verbose=False):
+def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, bkgann=None, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, sort=True, checkimages=[], extra_params=[], extra={}, catfile=None, _workdir=None, _tmpdir=None, verbose=False):
     # Simple wrapper around print for logging in verbose mode only
     log = print if verbose else lambda *args,**kwargs: None
 
@@ -239,10 +241,10 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
         opts['FILTER'] = 'Y'
         opts['FILTER_NAME'] = kernelname
 
-    opts.update(extra_opts)
+    opts.update(extra)
 
     # Build the command line
-    cmd = binname + ' ' + shlex.quote(imagename) + ' ' + ' '.join(['-%s %s' % (_, shlex.quote(str(opts[_]))) for _ in opts.keys()])
+    cmd = binname + ' ' + shlex.quote(imagename) + ' ' + utils.format_astromatic_opts(opts)
     if not verbose:
         cmd += ' > /dev/null 2>/dev/null'
     log('Will run SExtractor like that:')
@@ -399,7 +401,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
 
     idx = idx0.copy()
 
-    for iter in range(1):
+    for iter in range(3):
         if np.sum(idx) < 3:
             log("Fit failed - %d objects remaining" % np.sum(idx))
             return None
@@ -411,9 +413,14 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
 
         zero_model = np.sum(X*C.params, axis=1)
 
-        idx = idx0.copy()
         if threshold:
-            idx[idx0] &= (np.abs((zero - zero_model)/zero_err)[idx0] < threshold)
+            rms = mad_std(((zero - zero_model)/zero_err)[idx])
+
+            if robust:
+                idx[idx] &= (np.abs((zero - zero_model)/zero_err)[idx] < threshold*rms)
+            else:
+                # idx = idx0.copy()
+                idx[idx] &= (np.abs((zero - zero_model)/zero_err)[idx] < threshold*rms)
 
         log('Iteration', iter, ':', np.sum(idx), '/', len(idx), '-', np.std((zero - zero_model)[idx0]), np.std((zero - zero_model)[idx]), '-', np.std((zero - zero_model)[idx]/zero_err[idx]))
 

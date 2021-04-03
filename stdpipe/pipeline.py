@@ -144,8 +144,10 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
         return cand_idx
 
 def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, threshold=5,
-                         cat_col_mag='R', cat_col_mag1=None, cat_col_mag2=None,
+                         cat_col_mag='R', cat_col_mag_err=None,
+                         cat_col_mag1=None, cat_col_mag2=None,
                          cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
+                         robust=True,
                          update=True, verbose=False):
     """
     Higher-level photometric calibration routine
@@ -167,11 +169,22 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, threshold=5,
     if cat_col_mag1 and cat_col_mag2:
         log('Using (%s - %s) color for color term' % (cat_col_mag1, cat_col_mag2))
 
+    if cat_col_mag1 and cat_col_mag2:
+        color = cat[cat_col_mag1]-cat[cat_col_mag2]
+    else:
+        color = None
+
+    if cat_col_mag_err:
+        cat_magerr = cat[cat_col_mag_err]
+    else:
+        cat_magerr = None
+
     m = photometry.match(obj['ra'], obj['dec'], obj['mag'], obj['magerr'], obj['flags'],
                          cat[cat_col_ra], cat[cat_col_dec], cat[cat_col_mag],
-                         sr=sr, cat_color=cat[cat_col_mag1]-cat[cat_col_mag2],
+                         cat_magerr=cat_magerr,
+                         sr=sr, cat_color=color,
                          obj_x=obj['x'], obj_y=obj['y'], spatial_order=order,
-                         threshold=threshold, verbose=False)
+                         threshold=threshold, robust=robust, verbose=verbose)
 
     if m:
         log('Photometric calibration finished successfully.')
