@@ -156,7 +156,7 @@ def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.
 
     return obj
 
-def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, bkgann=None, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, sort=True, checkimages=[], extra_params=[], extra={}, catfile=None, _workdir=None, _tmpdir=None, verbose=False):
+def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, sort=True, checkimages=[], extra_params=[], extra={}, psf=None, catfile=None, _workdir=None, _tmpdir=None, verbose=False):
     # Simple wrapper around print for logging in verbose mode only
     log = print if verbose else lambda *args,**kwargs: None
 
@@ -223,6 +223,11 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
 
     params = ['MAG_APER'+size, 'MAGERR_APER'+size, 'FLUX_APER'+size, 'FLUXERR_APER'+size, 'X_IMAGE', 'Y_IMAGE', 'ERRX2_IMAGE', 'ERRY2_IMAGE', 'A_IMAGE', 'B_IMAGE', 'THETA_IMAGE', 'FLUX_RADIUS', 'FWHM_IMAGE', 'FLAGS', 'IMAFLAGS_ISO', 'BACKGROUND']
     params += extra_params
+
+    if psf is not None:
+        opts['PSF_NAME'] = psf
+        params += ['MAG_PSF', 'MAGERR_PSF', 'FLUX_PSF', 'FLUXERR_PSF', 'XPSF_IMAGE', 'YPSF_IMAGE']
+
     paramname = os.path.join(workdir, 'cfg.param')
     with open(paramname, 'w') as paramfile:
         paramfile.write("\n".join(params))
@@ -279,6 +284,7 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
             obj['ra'],obj['dec'] = np.zeros_like(obj['X_IMAGE']), np.zeros_like(obj['Y_IMAGE'])
 
         obj['FLAGS'][obj['IMAFLAGS_ISO'] > 0] |= 256
+        obj.remove_column('IMAFLAGS_ISO') # We do not need this column
 
         for _,__ in [['X_IMAGE', 'x'],
                      ['Y_IMAGE', 'y'],
@@ -295,6 +301,17 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
                      ['B_IMAGE', 'b'],
                      ['THETA_IMAGE', 'theta']]:
             obj.rename_column(_, __)
+
+        if psf:
+            psf_idx = obj['MAG_PSF'] == 99
+            for _,__ in [['XPSF_IMAGE', 'x_psf'],
+                         ['YPSF_IMAGE', 'y_psf'],
+                         ['MAG_PSF', 'mag_psf'],
+                         ['MAGERR_PSF', 'magerr_psf'],
+                         ['FLUX_PSF', 'flux_psf'],
+                         ['FLUXERR_PSF', 'fluxerr_psf']]:
+                obj.rename_column(_, __)
+                obj[__][psf_idx] = np.nan # TODO: use masked column here?
 
         # SExtractor uses 1-based pixel coordinates
         obj['x'] -= 1

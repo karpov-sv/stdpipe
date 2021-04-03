@@ -143,12 +143,12 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
     else:
         return cand_idx
 
-def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, threshold=5,
+def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0,
+                         obj_col_mag='mag', obj_col_mag_err='magerr',
                          cat_col_mag='R', cat_col_mag_err=None,
                          cat_col_mag1=None, cat_col_mag2=None,
                          cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
-                         robust=True,
-                         update=True, verbose=False):
+                         update=True, verbose=False, **kwargs):
     """
     Higher-level photometric calibration routine
     """
@@ -179,12 +179,12 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, threshold=5,
     else:
         cat_magerr = None
 
-    m = photometry.match(obj['ra'], obj['dec'], obj['mag'], obj['magerr'], obj['flags'],
+    m = photometry.match(obj['ra'], obj['dec'], obj[obj_col_mag], obj[obj_col_mag_err], obj['flags'],
                          cat[cat_col_ra], cat[cat_col_dec], cat[cat_col_mag],
                          cat_magerr=cat_magerr,
                          sr=sr, cat_color=color,
                          obj_x=obj['x'], obj_y=obj['y'], spatial_order=order,
-                         threshold=threshold, robust=robust, verbose=verbose)
+                         verbose=verbose, **kwargs)
 
     if m:
         log('Photometric calibration finished successfully.')
