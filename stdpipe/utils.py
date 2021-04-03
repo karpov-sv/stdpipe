@@ -170,3 +170,57 @@ def format_astromatic_opts(opts):
     result = ' '.join(result)
 
     return result
+
+# Parsing of DATASEC-like keywords
+def parse_det(string):
+    """
+    Parse DATASEC-like keyword
+    """
+
+    x0,x1,y0,y1 = [int(_)-1 for _ in sum([_.split(':') for _ in string[1:-1].split(',')], [])]
+
+    return x0,x1,y0,y1
+
+# Cropping of overscans if any
+def crop_overscans(image, header, subtract_bias=True, verbose=False):
+    """
+    Crop overscans from input image based on its header keywords.
+    Also, subtract the 'bias' value estimated from overscan.
+    """
+
+    # Simple wrapper around print for logging in verbose mode only
+    log = print if verbose else lambda *args,**kwargs: None
+
+    if header is not None:
+        header = header.copy()
+
+    bias = 0
+
+    for kw in ['BIASSEC']:
+        if kw in header:
+            x1,x2,y1,y2 = parse_det(header.get(kw))
+            biasimg = image[y1:y2+1, x1:x2+1]
+
+            bias = np.mean(biasimg)
+            log('Estimated bias level using %s: %s = %.2f' % (kw, header.get(kw), bias))
+
+    for kw in ['TRIMSEC', 'DATASEC']:
+        if kw in header:
+            x1,x2,y1,y2 = parse_det(header.get(kw))
+
+            if header is not None and header.get('CRPIX1') is not None:
+                header['CRPIX1'] -= x1
+                header['CRPIX2'] -= y1
+
+            image = image[y1:y2+1, x1:x2+1]
+            log('Cropped image using %s: %s' % (kw, header.get(kw)))
+
+            break
+
+    for kw in ['BIASSEC', 'TRIMSEC', 'DATASEC']:
+        if kw in header:
+            header[kw + '0'] = header.pop(kw)
+
+    image -= bias
+
+    return image, header
