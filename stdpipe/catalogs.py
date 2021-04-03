@@ -121,8 +121,8 @@ def xmatch_skybot(obj, sr=10/3600, time=None, location='500', col_ra='ra', col_d
     try:
         # Query SkyBot for (a bit larger than) our FOV at our time
         xcat = Skybot.cone_search(SkyCoord(ra0, dec0, unit='deg'), (sr0 + 2.0*sr)*u.deg, Time(time))
-    except RuntimeError:
-        # Nothing fount in SkyBot
+    except (RuntimeError, KeyError):
+        # Nothing found in SkyBot
         return None
 
     # Cross-match objects
