@@ -6,7 +6,7 @@ import numpy as np
 from astropy.io import fits
 from astropy.stats import mad_std
 
-def run_hotpants(image, template, mask=None, template_mask=None, _workdir=None, extra=None, image_fwhm=None, template_fwhm=None, image_gain=None, template_gain=None, get_convolved=False, get_scaled=False, get_noise=False, _tmpdir=None, verbose=False):
+def run_hotpants(image, template, mask=None, template_mask=None, err=None, _workdir=None, extra=None, image_fwhm=None, template_fwhm=None, image_gain=None, template_gain=None, get_convolved=False, get_scaled=False, get_noise=False, _tmpdir=None, verbose=False):
     # Simple wrapper around print for logging in verbose mode only
     log = print if verbose else lambda *args,**kwargs: None
 
@@ -72,6 +72,25 @@ def run_hotpants(image, template, mask=None, template_mask=None, _workdir=None, 
         # Return all possible image planes as a result
         'allm': True,
     }
+
+    # Error map for input image
+    if err is not None:
+        if type(err) is bool and err == True:
+            # err=True means that we should estimate the noise
+            log('Building noise model from the image')
+            import sep
+
+            if image_gain is None:
+                image_gain = 1
+
+            bg = sep.Background(image, mask)
+            err = bg.rms()
+            err += np.sqrt(np.abs((image - bg.back()))*image_gain)/image_gain
+
+        if hasattr(err, 'shape'):
+            errname = os.path.join(workdir, 'err.fits')
+            params['ini'] = errname
+            fits.writeto(errname, err, overwrite=True)
 
     if image_fwhm is not None and template_fwhm is not None:
         # Recommended logic for sigma_match
