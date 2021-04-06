@@ -22,6 +22,8 @@ catalogs = {
     'usnob1': {'vizier': 'I/284/out', 'name': 'USNO-B1'},
     'gsc': {'vizier': 'I/271/out', 'name': 'GSC 2.2'},
     'skymapper': {'vizier': 'II/358/smss', 'name': 'SkyMapper DR1.1'},
+    'vsx': {'vizier': 'B/vsx/vsx', 'name': 'AAVSO VSX'},
+    'apass': {'vizier': 'II/336/apass9', 'name': 'APASS DR9'},
 }
 
 def get_cat_vizier(ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}, extra=[]):

@@ -114,11 +114,14 @@ def mask_template(tmpl, cat=None, cat_saturation_mag=None,
         cx = cx.astype(np.int)
         cy = cy.astype(np.int)
 
-        tidx = cat[cat_col_mag].mask
-        tidx |= cat[cat_col_mag_err].mask
+        # First, we select all catalogue objects with masked measurements
+        tidx = cat[cat_col_mag].mask == True
+        tidx |= cat[cat_col_mag_err].mask == True
 
+        # Next, we also add the ones corresponding to saturation limit
         tidx |= cat[cat_col_mag] < cat_saturation_mag
 
+        # ..and keep only the ones inside the image
         tidx &= (cx >= 0) & (cx <= tmpl.shape[1] - 1)
         tidx &= (cy >= 0) & (cy <= tmpl.shape[0] - 1)
 

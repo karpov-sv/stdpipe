@@ -118,7 +118,7 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
         if xcat is not None and len(xcat):
             cand_idx &= ~np.in1d(obj[col_id], xcat[col_id])
 
-        log(np.sum(cand_idx), 'remains after matching with', catalogs.catalogs.get(catname)['name'])
+        log(np.sum(cand_idx), 'remains after matching with', catalogs.catalogs.get(catname, {'name':catname})['name'])
 
     if skybot and np.any(cand_idx):
         if time is None and 'time' in obj.keys():
