@@ -24,8 +24,8 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, _work
     tmin,tmax = np.min(template[~template_mask]), np.max(template[~template_mask])
 
     # Logic from https://arxiv.org/pdf/1608.01006.pdf
-    # imin = np.median(image[~mask]) - 10*mad_std(image[~mask])
-    # tmin = np.median(template[~template_mask]) - 10*mad_std(template[~template_mask])
+    imin = np.median(image[~mask]) - 10*mad_std(image[~mask])
+    tmin = np.median(template[~template_mask]) - 10*mad_std(template[~template_mask])
 
     _nan = imin - 100000
 
@@ -84,8 +84,9 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, _work
                 image_gain = 1
 
             bg = sep.Background(image, mask)
-            err = bg.rms()
-            err += np.sqrt(np.abs((image - bg.back()))*image_gain)/image_gain
+            err = bg.rms() # Background noise level
+            # TODO: noise should probably be estimated on smoothed image
+            err = np.sqrt(err**2 + np.abs((image - bg.back()))/image_gain) # Contribution from the sources
 
         if hasattr(err, 'shape'):
             errname = os.path.join(workdir, 'err.fits')
@@ -100,8 +101,8 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, _work
 
     if image_fwhm is not None:
         # Logic from https://arxiv.org/pdf/1608.01006.pdf
-        params['r'] = int(np.ceil(image_fwhm*2.5*2))
-        params['rss'] = int(np.ceil(image_fwhm*6*2))
+        params['r'] = int(np.ceil(image_fwhm * 2.5 / 2.35))
+        params['rss'] = int(np.ceil(image_fwhm * 6 / 2.35))
 
     if image_gain is not None:
         params['ig'] = image_gain
