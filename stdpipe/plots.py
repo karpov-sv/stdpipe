@@ -102,13 +102,15 @@ def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], show_colo
         ax.set_autoscale_on(False)
         ax.plot(x, y, 'b.', alpha=0.3)
 
-def plot_cutout(cutout, fig=None, nplots=3, **kwargs):
+def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, **kwargs):
     curplot = 1
+
+    nplots = len(planes)
 
     if fig is None:
         fig = plt.figure(figsize=[nplots*4, 4+1.0], dpi=75)
 
-    for name in ['image', 'template', 'diff', 'mask']:
+    for name in planes:
         if name in cutout:
             ax = fig.add_subplot(1, nplots, curplot)
             curplot += 1
@@ -135,11 +137,11 @@ def plot_cutout(cutout, fig=None, nplots=3, **kwargs):
 
     fig.tight_layout()
 
-    title = cutout['name']
-    if 'time' in cutout:
-        title += ' at %s' % cutout['time'].to_value('iso')
+    title = cutout['meta'].get('name', 'unnamed')
+    if 'time' in cutout['meta']:
+        title += ' at %s' % cutout['meta']['time'].to_value('iso')
     if 'mag' in cutout:
-        title += ': mag = %.2f $\pm$ %.2f' % (cutout['mag_calib'], cutout['magerr'])
+        title += ': mag = %.2f $\pm$ %.2f' % (cutout['meta'].get('mag_calib', np.nan), cutout['meta'].get('magerr', np.nan))
     fig.suptitle(title)
 
 def plot_photometric_match(m, ax=None, mode='mag', show_masked=True, show_final=True, **kwargs):

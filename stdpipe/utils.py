@@ -25,7 +25,7 @@ def breakpoint():
 def make_jname(ra, dec):
     radec = SkyCoord(ra, dec, unit='deg')
     return "J%s%s" % (radec.ra.to_string(unit=u.hourangle, sep='', precision=2, pad=True),
-                      radec.dec.to_string(sep='', precision=2, alwayssign=True, pad=True))
+                      radec.dec.to_string(sep='', precision=1, alwayssign=True, pad=True))
 
 def get_data_path(dataname):
     """
