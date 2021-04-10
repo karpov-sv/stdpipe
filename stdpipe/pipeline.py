@@ -22,7 +22,7 @@ def refine_astrometry(obj, cat, sr=10/3600, wcs=None, order=0,
                       cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
                       cat_col_ra_err='e_RAJ2000', cat_col_dec_err='e_DEJ2000',
                       n_iter=3, use_photometry=True, min_matches=5, method='astropy',
-                      update=True, verbose=False):
+                      update=True, verbose=False, **kwargs):
     """
     Higher-level astrometric refinement routine.
     """
@@ -42,7 +42,7 @@ def refine_astrometry(obj, cat, sr=10/3600, wcs=None, order=0,
                                            cat_col_mag=cat_col_mag, cat_col_mag_err=cat_col_mag_err,
                                            cat_col_ra=cat_col_ra, cat_col_dec=cat_col_dec,
                                            cat_col_ra_err=cat_col_ra_err, cat_col_dec_err=cat_col_dec_err,
-                                           update=update, verbose=verbose)
+                                           update=update, verbose=verbose, **kwargs)
 
     for iter in range(n_iter):
         if use_photometry:
@@ -198,7 +198,7 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0,
 
     return m
 
-def place_random_stars(image, psf_model, nstars=100, minflux=1, maxflux=100000, gain=1, saturation=65535, wcs=None, verbose=False):
+def place_random_stars(image, psf_model, nstars=100, minflux=1, maxflux=100000, gain=1, saturation=65535, edge=0, wcs=None, verbose=False):
     """
     Randomly place artificial stars into the image.
     Coordinates are distributed uniformly.
@@ -211,8 +211,8 @@ def place_random_stars(image, psf_model, nstars=100, minflux=1, maxflux=100000, 
     log = print if verbose else lambda *args,**kwargs: None
 
     cat = {
-        'x': np.random.uniform(0, image.shape[1] - 1, nstars),
-        'y': np.random.uniform(0, image.shape[0] - 1, nstars),
+        'x': np.random.uniform(edge, image.shape[1] - 1 - edge, nstars),
+        'y': np.random.uniform(edge, image.shape[0] - 1 - edge, nstars),
         'flux': 10**np.random.uniform(np.log10(minflux), np.log10(maxflux), nstars)
     }
     cat = Table(cat)
