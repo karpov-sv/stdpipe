@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 from astropy.stats import mad_std
+from astropy.visualization import simple_norm
 
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.stats import binned_statistic_2d
@@ -27,21 +28,12 @@ def colorbar(obj=None, ax=None, size="5%", pad=0.1):
     # if should_restore:
     ax.get_figure().sca(ax)
 
-def imshow(image, qq=None, show_colorbar=True, show_axis=True, asinh=False, log=False, ax=None, **kwargs):
+def imshow(image, qq=None, show_colorbar=True, show_axis=True, stretch='linear', ax=None, **kwargs):
     """Simple wrapper around pyplot.imshow with histogram-based intensity scaling"""
     if ax is None:
         ax = plt.gca()
 
     image = image.astype(np.double)
-
-    if asinh:
-        data = np.arcsinh(image)
-    elif log:
-        data = image - np.nanmin(image)
-        data = image + 0.1*mad_std(image) if mad_std(image) > 0 else image + 1
-        data = np.log10(image)
-    else:
-        data = image
 
     if qq is None and 'vmin' not in kwargs and 'vmax' not in kwargs:
         # Sane defaults for quantiles if no manual limits provided
@@ -49,7 +41,7 @@ def imshow(image, qq=None, show_colorbar=True, show_axis=True, asinh=False, log=
 
     if qq is not None:
         # Presente of qq quantiles overwrites vmin/vmax even if they are present
-        kwargs['vmin'],kwargs['vmax'] = np.percentile(data[np.isfinite(data)], qq)
+        kwargs['vmin'],kwargs['vmax'] = np.percentile(image[np.isfinite(image)], qq)
 
     if not 'interpolation' in kwargs:
         # Rough heuristic to choose interpolation method based on image dimensions
@@ -58,7 +50,10 @@ def imshow(image, qq=None, show_colorbar=True, show_axis=True, asinh=False, log=
         else:
             kwargs['interpolation'] = 'bicubic'
 
-    img = ax.imshow(data, **kwargs)
+    if stretch and stretch != 'linear':
+        kwargs['norm'] = simple_norm(image, stretch, min_cut=kwargs.pop('vmin', None), max_cut=kwargs.pop('vmax', None))
+
+    img = ax.imshow(image, **kwargs)
     if not show_axis:
         ax.set_axis_off()
     else:
@@ -115,17 +110,11 @@ def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, 
             ax = fig.add_subplot(1, nplots, curplot)
             curplot += 1
 
-            params = {'asinh': True if name in ['image', 'template'] else False,
+            params = {'stretch': 'asinh' if name in ['image', 'template', 'convolved'] else 'linear',
+                      # 'qq': [0.5, 100] if name in ['image', 'template', 'convolved'] else [0.5, 99.5],
                       'cmap': 'Blues_r',
                       'show_colorbar': False,
                       'show_axis': False}
-
-            # if not kwargs.get('asinh', False) and not kwargs.get('log', False):
-            #     median,mad = np.nanmedian(cutout[name]), mad_std(cutout[name], ignore_nan=True)
-            #     params['vmin'] = median - 3*mad
-            #     params['vmax'] = median + 10*mad
-            # elif 'qq' not in kwargs:
-            #         kwargs['qq'] = [0, 100]
 
             params.update(kwargs)
 
@@ -135,12 +124,13 @@ def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, 
             if curplot > nplots:
                 break
 
-    fig.tight_layout()
+    if fig is None:
+        fig.tight_layout()
 
     title = cutout['meta'].get('name', 'unnamed')
     if 'time' in cutout['meta']:
         title += ' at %s' % cutout['meta']['time'].to_value('iso')
-    if 'mag' in cutout:
+    if 'mag_calib' in cutout['meta']:
         title += ': mag = %.2f $\pm$ %.2f' % (cutout['meta'].get('mag_calib', np.nan), cutout['meta'].get('magerr', np.nan))
     fig.suptitle(title)
 
