@@ -16,6 +16,7 @@ from astropy.table import Table
 from esutil import htm
 
 from scipy.ndimage import binary_dilation
+from astropy.convolution import Tophat2DKernel
 
 from . import utils
 from . import photometry
@@ -111,12 +112,13 @@ def mask_template(tmpl, cat=None, cat_saturation_mag=None,
 
         # Mask the central pixels of saturated stars
         cx, cy = wcs.all_world2pix(cat['RAJ2000'], cat['DEJ2000'], 0)
-        cx = cx.astype(np.int)
-        cy = cy.astype(np.int)
+        cx = np.round(cx).astype(np.int)
+        cy = np.round(cy).astype(np.int)
 
         # First, we select all catalogue objects with masked measurements
         tidx = cat[cat_col_mag].mask == True
-        tidx |= cat[cat_col_mag_err].mask == True
+        if cat_col_mag_err:
+            tidx |= cat[cat_col_mag_err].mask == True
 
         # Next, we also add the ones corresponding to saturation limit
         tidx |= cat[cat_col_mag] < cat_saturation_mag
@@ -131,7 +133,7 @@ def mask_template(tmpl, cat=None, cat_saturation_mag=None,
 
     if dilate and dilate > 0:
         log('Dilating the mask with %d x %d kernel' % (dilate, dilate))
-        kernel = np.ones([dilate, dilate])
+        kernel = Tophat2DKernel(dilate).array
         tmask = binary_dilation(tmask, kernel)
 
         log(np.sum(tmask), 'template pixels masked after dilation')

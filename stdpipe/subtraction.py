@@ -6,7 +6,9 @@ import numpy as np
 from astropy.io import fits
 from astropy.stats import mad_std
 
-def run_hotpants(image, template, mask=None, template_mask=None, err=None, _workdir=None, extra=None, image_fwhm=None, template_fwhm=None, image_gain=None, template_gain=None, get_convolved=False, get_scaled=False, get_noise=False, _tmpdir=None, verbose=False):
+from astropy.convolution import convolve, Gaussian2DKernel
+
+def run_hotpants(image, template, mask=None, template_mask=None, err=None, _workdir=None, extra=None, image_fwhm=None, template_fwhm=None, image_gain=None, template_gain=1000, get_convolved=False, get_scaled=False, get_noise=False, _tmpdir=None, verbose=False):
     # Simple wrapper around print for logging in verbose mode only
     log = print if verbose else lambda *args,**kwargs: None
 
@@ -47,7 +49,7 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, _work
     tmaskname = os.path.join(workdir, 'tmask.fits')
     fits.writeto(tmaskname, template_mask.astype(np.uint16), overwrite=True)
 
-    outname = os.path.join(workdir, 'out.fits')
+    outname = os.path.join(workdir, 'diff.fits')
 
     params = {
         'inim': imagename,
@@ -71,6 +73,13 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, _work
 
         # Return all possible image planes as a result
         'allm': True,
+
+        # Convolve template image
+        'c': 't',
+
+        # Disable positional variance of the kernel and background
+        'ko': 0,
+        'bgo': 0,
     }
 
     # Error map for input image
@@ -85,8 +94,10 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, _work
 
             bg = sep.Background(image, mask)
             err = bg.rms() # Background noise level
-            # TODO: noise should probably be estimated on smoothed image
-            err = np.sqrt(err**2 + np.abs((image - bg.back()))/image_gain) # Contribution from the sources
+            # Noise should be estimated on smoothed image
+            kernel = Gaussian2DKernel(1 if image_fwhm is None else image_fwhm / 2 / 2.35)
+            smooth = convolve(image, kernel, mask=mask)
+            err = np.sqrt(err**2 + np.abs((smooth - bg.back()))/image_gain) # Contribution from the sources
 
         if hasattr(err, 'shape'):
             errname = os.path.join(workdir, 'err.fits')
@@ -97,12 +108,13 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, _work
         # Recommended logic for sigma_match
         if image_fwhm > template_fwhm:
             sigma_match = np.sqrt(image_fwhm**2 - template_fwhm**2) / 2.35
+            sigma_match = max(1.0, sigma_match)
             params['ng'] = [3, 6, 0.5*sigma_match, 4, 1.0*sigma_match, 2, 2.0*sigma_match]
 
     if image_fwhm is not None:
         # Logic from https://arxiv.org/pdf/1608.01006.pdf
-        params['r'] = int(np.ceil(image_fwhm * 2.5 / 2.35))
-        params['rss'] = int(np.ceil(image_fwhm * 6 / 2.35))
+        params['r'] = int(np.ceil(image_fwhm * 2.5)) # / 2.35))
+        params['rss'] = int(np.ceil(image_fwhm * 6)) # / 2.35))
 
     if image_gain is not None:
         params['ig'] = image_gain
@@ -137,6 +149,9 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, _work
             command.append('-' + key + ' ' + value)
 
     command = " ".join(command)
+
+    if not verbose:
+        command += " >/dev/null 2>/dev/null"
 
     log('Will run HOTPANTS like that:')
     log(command)
