@@ -2,6 +2,7 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.patches import Circle
 
 from astropy.stats import mad_std
 from astropy.visualization import simple_norm
@@ -97,13 +98,13 @@ def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], show_colo
         ax.set_autoscale_on(False)
         ax.plot(x, y, 'b.', alpha=0.3)
 
-def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, **kwargs):
+def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, mark_x=None, mark_y=None, **kwargs):
     curplot = 1
 
     nplots = len(planes)
 
     if fig is None:
-        fig = plt.figure(figsize=[nplots*4, 4+1.0], dpi=75)
+        fig = plt.figure(figsize=[nplots*4, 4+1.0], dpi=75, tight_layout=True)
 
     for name in planes:
         if name in cutout:
@@ -121,11 +122,11 @@ def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, 
             imshow(cutout[name], ax=ax, **params)
             ax.set_title(name.upper())
 
+            if mark_x is not None and mark_y is not None:
+                ax.add_artist(Circle((mark_x, mark_y), 5.0, edgecolor='red', facecolor='none', ls='-', lw=2))
+
             if curplot > nplots:
                 break
-
-    if fig is None:
-        fig.tight_layout()
 
     title = cutout['meta'].get('name', 'unnamed')
     if 'time' in cutout['meta']:
