@@ -58,6 +58,11 @@ def get_hips_image(hips, ra=None, dec=None, width=None, height=None, fov=None, w
     image = hdu[0].data
     header = hdu[0].header
 
+    # FIXME: hips2fits does not properly return the header for SIP WCS, so we just copy the original WCS over it
+    if wcs is not None and wcs.sip is not None:
+        wheader = wcs.to_header(relax=True)
+        header.update(wheader)
+
     hdu.close()
 
     if asinh is None:
@@ -82,6 +87,7 @@ def get_hips_image(hips, ra=None, dec=None, width=None, height=None, fov=None, w
 def mask_template(tmpl, cat=None, cat_saturation_mag=None,
                   cat_col_mag='rmag', cat_col_mag_err='e_rmag',
                   cat_col_ra='RAJ2000', cat_col_dec='DEJ2000', cat_sr=1/3600,
+                  mask_nans=True,
                   wcs=None, dilate=5, verbose=False):
     """
     Apply various masking heuristics (NaNs, saturated catalogue stars, etc) to the template.
@@ -90,8 +96,11 @@ def mask_template(tmpl, cat=None, cat_saturation_mag=None,
     # Simple wrapper around print for logging in verbose mode only
     log = print if verbose else lambda *args,**kwargs: None
 
-    tmask = ~np.isfinite(tmpl)
-    log(np.sum(tmask), 'template pixels masked after NaN checking')
+    if mask_nans:
+        tmask = ~np.isfinite(tmpl)
+        log(np.sum(tmask), 'template pixels masked after NaN checking')
+    else:
+        tmask = np.zeros_like(tmpl, dtype=np.bool)
 
     if cat is not None:
         if cat_saturation_mag is None:
