@@ -7,6 +7,9 @@ from astropy.wcs import WCS
 from astropy.io import fits
 from astropy.time import Time
 
+from scipy.optimize import minimize
+from scipy.ndimage.interpolation import shift
+
 from . import utils
 
 def crop_image_centered(data, x0, y0, r0, header=None):
@@ -149,7 +152,7 @@ def write_cutout(cutout, filename):
     hdus.append(hdu)
 
     # Store imaging data to named extensions
-    for _ in ['image', 'template', 'convolved', 'diff', 'mask', 'err', 'background']:
+    for _ in ['image', 'template', 'convolved', 'diff', 'adjusted', 'mask', 'err', 'background']:
         if _ in cutout:
             data = cutout[_]
 
@@ -184,3 +187,29 @@ def load_cutout(filename):
     hdus.close()
 
     return cutout
+
+def adjust_cutout(cutout, max_shift=2, bg=None, verbose=False):
+    """
+    Try to apply some positional adjustment to the cutout in order to minimize the difference.
+    It will add one more image plane,
+    """
+
+    # Simple wrapper around print for logging in verbose mode only
+    log = print if verbose else lambda *args,**kwargs: None
+
+    if bg is None:
+        bg = np.median(cutout['image'])
+
+    def _fn(dx):
+        # TODO: only fit central part of cutout
+        return np.std((cutout['image'] - bg - shift(cutout['convolved'], dx, mode='reflect'))/cutout['err'])
+
+    res = minimize(_fn, (0, 0), bounds=((-max_shift, max_shift), (-max_shift, max_shift)), method='Powell', options={'disp':False})
+
+    log(res.message)
+
+    if res.success:
+        log('Adjustment is: %.2f %.2f' % (res.x[0], res.x[1]))
+        log('RMS improvement: %.2f -> %.2f' % (_fn([0, 0]), _fn(res.x)))
+
+        cutout['adjusted'] = cutout['image'] - bg - shift(cutout['convolved'], res.x, mode='reflect')
