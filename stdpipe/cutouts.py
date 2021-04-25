@@ -7,6 +7,8 @@ from astropy.wcs import WCS
 from astropy.io import fits
 from astropy.time import Time
 
+from scipy.stats import chi2
+
 from scipy.optimize import minimize
 from scipy.ndimage.interpolation import shift
 
@@ -188,10 +190,14 @@ def load_cutout(filename):
 
     return cutout
 
-def adjust_cutout(cutout, max_shift=2, bg=None, inner=None, verbose=False):
+def adjust_cutout(cutout, max_shift=2, max_scale=1.1, bg=None, inner=None, normalize=False, verbose=False):
     """
     Try to apply some positional adjustment to the cutout in order to minimize the difference.
-    It will add one more image plane,
+    It will add one more image plane, 'adjusted', with the minimized difference between the original image and convolved template.
+
+    If normalize=True, the adjusted image will be divided by the errors.
+
+    If inner is set to an integer value, only the central box with this size will be used for minimization.
     """
 
     # Simple wrapper around print for logging in verbose mode only
@@ -204,12 +210,13 @@ def adjust_cutout(cutout, max_shift=2, bg=None, inner=None, verbose=False):
     imask = np.zeros_like(mask)
 
     if inner is not None and inner > 0:
-        # Mask everything outside of a box with given size
+        # Mask everything outside of a central box with given size
         x,y = np.mgrid[0:mask.shape[1], 0:mask.shape[0]]
         idx = np.abs(x - mask.shape[1]/2 + 0.5) > inner/2
         idx |= np.abs(y - mask.shape[0]/2 + 0.5) > inner/2
         imask[idx] = True
 
+    # Prepare and cleanup the arrays we will use for fitting (as 'shift' does not like nans etc)
     image = cutout['image'].copy()
     tmpl = cutout['convolved'].copy()
     err = cutout['err'].copy()
@@ -218,22 +225,52 @@ def adjust_cutout(cutout, max_shift=2, bg=None, inner=None, verbose=False):
     tmpl[~np.isfinite(tmpl)] = 0
     err[~np.isfinite(err)] = 0
 
-    def _fn(dx):
-        mask1 = mask | imask | shift(mask, dx, mode='reflect')
-        diff = image - bg - shift(tmpl, dx, mode='reflect')
+    def _fn(dx, get_df=False, get_diff=False):
+        mask1 = mask | shift(mask, dx[:2], mode='reflect')
+        imask1 = mask1 | imask
+        diff = image - dx[2] - shift(tmpl, dx[:2], mode='reflect')*dx[3]
 
-        return np.std(diff[~mask1]/err[~mask1])
+        chi2_value = np.sum((diff[~imask1]/err[~imask1])**2) # Chi2
 
-    res = minimize(_fn, (0, 0), bounds=((-max_shift, max_shift), (-max_shift, max_shift)), method='Powell', options={'disp':False})
+        if get_diff:
+            return diff,mask1,imask1
+        elif get_df:
+            return chi2_value, np.sum(~imask1)
+        else:
+            return chi2_value
+
+    res = minimize(_fn, (0, 0, bg, 1), bounds=((-max_shift, max_shift), (-max_shift, max_shift), (None, None), (1/max_scale, max_scale)), method='Powell', options={'disp':False})
 
     log(res.message)
 
     if res.success:
-        log('Adjustment is: %.2f %.2f' % (res.x[0], res.x[1]))
-        log('RMS improvement: %.2f -> %.2f' % (_fn([0, 0]), _fn(res.x)))
+        log('Adjustment is: %.2f %.2f bg %.2g scale %.2f' % (res.x[0], res.x[1], res.x[2], res.x[3]))
+        log('Chi2 improvement: %.2f -> %.2f' % (_fn([0, 0, bg, 1]), _fn(res.x)))
 
-        mask1 = mask | shift(mask, res.x, mode='reflect')
-        diff = image - bg - shift(tmpl, res.x, mode='reflect')
+        diff,mask1,_ = _fn(res.x, get_diff=True)
+        chi2_0 = _fn([0, 0, bg, 1])
+        chi2_1,df = _fn(res.x, get_df=True)
+        log('Final Chi2: %.2f df: %d p-value: %.2g' % (chi2_1, df, chi2.sf(chi2_1, df)))
+
+        # Keep the adjustment results in the metadata
+        cutout['meta']['adjust_chi2_0'] = chi2_0
+        cutout['meta']['adjust_chi2'] = chi2_1
+        cutout['meta']['adjust_df'] = df
+        cutout['meta']['adjust_pval'] = chi2.sf(chi2_1, df)
+        cutout['meta']['adjust_dx'] = res.x[0]
+        cutout['meta']['adjust_dy'] = res.x[1]
+        cutout['meta']['adjust_bg'] = res.x[2]
+        cutout['meta']['adjust_scale'] = res.x[3]
+
+        if normalize:
+            diff[~mask1] /= err[~mask1]
+
         diff[mask1] = 1e-30
 
+        # Add result as a new cutout plane
         cutout['adjusted'] = diff
+
+        return True
+
+    else:
+        return False
