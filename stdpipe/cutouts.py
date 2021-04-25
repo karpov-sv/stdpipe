@@ -188,7 +188,7 @@ def load_cutout(filename):
 
     return cutout
 
-def adjust_cutout(cutout, max_shift=2, bg=None, verbose=False):
+def adjust_cutout(cutout, max_shift=2, bg=None, inner=None, verbose=False):
     """
     Try to apply some positional adjustment to the cutout in order to minimize the difference.
     It will add one more image plane,
@@ -198,11 +198,31 @@ def adjust_cutout(cutout, max_shift=2, bg=None, verbose=False):
     log = print if verbose else lambda *args,**kwargs: None
 
     if bg is None:
-        bg = np.median(cutout['image'])
+        bg = np.nanmedian(cutout['image'])
+
+    mask = cutout['mask'] if 'mask' in cutout else ~np.isfinite(cutout['image'])
+    imask = np.zeros_like(mask)
+
+    if inner is not None and inner > 0:
+        # Mask everything outside of a box with given size
+        x,y = np.mgrid[0:mask.shape[1], 0:mask.shape[0]]
+        idx = np.abs(x - mask.shape[1]/2 + 0.5) > inner/2
+        idx |= np.abs(y - mask.shape[0]/2 + 0.5) > inner/2
+        imask[idx] = True
+
+    image = cutout['image'].copy()
+    tmpl = cutout['convolved'].copy()
+    err = cutout['err'].copy()
+
+    image[~np.isfinite(image)] = 0
+    tmpl[~np.isfinite(tmpl)] = 0
+    err[~np.isfinite(err)] = 0
 
     def _fn(dx):
-        # TODO: only fit central part of cutout
-        return np.std((cutout['image'] - bg - shift(cutout['convolved'], dx, mode='reflect'))/cutout['err'])
+        mask1 = mask | imask | shift(mask, dx, mode='reflect')
+        diff = image - bg - shift(tmpl, dx, mode='reflect')
+
+        return np.std(diff[~mask1]/err[~mask1])
 
     res = minimize(_fn, (0, 0), bounds=((-max_shift, max_shift), (-max_shift, max_shift)), method='Powell', options={'disp':False})
 
@@ -212,4 +232,8 @@ def adjust_cutout(cutout, max_shift=2, bg=None, verbose=False):
         log('Adjustment is: %.2f %.2f' % (res.x[0], res.x[1]))
         log('RMS improvement: %.2f -> %.2f' % (_fn([0, 0]), _fn(res.x)))
 
-        cutout['adjusted'] = cutout['image'] - bg - shift(cutout['convolved'], res.x, mode='reflect')
+        mask1 = mask | shift(mask, res.x, mode='reflect')
+        diff = image - bg - shift(tmpl, res.x, mode='reflect')
+        diff[mask1] = 1e-30
+
+        cutout['adjusted'] = diff
