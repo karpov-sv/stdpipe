@@ -2,6 +2,7 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 
 import os
 import numpy as np
+import itertools
 
 from astropy.wcs import WCS
 from astropy.io import fits
@@ -16,6 +17,7 @@ from . import astrometry
 from . import catalogs
 from . import psf
 from . import utils
+from . import cutouts
 
 def refine_astrometry(obj, cat, sr=10/3600, wcs=None, order=0,
                       cat_col_mag='V', cat_col_mag_err=None,
@@ -231,3 +233,67 @@ def place_random_stars(image, psf_model, nstars=100, minflux=1, maxflux=100000, 
         image[image > saturation] = saturation
 
     return cat
+
+def split_image(image, nx=1, ny=None, mask=None, header=None, wcs=None, obj=None, cat=None, overlap=0, get_origin=False, verbose=False):
+    """
+    Generator to split the image into several (nx x ny) blocks, while also optionally providing the mask, header, wcs and object list for the sub-blocks.
+    The blocks may optionally be extended by 'overlap' pixels in all directions.
+
+    Returns the list consisting of origin x,y coordinates (if get_origin is True), the cropped image, and cropped mask, header, wcs, object list, and catalogie, if they are provided.
+    """
+
+    # Simple wrapper around print for logging in verbose mode only
+    log = print if verbose else lambda *args,**kwargs: None
+
+    if not ny:
+        ny = nx
+
+    dx,dy = int(np.floor(image.shape[1]/nx)), int(np.floor(image.shape[0]/ny))
+
+    log('Will split the image (%dx%d) into %dx%d pieces with %dx%d pixels size and %d pix overlap' % (image.shape[1], image.shape[0], nx, ny, dx, dy, overlap))
+
+    for i,(x0,y0) in enumerate(itertools.product(range(0, image.shape[1]-dx+1, dx), range(0, image.shape[0]-dy+1, dy))):
+        # Make some overlap
+        x1 = max(0, x0 - overlap)
+        y1 = max(0, y0 - overlap)
+        dx1 = min(x0 - x1 + dx + overlap, image.shape[1] - x1)
+        dy1 = min(y0 - y1 + dy + overlap, image.shape[0] - y1)
+
+        _ = cutouts.crop_image(image.astype(np.double), x1, y1, dx1, dy1, header=header)
+        if header:
+            image1,header1 = _
+        else:
+            image1,header1 = _,None
+
+        result = [x1, y1] if get_origin else []
+        result += [image1]
+
+        if mask is not None:
+            result += [cutouts.crop_image(mask, x1, y1, dx1, dy1)]
+
+        if header1 is not None:
+            result += [header1]
+
+        if wcs is not None:
+            wcs1 = wcs.deepcopy()
+            # FIXME: is there any more 'official' way of shifting the WCS?
+            wcs1.wcs.crpix[0] -= x1
+            wcs1.wcs.crpix[1] -= y1
+
+            result += [wcs1]
+
+        if obj is not None:
+            oidx = (obj['x'] > x1) & (obj['x'] < x1 + dx1) & (obj['y'] > y1) & (obj['y'] < y1 + dy1)
+            obj1 = obj[oidx].copy()
+            obj1['x'] -= x1
+            obj1['y'] -= y1
+            result += [obj1]
+
+        if cat is not None and wcs is not None:
+            cx,cy = wcs.all_world2pix(cat['RAJ2000'], cat['DEJ2000'], 0)
+            cidx = (cx >= x1) & (cx < x1 + dx1) & (cy >= y1) & (cy < y1 + dy1)
+            result += [cat[cidx].copy()]
+
+        log('Block %d: %d %d - %d %d' % (i, x1, y1, x1+dx1, y1+dy1))
+
+        yield result if len(result) > 1 else result[0]
