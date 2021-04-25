@@ -8,7 +8,11 @@ from astropy.stats import mad_std
 
 from astropy.convolution import convolve, Gaussian2DKernel
 
-def run_hotpants(image, template, mask=None, template_mask=None, err=None, _workdir=None, extra=None, image_fwhm=None, template_fwhm=None, image_gain=None, template_gain=1000, get_convolved=False, get_scaled=False, get_noise=False, _tmpdir=None, verbose=False):
+def run_hotpants(image, template, mask=None, template_mask=None, err=None,
+                 extra=None, image_fwhm=None, template_fwhm=None,
+                 image_gain=None, template_gain=1000, rel_r=3, rel_rss=4,
+                 get_convolved=False, get_scaled=False, get_noise=False,
+                 _tmpdir=None, _workdir=None, verbose=False):
     # Simple wrapper around print for logging in verbose mode only
     log = print if verbose else lambda *args,**kwargs: None
 
@@ -112,9 +116,9 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, _work
             params['ng'] = [3, 6, 0.5*sigma_match, 4, 1.0*sigma_match, 2, 2.0*sigma_match]
 
     if image_fwhm is not None:
-        # Logic from https://arxiv.org/pdf/1608.01006.pdf
-        params['r'] = int(np.ceil(image_fwhm * 2.5)) # / 2.35))
-        params['rss'] = int(np.ceil(image_fwhm * 6)) # / 2.35))
+        # Logic from https://arxiv.org/pdf/1608.01006.pdf suggests 2.5 and 6 here
+        params['r'] = int(np.ceil(image_fwhm * rel_r))
+        params['rss'] = int(np.ceil(image_fwhm * rel_rss))
 
     if image_gain is not None:
         params['ig'] = image_gain
