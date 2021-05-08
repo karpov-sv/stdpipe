@@ -145,7 +145,7 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
     else:
         return cand_idx
 
-def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0,
+def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, bg_order=None,
                          obj_col_mag='mag', obj_col_mag_err='magerr',
                          cat_col_mag='R', cat_col_mag_err=None,
                          cat_col_mag1=None, cat_col_mag2=None,
@@ -185,7 +185,7 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0,
                          cat[cat_col_ra], cat[cat_col_dec], cat[cat_col_mag],
                          cat_magerr=cat_magerr,
                          sr=sr, cat_color=color,
-                         obj_x=obj['x'], obj_y=obj['y'], spatial_order=order,
+                         obj_x=obj['x'], obj_y=obj['y'], spatial_order=order, bg_order=bg_order,
                          verbose=verbose, **kwargs)
 
     if m:
@@ -194,7 +194,7 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0,
             log('Color term is %.2f' % m['color_term'])
 
         if update:
-            obj['mag_calib'] = obj['mag'] + m['zero_fn'](obj['x'], obj['y'])
+            obj['mag_calib'] = obj['mag'] + m['zero_fn'](obj['x'], obj['y'], obj['mag'])
     else:
         log('Photometric calibration failed')
 

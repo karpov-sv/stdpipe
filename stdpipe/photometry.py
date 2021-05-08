@@ -365,7 +365,7 @@ def make_series(mul=1.0, x=1.0, y=1.0, order=1, sum=False, zero=True):
     else:
         return res
 
-def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_mag, cat_magerr=None, cat_color=None, sr=3/3600, obj_x=None, obj_y=None, spatial_order=0, threshold=5.0, cat_saturation=None, verbose=False, robust=True):
+def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_mag, cat_magerr=None, cat_color=None, sr=3/3600, obj_x=None, obj_y=None, spatial_order=0, bg_order=None, threshold=5.0, cat_saturation=None, verbose=False, robust=True):
     # Simple wrapper around print for logging in verbose mode only
     log = print if verbose else lambda *args,**kwargs: None
 
@@ -376,7 +376,8 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
     log(len(dist), 'initial matches between', len(obj_ra), 'objects and', len(cat_ra), 'catalogue stars, sr=', sr*3600, 'arcsec')
     log('Median separation is', np.median(dist)*3600, 'arcsec')
 
-    omag, omag_err, oflags = obj_mag[oidx], obj_magerr[oidx], obj_flags[oidx]
+    omag, omag_err = obj_mag[oidx], obj_magerr[oidx]
+    oflags = obj_flags[oidx] if obj_flags is not None else np.zeros_like(omag, dtype=bool)
     cmag = cat_mag[cidx].filled(fill_value=np.nan)
     cmag_err = cat_magerr[cidx].filled(fill_value=np.nan) if cat_magerr is not None else np.zeros_like(cmag)
 
@@ -391,8 +392,13 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
 
     # Regressor
     X = make_series(1.0, x, y, order=spatial_order)
-
     log('Fitting the model with spatial_order =', spatial_order)
+
+    if bg_order is not None:
+        # Spatially varying additive flux component, linearized in magnitudes
+        X += make_series(-2.5/np.log(10)/10**(-0.4*omag), x, y, order=bg_order)
+        log('Adjusting background level using polynomial with bg_order =', bg_order)
+
     if robust:
         log('Using robust fitting')
     else:
@@ -447,19 +453,25 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
     log(np.sum(idx), 'good matches')
 
     # Export the model
-    def zero_fn(xx, yy):
+    def zero_fn(xx, yy, mag=None):
         if xx is not None and yy is not None:
             x, y = xx - x0, yy - y0
         else:
             x, y = np.zeros_like(omag), np.zeros_like(omag)
 
         X = make_series(1.0, x, y, order=spatial_order)
+
+        if bg_order is not None and mag is not None:
+            X += make_series(-2.5/np.log(10)/10**(-0.4*mag), x, y, order=bg_order)
+
         X = np.vstack(X).T
 
         return np.sum(X*C.params[0:X.shape[1]], axis=1)
 
     if cat_color is not None:
         X = make_series(order=spatial_order)
+        if bg_order is not None:
+            X += make_series(order=bg_order)
         color_term = C.params[len(X):][0]
         log('Color term is', color_term)
     else:
