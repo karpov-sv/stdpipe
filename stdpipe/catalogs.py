@@ -19,6 +19,7 @@ from . import astrometry
 catalogs = {
     'ps1': {'vizier': 'II/349/ps1', 'name': 'PanSTARRS DR1'},
     'gaiadr2': {'vizier': 'I/345/gaia2', 'name': 'Gaia DR2'},
+    'gaiaedr3': {'vizier': 'I/350/gaiaedr3', 'name': 'Gaia EDR3'},
     'usnob1': {'vizier': 'I/284/out', 'name': 'USNO-B1'},
     'gsc': {'vizier': 'I/271/out', 'name': 'GSC 2.2'},
     'skymapper': {'vizier': 'II/358/smss', 'name': 'SkyMapper DR1.1'},
