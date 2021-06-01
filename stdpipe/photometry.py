@@ -156,7 +156,7 @@ def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.
 
     return obj
 
-def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, sort=True, checkimages=[], extra_params=[], extra={}, psf=None, catfile=None, _workdir=None, _tmpdir=None, verbose=False):
+def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, sort=True, reject_negative=True, checkimages=[], extra_params=[], extra={}, psf=None, catfile=None, _workdir=None, _tmpdir=None, verbose=False):
     # Simple wrapper around print for logging in verbose mode only
     log = print if verbose else lambda *args,**kwargs: None
 
@@ -267,11 +267,15 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
         idx &= (obj['Y_IMAGE'] > edge) & (obj['Y_IMAGE'] < image.shape[0] - edge)
 
         if np.isscalar(aper):
-            idx &= obj['MAGERR_APER'] < 1.0/sn
-            idx &= obj['FLUX_APER'] > 0
+            if sn:
+                idx &= obj['MAGERR_APER'] < 1.0/sn
+            if reject_negative:
+                idx &= obj['FLUX_APER'] > 0
         else:
-            idx &= np.all(obj['MAGERR_APER'] < 1.0/sn, axis=1)
-            idx &= np.all(obj['FLUX_APER'] > 0, axis=1)
+            if sn:
+                idx &= np.all(obj['MAGERR_APER'] < 1.0/sn, axis=1)
+            if reject_negative:
+                idx &= np.all(obj['FLUX_APER'] > 0, axis=1)
 
         obj = obj[idx]
 
