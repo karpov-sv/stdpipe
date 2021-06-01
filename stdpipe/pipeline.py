@@ -72,10 +72,21 @@ def refine_astrometry(obj, cat, sr=10/3600, wcs=None, order=0,
 def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
                                 cat=None, cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
                                 vizier=['ps1', 'usnob1', 'gsc'], skybot=True, ned=False, flagged=True,
-                                col_id=None, get_candidates=True, verbose=False):
+                                col_id=None, get_candidates=True, remove=True, verbose=False):
     """
     Higher-level transient candidate filtering routine.
+
+    It optionally filters out the following classes of objects:
+       - flagged ones, i.e. with obj['flags'] != 0
+       - positionally coincident with stars from provided cataloge table (if cat != None)
+       - positionally coincident with stars from Vizier catalogues provided as a list of names (if vizier is non-empty)
+       - positionally and temporally coincident with Solar system objects from SkyBoT service (if skybot = True)
+       - positionally and temporally coincident with NED objects (if ned = True)
+
+    If get_candidates = False, it returns only the indices of "good" objects, else returning filtered object list
+    If get_candidates = True and remove = False, it does not filter the objects but just mark them in added columns
     """
+
     # Simple wrapper around print for logging in verbose mode only
     log = print if verbose else lambda *args,**kwargs: None
 
@@ -97,22 +108,45 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
     else:
         obj_in = obj
 
+    if remove == False:
+        # We are asked to just mark the matched candidates, not remove from the result
+        # So let's create a copy of objects list where we may freely add extra columns without touching the original
+        obj_in = obj_in.copy()
+
     h = htm.HTM(10)
 
     log('Candidate filtering routine started with %d initial candidates and %.1f arcsec matching radius' % (len(obj), sr*3600))
     cand_idx = np.ones(len(obj), dtype=np.bool)
 
+    # Object flags
     if flagged:
         # Filter out flagged objects (saturated, cosmics, blends, etc)
         cand_idx &= obj['flags'] == 0
+
+        if remove == False:
+            obj_in['candidate_flagged'] = obj['flags'] > 0
+
         print(np.sum(cand_idx), 'of them are unflagged')
 
+    # Reference catalogue
+    if cat is not None and remove == False:
+        obj_in['candidate_refcat'] = False
     if cat is not None and np.any(cand_idx):
         m = h.match(obj['ra'], obj['dec'], cat[cat_col_ra], cat[cat_col_dec], sr)
         cand_idx[m[0]] = False
+
+        if remove == False:
+            obj_in['candidate_refcat'] = False
+            obj_in['candidate_refcat'][m[0]] = True
+
         log(np.sum(cand_idx), 'of them are not matched with reference catalogue')
 
+    # Vizier catalogues
     for catname in vizier:
+        if remove == False:
+            if 'candidate_vizier' not in obj_in.keys():
+                obj_in['candidate_vizier'] = False
+
         if not np.any(cand_idx):
             break
 
@@ -120,29 +154,60 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
         if xcat is not None and len(xcat):
             cand_idx &= ~np.in1d(obj[col_id], xcat[col_id])
 
+            if remove == False:
+                obj_in['candidate_vizier'][np.in1d(obj[col_id], xcat[col_id])] = True
+
         log(np.sum(cand_idx), 'remains after matching with', catalogs.catalogs.get(catname, {'name':catname})['name'])
 
+    # SkyBoT
     if skybot and np.any(cand_idx):
         if time is None and 'time' in obj.keys():
             time = obj['time']
+
+        if remove == False:
+            if 'candidate_skybot' not in obj_in.keys():
+                obj_in['candidate_skybot'] = False
 
         if time is not None:
             xcat = catalogs.xmatch_skybot(obj[cand_idx], time=time, col_id=col_id)
             if xcat is not None and len(xcat):
                 cand_idx &= ~np.in1d(obj[col_id], xcat[col_id])
+
+                if remove == False:
+                    obj_in['candidate_skybot'][np.in1d(obj[col_id], xcat[col_id])] = True
+
             log(np.sum(cand_idx), 'remains after matching with SkyBot')
 
+    # NED
     if ned and np.any(cand_idx):
+        if remove == False:
+            if 'candidate_ned' not in obj_in.keys():
+                obj_in['candidate_ned'] = False
+
         xcat = catalogs.xmatch_ned(obj[cand_idx], sr, col_id=col_id)
         if xcat is not None and len(xcat):
             cand_idx &= ~np.in1d(obj[col_id], xcat[col_id])
+
+            if remove == False:
+                obj_in['candidate_ned'][np.in1d(obj[col_id], xcat[col_id])] = True
+
         log(np.sum(cand_idx), 'remains after matching with NED')
+
+    if remove == False:
+        obj_in['candidate_good'] = False
+        obj_in['candidate_good'][cand_idx] = True
 
     log('%d candidates remaining after filtering' % len(obj[cand_idx]))
 
     if get_candidates:
-        return obj_in[cand_idx].copy()
+        if remove:
+            # Return filtered list
+            return obj_in[cand_idx].copy()
+        else:
+            # Return full list with additional columns
+            return obj_in
     else:
+        # Return just indices
         return cand_idx
 
 def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, bg_order=None,
