@@ -15,8 +15,8 @@ from astropy.table import Table
 
 from esutil import htm
 
-from scipy.ndimage import binary_dilation
-from astropy.convolution import Tophat2DKernel
+# from scipy.ndimage import binary_dilation
+from astropy.convolution import Tophat2DKernel, convolve, convolve_fft
 
 from . import utils
 from . import photometry
@@ -84,6 +84,21 @@ def get_hips_image(hips, ra=None, dec=None, width=None, height=None, fov=None, w
     else:
         return image
 
+def dilate_mask(mask, dilate=5):
+    """
+    Dilate binary mask with a given kernel size
+    """
+
+    kernel = Tophat2DKernel(dilate).array
+    # mask = binary_dilation(mask, kernel)
+    if dilate < 10 or True: # it seems convolve is faster than convolve_fft even for 2k x 2k
+        mask = convolve(mask, kernel)
+    else:
+        mask = convolve_fft(mask, kernel)
+    mask = mask > 1e-15*np.max(mask) # FIXME: is it correct threshold?..
+
+    return mask
+
 def mask_template(tmpl, cat=None, cat_saturation_mag=None,
                   cat_col_mag='rmag', cat_col_mag_err='e_rmag',
                   cat_col_ra='RAJ2000', cat_col_dec='DEJ2000', cat_sr=1/3600,
@@ -120,7 +135,7 @@ def mask_template(tmpl, cat=None, cat_saturation_mag=None,
             log('Catalogue saturates at %s = %.1f' % (cat_col_mag, cat_saturation_mag))
 
         # Mask the central pixels of saturated stars
-        cx, cy = wcs.all_world2pix(cat['RAJ2000'], cat['DEJ2000'], 0)
+        cx, cy = wcs.all_world2pix(cat[cat_col_ra], cat[cat_col_dec], 0)
         cx = np.round(cx).astype(np.int)
         cy = np.round(cy).astype(np.int)
 
@@ -142,9 +157,7 @@ def mask_template(tmpl, cat=None, cat_saturation_mag=None,
 
     if dilate and dilate > 0:
         log('Dilating the mask with %d x %d kernel' % (dilate, dilate))
-        kernel = Tophat2DKernel(dilate).array
-        tmask = binary_dilation(tmask, kernel)
-
+        tmask = dilate_mask(tmask, dilate)
         log(np.sum(tmask), 'template pixels masked after dilation')
 
     return tmask
