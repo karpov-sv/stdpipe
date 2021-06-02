@@ -11,6 +11,8 @@ from astropy.wcs.utils import fit_wcs_from_points
 from astropy.coordinates import SkyCoord
 from astropy.table import Table
 
+from astroquery.astrometry_net import AstrometryNet
+
 from scipy.stats import chi2
 
 from . import utils
@@ -149,6 +151,53 @@ def blind_match_objects(obj, order=4, extra="", update=True, sn=20, verbose=Fals
         log("Astrometry.Net binary not found")
 
     return wcs
+
+def blind_match_astrometrynet(obj, order=2, update=False, sn=20,
+                              width=None, height=None,
+                              solve_timeout=600, api_key=None,
+                              center_ra=None, center_dec=None, radius=None,
+                              scale_lower=None, scale_upper=None, scale_units='arcsecperpix', **kwargs):
+    '''
+    Thin wrapper for remote plate solving using Astrometry.Net and a list of detected objects.
+    Api key may either be provided as an argument or specified in ~/.astropy/config/astroquery.cfg
+    '''
+
+    # Sort objects according to decreasing flux
+    aidx = np.argsort(-obj['flux'])
+
+    # Filter out least-significant detections, if SN limit is specified
+    if sn is not None and sn > 0:
+        aidx = [_ for _ in aidx if obj['flux'][_]/obj['fluxerr'][_] > sn]
+
+    if width is None:
+        width = int(np.max(obj['x']))
+    if height is None:
+        height = int(np.max(obj['y']))
+
+    an = AstrometryNet()
+    if api_key is not None:
+        an.api_key = api_key
+
+    try:
+        header = an.solve_from_source_list(obj['x'][aidx] + 1, obj['y'][aidx] + 1, width, height,
+                                           center_ra=center_ra, center_dec=center_dec, radius=radius,
+                                           scale_lower=scale_lower, scale_upper=scale_upper, scale_units=scale_units,
+                                           solve_timeout=solve_timeout, tweak_order=order, **kwargs)
+    except:
+        import traceback
+        traceback.print_exc()
+
+        header = None
+
+    if header is not None:
+        wcs = WCS(header)
+
+        if update:
+            obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
+
+        return wcs
+
+    return None
 
 def refine_wcs(obj, cat, order=2, match=True, sr=3/3600, update=False,
                cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
