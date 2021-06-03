@@ -152,14 +152,15 @@ def blind_match_objects(obj, order=4, extra="", update=True, sn=20, verbose=Fals
 
     return wcs
 
-def blind_match_astrometrynet(obj, order=2, update=False, sn=20,
+def blind_match_astrometrynet(obj, order=2, update=False, sn=20, get_header=False,
                               width=None, height=None,
                               solve_timeout=600, api_key=None,
                               center_ra=None, center_dec=None, radius=None,
                               scale_lower=None, scale_upper=None, scale_units='arcsecperpix', **kwargs):
     '''
     Thin wrapper for remote plate solving using Astrometry.Net and a list of detected objects.
-    Api key may either be provided as an argument or specified in ~/.astropy/config/astroquery.cfg
+    Most of the parameters are passed directly to astroquery.astrometrynet.AstrometryNet.solve_from_source_list routine.
+    API key may either be provided as an argument or specified in ~/.astropy/config/astroquery.cfg
     '''
 
     # Sort objects according to decreasing flux
@@ -195,7 +196,10 @@ def blind_match_astrometrynet(obj, order=2, update=False, sn=20,
         if update:
             obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
 
-        return wcs
+        if get_header:
+            return header
+        else:
+            return wcs
 
     return None
 
@@ -520,3 +524,18 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
         shutil.rmtree(workdir)
 
     return wcs
+
+def store_wcs(filename, wcs, overwrite=True):
+    '''
+    Auxiliary routine to store WCS information in an (empty) FITS file
+    '''
+    dirname = os.path.split(filename)[0]
+
+    try:
+        # For Python3, we may simply use exists_ok=True to avoid wrapping it inside try-cache
+        os.makedirs(dirname)
+    except:
+        pass
+
+    hdu = fits.PrimaryHDU(header=wcs.to_header(relax=True))
+    hdu.writeto(filename, overwrite=overwrite)
