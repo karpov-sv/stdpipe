@@ -15,6 +15,7 @@ from astropy.wcs import FITSFixedWarning
 
 import sep
 import photutils
+from photutils.utils import calc_total_error
 
 import statsmodels.api as sm
 from esutil import htm
@@ -157,6 +158,18 @@ def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.
     return obj
 
 def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, sort=True, reject_negative=True, checkimages=[], extra_params=[], extra={}, psf=None, catfile=None, _workdir=None, _tmpdir=None, verbose=False):
+    '''
+    Thin wrapper around SExtractor binary.
+
+    It processes the image provided as a NumPy array, with optional mask and noise (err) arrays.
+
+    It optionally filters out the detections having too small S/N ratio (sn) or the ones located too close to frame edges (edge), as well as detections with negative fluxes (reject_negatives).
+
+    The resulting detections are returned as an Astropy Table, and may be optionally stored to the file specified with catfile option.
+
+    The routine also optionally returns as an arrays the following checkimages: BACKGROUND, BACKGROUND_RMS, MINIBACKGROUND,  MINIBACK_RMS, -BACKGROUND, FILTERED, OBJECTS, -OBJECTS, SEGMENTATION, APERTURES
+    '''
+
     # Simple wrapper around print for logging in verbose mode only
     log = print if verbose else lambda *args,**kwargs: None
 
@@ -287,7 +300,7 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
         else:
             obj['ra'],obj['dec'] = np.zeros_like(obj['X_IMAGE']), np.zeros_like(obj['Y_IMAGE'])
 
-        obj['FLAGS'][obj['IMAFLAGS_ISO'] > 0] |= 256
+        obj['FLAGS'][obj['IMAFLAGS_ISO'] > 0] |= 0x100 # Masked pixels in the footprint
         obj.remove_column('IMAFLAGS_ISO') # We do not need this column
 
         for _,__ in [['X_IMAGE', 'x'],
@@ -504,3 +517,86 @@ def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kw
         return back, backrms
     else:
         return back
+
+def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, err=None, gain=1, subtract_bg=True, bg_size=256, sn=None, verbose=False):
+    '''
+    Aperture photometry at the positions of already detected objects.
+
+    It will estimate and subtract the background unless subtract_bg is False, and use user-provided noise map if requested.
+    If the mask is provided, it will set 0x200 bit in object flags if at least one of aperture pixels is masked.
+    The results may optionally filtered to drop the detections with low signal to noise ratio if sn parameter is set and positive. It will also filter out the events with negative flux.
+    '''
+
+    # Simple wrapper around print for logging in verbose mode only
+    log = print if verbose else lambda *args,**kwargs: None
+
+    # Operate on the copy of the list
+    obj = obj.copy()
+
+    # Sanitize the image and make its copy to safely operate on it
+    image1 = image.astype(np.double)
+    image1[~np.isfinite(image1)] = np.nanmedian(image1)
+
+    if subtract_bg or err is None:
+        log('Estimating global background with %dx%d mesh' % (bg_size, bg_size))
+        bg = photutils.Background2D(image1, bg_size, mask=mask)
+
+        if subtract_bg:
+            log('Subtracting global background: median %.1f rms %.2f' % (np.median(bg.background), np.std(bg.background)))
+            image1 -= bg.background
+        else:
+            log('Assuming that input image is already background-subtracted')
+
+        if err is None:
+            log('Using global background noise map: median %.1f rms %.2f' % (np.median(bg.background_rms), np.std(bg.background_rms)))
+            err = bg.background_rms
+            err = calc_total_error(image1, err, gain)
+
+    if fwhm is not None and fwhm > 0:
+        log('Scaling aperture radii with FWHM %.1f pix' % fwhm)
+        aper *= fwhm
+
+    log('Using aperture radius %.1f pixels' % aper)
+
+    positions = [(_['x'], _['y']) for _ in obj]
+    apertures = photutils.CircularAperture(positions, r=aper)
+    res = photutils.aperture_photometry(image1, apertures, error=err, mask=mask)
+
+    obj['flux'] = res['aperture_sum']
+    obj['fluxerr'] = res['aperture_sum_err']
+
+    # Check whether some aperture pixels are masked, and set the flags for that
+    if mask is not None:
+        if 'flags' not in obj:
+            obj['flags'] = 0
+        for i,a in enumerate(apertures):
+            am = a.to_mask(method='center')
+            vals = am.multiply(mask)
+            if np.any(vals):
+                obj['flags'][i] |= 0x200
+
+    if bkgann is not None and len(bkgann) == 2:
+        if fwhm is not None and fwhm > 0:
+            bkgann = [_*fwhm for _ in bkgann]
+        log('Using local background annulus between %.1f and %.1f pixels' % (bkgann[0], bkgann[1]))
+
+        bgapertures = photutils.CircularAnnulus(positions, r_in=bkgann[0], r_out=bkgann[1])
+        res = photutils.aperture_photometry(image1, bgapertures, error=err, mask=mask)
+
+        obj['flux'] -= apertures.area * res['aperture_sum'] / bgapertures.area
+        obj['fluxerr'] = np.hypot(obj['fluxerr'], apertures.area * res['aperture_sum_err'] / bgapertures.area)
+
+    idx = obj['flux'] > 0
+    obj['mag'][idx] = -2.5*np.log10(obj['flux'][idx])
+    obj['mag'][~idx] = np.nan
+
+    obj['magerr'][idx] = 2.5/np.log(10)*obj['fluxerr'][idx]/obj['flux'][idx]
+    obj['magerr'][~idx] = np.nan
+
+    if sn is not None and sn > 0:
+        log('Filtering out measurements with S/N < %.1f' % sn)
+        idx = np.isfinite(obj['magerr'])
+        idx[idx] &= (obj['magerr'][idx] < 1/sn)
+        obj = obj[idx]
+
+    return obj
