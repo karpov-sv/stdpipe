@@ -501,7 +501,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
             'zero': zero, 'zero_err': zero_err,
             'zero_model': zero_model, 'zero_fn': zero_fn,
             'obj_zero': zero_fn(obj_x, obj_y),
-            'ox': ox, 'oy': oy,
+            'ox': ox, 'oy': oy, 'oflags': oflags,
             'idx': idx, 'idx0': idx0}
 
 def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kwargs):
@@ -518,12 +518,14 @@ def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kw
     else:
         return back
 
-def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, err=None, gain=1, subtract_bg=True, bg_size=256, sn=None, verbose=False):
+def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=None, err=None, gain=1, bg_size=256, sn=None, get_bg=False, verbose=False):
     '''
     Aperture photometry at the positions of already detected objects.
 
-    It will estimate and subtract the background unless subtract_bg is False, and use user-provided noise map if requested.
+    It will estimate and subtract the background unless external background estimation (bg) is provided, and use user-provided noise map if requested.
+
     If the mask is provided, it will set 0x200 bit in object flags if at least one of aperture pixels is masked.
+
     The results may optionally filtered to drop the detections with low signal to noise ratio if sn parameter is set and positive. It will also filter out the events with negative flux.
     '''
 
@@ -537,20 +539,23 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, err=N
     image1 = image.astype(np.double)
     image1[~np.isfinite(image1)] = np.nanmedian(image1)
 
-    if subtract_bg or err is None:
+    if bg is None or err is None or get_bg:
         log('Estimating global background with %dx%d mesh' % (bg_size, bg_size))
-        bg = photutils.Background2D(image1, bg_size, mask=mask)
+        bg_est = photutils.Background2D(image1, bg_size, mask=mask)
 
-        if subtract_bg:
-            log('Subtracting global background: median %.1f rms %.2f' % (np.median(bg.background), np.std(bg.background)))
-            image1 -= bg.background
-        else:
-            log('Assuming that input image is already background-subtracted')
+    if bg is None:
+        log('Subtracting global background: median %.1f rms %.2f' % (np.median(bg_est.background), np.std(bg_est.background)))
+        image1 -= bg_est.background
+    else:
+        log('Subtracting user-provided background: median %.1f rms %.2f' % (np.median(bg), np.std(bg)))
+        image1 -= bg
 
-        if err is None:
-            log('Using global background noise map: median %.1f rms %.2f' % (np.median(bg.background_rms), np.std(bg.background_rms)))
-            err = bg.background_rms
-            err = calc_total_error(image1, err, gain)
+    if err is None:
+        log('Using global background noise map: median %.1f rms %.2f' % (np.median(bg_est.background_rms), np.std(bg_est.background_rms)))
+        err = bg_est.background_rms
+        err = calc_total_error(image1, err, gain)
+    else:
+        log('Using user-provided noise map: median %.1f rms %.2f' % (np.median(err), np.std(err)))
 
     if fwhm is not None and fwhm > 0:
         log('Scaling aperture radii with FWHM %.1f pix' % fwhm)
@@ -567,7 +572,7 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, err=N
 
     # Check whether some aperture pixels are masked, and set the flags for that
     if mask is not None:
-        if 'flags' not in obj:
+        if 'flags' not in obj.keys():
             obj['flags'] = 0
         for i,a in enumerate(apertures):
             am = a.to_mask(method='center')
@@ -587,6 +592,10 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, err=N
         obj['fluxerr'] = np.hypot(obj['fluxerr'], apertures.area * res['aperture_sum_err'] / bgapertures.area)
 
     idx = obj['flux'] > 0
+    for _ in ['mag', 'magerr']:
+        if _ not in obj.keys():
+            obj[_] = np.nan
+
     obj['mag'][idx] = -2.5*np.log10(obj['flux'][idx])
     obj['mag'][~idx] = np.nan
 
@@ -599,4 +608,7 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, err=N
         idx[idx] &= (obj['magerr'][idx] < 1/sn)
         obj = obj[idx]
 
-    return obj
+    if get_bg:
+        return obj, bg_est.background, err
+    else:
+        return obj
