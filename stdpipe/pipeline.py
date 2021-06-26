@@ -30,7 +30,7 @@ def refine_astrometry(obj, cat, sr=10/3600, wcs=None, order=0,
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = print if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     log('Astrometric refinement using %.1f arcsec radius, %s matching and %s WCS fitting' %
         (sr*3600, 'photometric' if use_photometry else 'simple positional', method))
@@ -61,7 +61,7 @@ def refine_astrometry(obj, cat, sr=10/3600, wcs=None, order=0,
             wcs = astrometry.refine_wcs(obj[m['oidx']][m['idx']], cat[m['cidx']][m['idx']], order=order, match=False, method=method)
         else:
             # Simple positional matching
-            wcs = astrometry.refine_wcs(obj, cat, order=order, sr=sr, match=True, method=method)
+            wcs = astrometry.refine_wcs(obj, cat, order=order, sr=sr, match=True, method=method, **kwargs)
 
         if update:
             obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
@@ -71,7 +71,8 @@ def refine_astrometry(obj, cat, sr=10/3600, wcs=None, order=0,
 
 def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
                                 cat=None, cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
-                                vizier=['ps1', 'usnob1', 'gsc'], skybot=True, ned=False, flagged=True,
+                                vizier=['ps1', 'usnob1', 'gsc'], skybot=True, ned=False,
+                                flagged=True, flagmask=0xff00,
                                 col_id=None, get_candidates=True, remove=True, verbose=False):
     """
     Higher-level transient candidate filtering routine.
@@ -88,7 +89,7 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = print if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     if sr is None:
         if pixscale is not None:
@@ -121,10 +122,10 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
     # Object flags
     if flagged:
         # Filter out flagged objects (saturated, cosmics, blends, etc)
-        cand_idx &= obj['flags'] == 0
+        cand_idx &= (obj['flags'] & flagmask) == 0
 
         if remove == False:
-            obj_in['candidate_flagged'] = obj['flags'] > 0
+            obj_in['candidate_flagged'] = (obj['flags'] & flagmask) > 0
 
         print(np.sum(cand_idx), 'of them are unflagged')
 
@@ -144,8 +145,8 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
     # Vizier catalogues
     for catname in vizier:
         if remove == False:
-            if 'candidate_vizier' not in obj_in.keys():
-                obj_in['candidate_vizier'] = False
+            if 'candidate_vizier_'+catname not in obj_in.keys():
+                obj_in['candidate_vizier_'+catname] = False
 
         if not np.any(cand_idx):
             break
@@ -155,7 +156,7 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
             cand_idx &= ~np.in1d(obj[col_id], xcat[col_id])
 
             if remove == False:
-                obj_in['candidate_vizier'][np.in1d(obj[col_id], xcat[col_id])] = True
+                obj_in['candidate_vizier_'+catname][np.in1d(obj[col_id], xcat[col_id])] = True
 
         log(np.sum(cand_idx), 'remains after matching with', catalogs.catalogs.get(catname, {'name':catname})['name'])
 
@@ -221,7 +222,7 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, bg_order=Non
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = print if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     if sr is None:
         if pixscale is not None:
@@ -258,6 +259,11 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, bg_order=Non
         if m['color_term']:
             log('Color term is %.2f' % m['color_term'])
 
+        m['cat_col_mag'] = cat_col_mag
+        if cat_col_mag1 and cat_col_mag2:
+            m['cat_col_mag1'] = cat_col_mag1
+            m['cat_col_mag2'] = cat_col_mag2
+
         if update:
             obj['mag_calib'] = obj['mag'] + m['zero_fn'](obj['x'], obj['y'], obj['mag'])
     else:
@@ -275,7 +281,7 @@ def place_random_stars(image, psf_model, nstars=100, minflux=1, maxflux=100000, 
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = print if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     cat = {
         'x': np.random.uniform(edge, image.shape[1] - 1 - edge, nstars),
@@ -299,7 +305,7 @@ def place_random_stars(image, psf_model, nstars=100, minflux=1, maxflux=100000, 
 
     return cat
 
-def split_image(image, nx=1, ny=None, mask=None, header=None, wcs=None, obj=None, cat=None, overlap=0, get_origin=False, verbose=False):
+def split_image(image, nx=1, ny=None, mask=None, bg=None, err=None, header=None, wcs=None, obj=None, cat=None, overlap=0, get_origin=False, verbose=False):
     """
     Generator to split the image into several (nx x ny) blocks, while also optionally providing the mask, header, wcs and object list for the sub-blocks.
     The blocks may optionally be extended by 'overlap' pixels in all directions.
@@ -308,7 +314,7 @@ def split_image(image, nx=1, ny=None, mask=None, header=None, wcs=None, obj=None
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = print if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     if not ny:
         ny = nx
@@ -336,6 +342,12 @@ def split_image(image, nx=1, ny=None, mask=None, header=None, wcs=None, obj=None
         if mask is not None:
             result += [cutouts.crop_image(mask, x1, y1, dx1, dy1)]
 
+        if bg is not None:
+            result += [cutouts.crop_image(bg, x1, y1, dx1, dy1)]
+
+        if err is not None:
+            result += [cutouts.crop_image(err, x1, y1, dx1, dy1)]
+
         if header1 is not None:
             result += [header1]
 
@@ -344,6 +356,8 @@ def split_image(image, nx=1, ny=None, mask=None, header=None, wcs=None, obj=None
             # FIXME: is there any more 'official' way of shifting the WCS?
             wcs1.wcs.crpix[0] -= x1
             wcs1.wcs.crpix[1] -= y1
+
+            wcs1 = WCS(wcs1.to_header(relax=True))
 
             result += [wcs1]
 
