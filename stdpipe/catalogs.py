@@ -26,6 +26,7 @@ catalogs = {
     'vsx': {'vizier': 'B/vsx/vsx', 'name': 'AAVSO VSX'},
     'apass': {'vizier': 'II/336/apass9', 'name': 'APASS DR9'},
     'sdss': {'vizier': 'V/147/sdss12', 'name': 'SDSS DR12', 'extra':['_RAJ2000', '_DEJ2000']},
+    'atlas': {'vizier': 'J/ApJ/867/105/refcat2', 'name': 'ATLAS-REFCAT2', 'extra':['_RAJ2000', '_DEJ2000']},
 }
 
 def get_cat_vizier(ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}, extra=[]):
