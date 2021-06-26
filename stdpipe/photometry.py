@@ -401,7 +401,7 @@ def get_intrinsic_scatter(y, yerr, min=0, max=None):
 
     return C.x[2]
 
-def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_mag, cat_magerr=None, cat_color=None, sr=3/3600, obj_x=None, obj_y=None, spatial_order=0, bg_order=None, threshold=5.0, niter=10, cat_saturation=None, max_intrinsic_rms=0, verbose=False, robust=True):
+def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_mag, cat_magerr=None, cat_color=None, sr=3/3600, obj_x=None, obj_y=None, spatial_order=0, bg_order=None, threshold=5.0, niter=10, cat_saturation=None, max_intrinsic_rms=0, sn=None, verbose=False, robust=True):
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
@@ -457,6 +457,8 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
         idx0 &= np.isfinite(ccolor)
     if cat_saturation is not None:
         idx0 &= cmag >= cat_saturation
+    if sn is not None:
+        idx0 &= omag_err < 1/sn
 
     idx = idx0.copy()
 
