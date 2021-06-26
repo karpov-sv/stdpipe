@@ -25,6 +25,7 @@ catalogs = {
     'skymapper': {'vizier': 'II/358/smss', 'name': 'SkyMapper DR1.1'},
     'vsx': {'vizier': 'B/vsx/vsx', 'name': 'AAVSO VSX'},
     'apass': {'vizier': 'II/336/apass9', 'name': 'APASS DR9'},
+    'sdss': {'vizier': 'V/147/sdss12', 'name': 'SDSS DR12', 'extra':['_RAJ2000', '_DEJ2000']},
 }
 
 def get_cat_vizier(ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}, extra=[]):
@@ -45,15 +46,18 @@ def get_cat_vizier(ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}, extra=[]
     cats = vizier.query_region(SkyCoord(ra0, dec0, unit='deg'), radius=sr0*u.deg, catalog=vizier_id)
 
     if not cats or not len(cats) == 1:
-        print('Error requesting catalogue', catalog)
-        return None
+        cats = vizier.query_region(SkyCoord(ra0, dec0, unit='deg'), radius=sr0*u.deg, catalog=vizier_id, cache=False)
+
+        if not cats or not len(cats) == 1:
+            print('Error requesting catalogue', catalog)
+            return None
 
     cat = cats[0]
     cat.meta['vizier_id'] = vizier_id
     cat.meta['name'] = name
 
     # Fix _RAJ2000/_DEJ2000
-    if '_RAJ2000' in cat.keys() and '_DEJ2000' in cat.keys():
+    if '_RAJ2000' in cat.keys() and '_DEJ2000' in cat.keys() and not 'RAJ2000' in cat.keys():
         cat.rename_columns(['_RAJ2000', '_DEJ2000'], ['RAJ2000', 'DEJ2000'])
 
     # Augment catalogue with additional bandpasses
@@ -65,12 +69,16 @@ def get_cat_vizier(ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}, extra=[]
         cat['R'] = cat['rmag'] - 0.163 - 0.086*(cat['gmag'] - cat['rmag']) - 0.061*(cat['gmag'] - cat['rmag'])**2
         cat['I'] = cat['imag'] - 0.387 - 0.123*(cat['gmag'] - cat['rmag']) - 0.034*(cat['gmag'] - cat['rmag'])**2
 
-        # to SDSS
-        # FIXME: add correct zero points and color terms from https://arxiv.org/pdf/1203.0297.pdf
-        cat['g_SDSS'] = cat['gmag']
-        cat['r_SDSS'] = cat['rmag']
-        cat['i_SDSS'] = cat['imag']
+        # to SDSS, zero points and color terms from https://arxiv.org/pdf/1203.0297.pdf
+        cat['g_SDSS'] = cat['gmag'] + 0.013 + 0.145*(cat['gmag'] - cat['rmag']) + 0.019*(cat['gmag'] - cat['rmag'])**2
+        cat['r_SDSS'] = cat['rmag'] - 0.001 + 0.004*(cat['gmag'] - cat['rmag']) + 0.007*(cat['gmag'] - cat['rmag'])**2
+        cat['i_SDSS'] = cat['imag'] - 0.005 + 0.011*(cat['gmag'] - cat['rmag']) + 0.010*(cat['gmag'] - cat['rmag'])**2
         cat['z_SDSS'] = cat['zmag']
+
+        # to SDSS, from Finkbeiner et al. https://arxiv.org/pdf/1512.01214.pdf, valid post-DR13
+        cat['g_SDSS'] = cat['gmag'] + 0.01808 + 0.13595*(cat['gmag'] - cat['imag']) - 0.01941*(cat['gmag'] - cat['imag'])**2 + 0.00183*(cat['gmag'] - cat['imag'])**3
+        cat['r_SDSS'] = cat['rmag'] + 0.01836 + 0.03577*(cat['gmag'] - cat['imag']) - 0.02612*(cat['gmag'] - cat['imag'])**2 + 0.00558*(cat['gmag'] - cat['imag'])**3
+        cat['i_SDSS'] = cat['imag'] - 0.01170 + 0.00400*(cat['gmag'] - cat['imag']) - 0.00066*(cat['gmag'] - cat['imag'])**2 + 0.00058*(cat['gmag'] - cat['imag'])**3
 
     elif catalog == 'gaiadr2':
         # My simple Gaia DR2 to Johnson conversion based on Stetson standards
@@ -94,7 +102,11 @@ def get_cat_vizier(ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}, extra=[]
         cat['R'] = g + np.polyval(pR, bp_rp)
         cat['I'] = g + np.polyval(pI, bp_rp)
 
-        # to SDSS
+        # to PS1 - FIXME: there are some uncorrected color and magnitude trends!
+        cat['gmag'] = cat['B'] - 0.108 - 0.485*(cat['B'] - cat['V']) - 0.032*(cat['B'] - cat['V'])**2
+        cat['rmag'] = cat['V'] + 0.082 - 0.462*(cat['B'] - cat['V']) + 0.041*(cat['B'] - cat['V'])**2
+
+        # to SDSS, from https://gea.esac.esa.int/archive/documentation/GDR2/Data_processing/chap_cu5pho/sec_cu5pho_calibr/ssec_cu5pho_PhotTransf.html
         cat['g_SDSS'] = g - (0.13518 - 0.46245*bp_rp - 0.25171*bp_rp**2 + 0.021349*bp_rp**3)
         cat['r_SDSS'] = g - (-0.12879 + 0.24662*bp_rp - 0.027464*bp_rp**2 - 0.049465*bp_rp**3)
         cat['i_SDSS'] = g - (-0.29676 + 0.64728*bp_rp - 0.10141*bp_rp**2)
@@ -124,7 +136,7 @@ def xmatch_skybot(obj, sr=10/3600, time=None, location='500', col_ra='ra', col_d
     try:
         # Query SkyBot for (a bit larger than) our FOV at our time
         xcat = Skybot.cone_search(SkyCoord(ra0, dec0, unit='deg'), (sr0 + 2.0*sr)*u.deg, Time(time))
-    except (RuntimeError, KeyError):
+    except (RuntimeError, KeyError, ConnectionError, OSError):
         # Nothing found in SkyBot
         return None
 
