@@ -98,7 +98,7 @@ def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], show_colo
         ax.set_autoscale_on(False)
         ax.plot(x, y, 'b.', alpha=0.3)
 
-def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, mark_x=None, mark_y=None, **kwargs):
+def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, mark_x=None, mark_y=None, title=None, additional_title=None, **kwargs):
     curplot = 1
 
     nplots = len(planes)
@@ -128,16 +128,40 @@ def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, 
             if curplot > nplots:
                 break
 
-    title = cutout['meta'].get('name', 'unnamed')
-    if 'time' in cutout['meta']:
-        title += ' at %s' % cutout['meta']['time'].to_value('iso')
-    if 'mag_calib' in cutout['meta']:
-        title += ': mag = %.2f $\pm$ %.2f' % (cutout['meta'].get('mag_calib', np.nan), cutout['meta'].get('magerr', np.nan))
+    if title is None:
+        title = cutout['meta'].get('name', 'unnamed')
+        if 'time' in cutout['meta']:
+            title += ' at %s' % cutout['meta']['time'].to_value('iso')
+
+        if 'mag_filter_name' in cutout['meta']:
+                title += ' : ' + cutout['meta']['mag_filter_name']
+                if 'mag_color_name' in cutout['meta'] and 'mag_color_term':
+                    sign = '-' if cutout['meta']['mag_color_term'] > 0 else '+'
+                    title += ' %s %.2f (%s)' % (sign, np.abs(cutout['meta']['mag_color_term']), cutout['meta']['mag_color_name'])
+
+        if 'mag_limit' in cutout['meta']:
+            title += ' : limit %.2f' % cutout['meta']['mag_limit']
+
+        if 'mag_calib' in cutout['meta']:
+            title += ' : mag = %.2f $\pm$ %.2f' % (cutout['meta'].get('mag_calib', np.nan), cutout['meta'].get('magerr', np.nan))
+
+        if additional_title:
+            title += ' : ' + additional_title
+
     fig.suptitle(title)
 
 def plot_photometric_match(m, ax=None, mode='mag', show_masked=True, show_final=True, **kwargs):
     if ax is None:
         ax = plt.gca()
+
+    # Textual representation of the photometric model
+    model_str = 'Instr = %s' % m.get('cat_col_mag', 'Cat')
+
+    if 'cat_col_mag1' in m.keys() and 'cat_col_mag2' in m.keys() and 'color_term' in m.keys():
+        sign = '-' if m['color_term'] > 0 else '+'
+        model_str += ' %s %.2f (%s - %s)' % (sign, np.abs(m['color_term']), m['cat_col_mag1'], m['cat_col_mag2'])
+
+    model_str += ' + ZP'
 
     if mode == 'mag':
         ax.errorbar(m['cmag'][m['idx0']], (m['zero_model']-m['zero'])[m['idx0']], m['zero_err'][m['idx0']], fmt='.', alpha=0.3)
@@ -149,10 +173,12 @@ def plot_photometric_match(m, ax=None, mode='mag', show_masked=True, show_final=
         ax.axhline(0, ls='--', color='black', alpha=0.3)
         ax.legend()
 
-        ax.set_xlabel('Catalogue magnitude')
+        ax.set_xlabel('Catalogue %s magnitude' % (m['cat_col_mag'] if 'cat_col_mag' in m.keys() else ''))
         ax.set_ylabel('Instrumental - Model')
 
         ax.set_title('%d of %d unmasked stars used in final fit' % (np.sum(m['idx']), np.sum(m['idx0'])))
+
+        ax.text(0.02, 0.05, model_str, transform=ax.transAxes)
 
     elif mode == 'color':
         ax.errorbar(m['color'][m['idx0']], (m['zero_model']-m['zero'])[m['idx0']], m['zero_err'][m['idx0']], fmt='.', alpha=0.3)
@@ -164,28 +190,56 @@ def plot_photometric_match(m, ax=None, mode='mag', show_masked=True, show_final=
         ax.axhline(0, ls='--', color='black', alpha=0.3)
         ax.legend()
 
-        ax.set_xlabel('Catalogue color')
+        ax.set_xlabel('Catalogue %s color' % (m['cat_col_mag1'] + '-' + m['cat_col_mag2'] if 'cat_col_mag1' in m.keys() else ''))
         ax.set_ylabel('Instrumental - Model')
 
-        ax.set_title('color term = %.2f' % m['color_term'])
+        ax.set_title('color term = %.2f' % (m['color_term'] or 0.0))
+
+        ax.text(0.02, 0.05, model_str, transform=ax.transAxes)
 
     elif mode == 'zero':
         if show_final:
-            binned_map(m['ox'][m['idx']], m['oy'][m['idx']], m['zero'][m['idx']], statistic='mean', ax=ax, **kwargs)
+            binned_map(m['ox'][m['idx']], m['oy'][m['idx']], m['zero'][m['idx']], ax=ax, **kwargs)
         else:
-            binned_map(m['ox'][m['idx0']], m['oy'][m['idx0']], m['zero'][m['idx0']], statistic='mean', ax=ax, **kwargs)
+            binned_map(m['ox'][m['idx0']], m['oy'][m['idx0']], m['zero'][m['idx0']], ax=ax, **kwargs)
         ax.set_title('Zero point')
 
     elif mode == 'model':
-        binned_map(m['ox'][m['idx0']], m['oy'][m['idx0']], m['zero_model'][m['idx0']], statistic='mean', ax=ax, **kwargs)
+        binned_map(m['ox'][m['idx0']], m['oy'][m['idx0']], m['zero_model'][m['idx0']], ax=ax, **kwargs)
         ax.set_title('Model')
 
     elif mode == 'residuals':
-        binned_map(m['ox'][m['idx0']], m['oy'][m['idx0']], (m['zero_model']-m['zero'])[m['idx0']], statistic='mean', ax=ax, **kwargs)
+        binned_map(m['ox'][m['idx0']], m['oy'][m['idx0']], (m['zero_model']-m['zero'])[m['idx0']], ax=ax, **kwargs)
         ax.set_title('Instrumental - model')
 
     elif mode == 'dist':
-        binned_map(m['ox'][m['idx']], m['oy'][m['idx']], m['dist'][m['idx']]*3600, statistic='mean', ax=ax, **kwargs)
+        binned_map(m['ox'][m['idx']], m['oy'][m['idx']], m['dist'][m['idx']]*3600, ax=ax, **kwargs)
         ax.set_title('%d stars: mean displacement %.1f arcsec, median %.1f arcsec' % (np.sum(m['idx']), np.mean(m['dist'][m['idx']]*3600), np.median(m['dist'][m['idx']]*3600)))
 
     return ax
+
+from contextlib import contextmanager
+
+@contextmanager
+def figure_saver(filename=None, show=False, tight_layout=True, **kwargs):
+    '''
+    Simple matplotlib Figure() wrapper, implemented as a context manager.
+    It stores the figure to specified file, and optionally displays it interactively if run inside Jupyter.
+    '''
+    fig = plt.Figure(**kwargs)
+
+    try:
+        yield fig
+    finally:
+        if filename:
+            if tight_layout:
+                fig.tight_layout()
+            fig.savefig(filename, bbox_inches='tight')
+
+        if show:
+            try:
+                from IPython.core.display import display
+                # That should display the figure
+                display(fig)
+            except:
+                pass

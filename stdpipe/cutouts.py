@@ -114,7 +114,7 @@ def get_cutout(image, candidate, radius, mask=None, background=None, diff=None, 
         cutout['footprint'] = crop_image_centered(footprint, x0, y0, radius)
 
     # Metadata
-    for _ in candidate.colnames:
+    for _ in candidate.keys():
         cutout['meta'][_] = candidate[_]
 
     # Additional metadata to add or override
@@ -126,7 +126,7 @@ def get_cutout(image, candidate, radius, mask=None, background=None, diff=None, 
 
     if name is not None:
         cutout['meta']['name'] = name
-    elif 'name' not in cutout['meta']:
+    elif 'name' not in cutout['meta'] and 'ra' in cutout['meta'].keys() and 'dec' in cutout['meta'].keys():
         cutout['meta']['name'] = utils.make_jname(candidate['ra'], candidate['dec'])
 
     return cutout
@@ -208,7 +208,7 @@ def adjust_cutout(cutout, max_shift=2, max_scale=1.1, inner=None, normalize=Fals
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = print if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     mask = cutout['mask'] if 'mask' in cutout else ~np.isfinite(cutout['image'])
     imask = np.zeros_like(mask)
@@ -278,8 +278,9 @@ def adjust_cutout(cutout, max_shift=2, max_scale=1.1, inner=None, normalize=Fals
 
         if normalize:
             diff[~mask1] /= err[~mask1]
+            diff[err>1e-30] /= err[err>1e-30]
 
-        diff[mask1] = 1e-30
+        # diff[mask1] = 1e-30
 
         # Add result as a new cutout plane
         cutout['adjusted'] = diff
