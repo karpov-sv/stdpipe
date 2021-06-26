@@ -82,9 +82,9 @@ def get_objects_center(obj, col_ra='ra', col_dec='dec'):
 
     return ra0, dec0, sr0
 
-def blind_match_objects(obj, order=4, extra="", update=True, sn=20, verbose=False):
+def blind_match_objects(obj, order=4, extra="", update=True, sn=20, _tmpdir=None, verbose=False):
     # Simple wrapper around print for logging in verbose mode only
-    log = print if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     wcs = None
     binname = None
@@ -96,7 +96,7 @@ def blind_match_objects(obj, order=4, extra="", update=True, sn=20, verbose=Fals
             break
 
     if binname:
-        dirname = tempfile.mkdtemp(prefix='astrometry')
+        dirname = tempfile.mkdtemp(prefix='astrometry', dir=_tmpdir)
 
         idx = obj['magerr']<1/sn
         columns = [fits.Column(name='XIMAGE', format='1D', array=obj['x'][idx]+1),
@@ -205,13 +205,13 @@ def blind_match_astrometrynet(obj, order=2, update=False, sn=20, get_header=Fals
 
 def refine_wcs(obj, cat, order=2, match=True, sr=3/3600, update=False,
                cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
-               method='astropy', verbose=False):
+               method='astropy', _tmpdir=None, verbose=False):
     '''
     Refine the WCS using detected objects and catalogue.
     '''
 
     # Simple wrapper around print for logging in verbose mode only
-    log = print if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     if match:
         # Perform simple nearest-neighbor matching within given radius
@@ -241,7 +241,7 @@ def refine_wcs(obj, cat, order=2, match=True, sr=3/3600, update=False,
                 break
 
         if binname:
-            dirname = tempfile.mkdtemp(prefix='astrometry')
+            dirname = tempfile.mkdtemp(prefix='astrometry', dir=_tmpdir)
 
             columns = [fits.Column(name='FIELD_X', format='1D', array=obj['x'] + 1),
                        fits.Column(name='FIELD_Y', format='1D', array=obj['y'] + 1),
@@ -360,7 +360,7 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
                      cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
                      cat_col_ra_err='e_RAJ2000', cat_col_dec_err='e_DEJ2000',
                      cat_col_mag='rmag', cat_col_mag_err='e_rmag',
-                     cat_mag_lim=99, extra={},
+                     cat_mag_lim=99, sn=None, extra={},
                      get_header=False, update=False,
                      _workdir=None, _tmpdir=None, verbose=False):
     """
@@ -368,7 +368,7 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = print if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     # Find the binary
     binname = None
@@ -404,8 +404,14 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
         'XML_NAME': xmlname,
         'PROJECTION_TYPE': 'TPV',
         'CROSSID_RADIUS': sr*3600,
-        'DISTORT_DEGREES': order,
+        'DISTORT_DEGREES': max(1, order),
     }
+
+    if sn is not None:
+        if np.isscalar(sn):
+            opts['SN_THRESHOLDS'] = [sn, 10*sn]
+        else:
+            opts['SN_THRESHOLDS'] = [sn[0], sn[1]]
 
     opts.update(extra)
 
@@ -494,23 +500,31 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
         diag = Table.read(xmlname, table_id=0)[0]
         log('%d matches, chi2 %.1f' % (diag['NDeg_Reference'], diag['Chi2_Reference']))
         # FIXME: is df correct here?..
-        if chi2.sf(diag['Chi2_Reference'], df=diag['NDeg_Reference']) < 1e-3:
+        if diag['NDeg_Reference'] < 3 or chi2.sf(diag['Chi2_Reference'], df=diag['NDeg_Reference']) < 1e-3:
             log('It seems the fitting failed')
         else:
             with open(hdrname, 'r') as f:
                 h1 = fits.Header.fromstring(f.read().encode('ascii', 'ignore'), sep='\n')
 
                 # Sometimes SCAMP returns TAN type solution even despite PV keywords present
-                if h1['CTYPE1'] != 'RA---TPV':
-                    log('Got WCS solution with CTYPE1 =', h1['CTYPE1'], ', fixing it')
+                if h1['CTYPE1'] != 'RA---TPV' and 'PV1_0' in h1.keys():
+                    log('Got WCS solution with CTYPE1 =', h1['CTYPE1'], ' and PV keywords, fixing it')
                     h1['CTYPE1'] = 'RA---TPV'
                     h1['CTYPE2'] = 'DEC--TPV'
+                # .. while sometimes it does the opposite
+                elif h1['CTYPE1'] == 'RA---TPV' and 'PV1_0' not in h1.keys():
+                    log('Got WCS solution with CTYPE1 =', h1['CTYPE1'], ' and without PV keywords, fixing it')
+                    h1['CTYPE1'] = 'RA---TAN'
+                    h1['CTYPE2'] = 'DEC--TAN'
+                    h1 = WCS(h1).to_header(relax=True)
 
                 if get_header:
+                    # FIXME: should we really return raw / unfixed header here?..
                     log('Returning raw header instead of WCS solution')
                     wcs = h1
                 else:
                     wcs = WCS(h1)
+
                     if update:
                         obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
 
