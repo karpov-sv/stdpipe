@@ -474,6 +474,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
             C = sm.WLS(zero[idx], X[idx], weights=weights[idx]).fit()
 
         zero_model = np.sum(X*C.params, axis=1)
+        zero_model_err = np.sqrt(C.cov_params(X).diagonal())
 
         if threshold:
             rms = mad_std(((zero - zero_model)/zero_err)[idx])
@@ -500,7 +501,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
         log('Intrinsic scatter is %.2f' % intrinsic_rms)
 
     # Export the model
-    def zero_fn(xx, yy, mag=None):
+    def zero_fn(xx, yy, mag=None, get_err=False):
         if xx is not None and yy is not None:
             x, y = xx - x0, yy - y0
         else:
@@ -513,7 +514,11 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
 
         X = np.vstack(X).T
 
-        return np.sum(X*C.params[0:X.shape[1]], axis=1)
+        if get_err:
+            # It follows the implementation from https://github.com/statsmodels/statsmodels/blob/081fc6e85868308aa7489ae1b23f6e72f5662799/statsmodels/base/model.py#L1383
+            return np.sqrt(np.dot(X, np.dot(C.cov_params()[0:X.shape[1],0:X.shape[1]], np.transpose(X))).diagonal())
+        else:
+            return np.sum(X*C.params[0:X.shape[1]], axis=1)
 
     if cat_color is not None:
         X = make_series(order=spatial_order)
@@ -529,7 +534,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
             'cmag': cmag, 'cmag_err': cmag_err,
             'color': ccolor, 'color_term': color_term,
             'zero': zero, 'zero_err': zero_err,
-            'zero_model': zero_model, 'zero_fn': zero_fn,
+            'zero_model': zero_model, 'zero_model_err':zero_model_err, 'zero_fn': zero_fn,
             'intrinsic_rms': intrinsic_rms,
             'obj_zero': zero_fn(obj_x, obj_y),
             'ox': ox, 'oy': oy, 'oflags': oflags,
