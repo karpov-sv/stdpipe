@@ -35,7 +35,7 @@ def get_data_path(dataname):
 
 def download(url, filename=None, overwrite=False, verbose=False):
     # Simple wrapper around print for logging in verbose mode only
-    log = print if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     if not overwrite and filename is not None and os.path.exists(filename):
         log(filename, 'already downloaded')
@@ -85,7 +85,7 @@ def get_obs_time(header=None, filename=None, string=None, get_datetime=False, ve
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = print if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     # Simple wrapper to display parsed value and convert it as necessary
     def convert_time(time):
@@ -189,7 +189,7 @@ def crop_overscans(image, header, subtract_bias=True, verbose=False):
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = print if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     if header is not None:
         header = header.copy()
@@ -224,3 +224,15 @@ def crop_overscans(image, header, subtract_bias=True, verbose=False):
     image -= bias
 
     return image, header
+
+# Simple 2D rebinning
+def rebin_image(image, nx=1, ny=None):
+    """
+    Simple rebinning / downscaling the image by an integer factor.
+    Pixel values are averaged, not co-added.
+    """
+    if ny is None:
+        ny = nx
+    shape = (image.shape[0]//ny, ny,
+             image.shape[1]//nx, nx)
+    return image.reshape(shape).mean(-1).mean(1)

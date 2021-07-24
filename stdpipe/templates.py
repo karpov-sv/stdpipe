@@ -31,14 +31,20 @@ def get_hips_image(hips, ra=None, dec=None, width=None, height=None, fov=None, w
 
     params = {
         'hips': hips,
-        'width': width,
-        'height': height,
+        'width': int(width),
+        'height': int(height),
         'coordsys': 'icrs',
         'format': 'fits'
     }
 
     if wcs is not None and wcs.is_celestial:
-        params['wcs'] = json.dumps(dict(wcs.to_header(relax=True)))
+        whdr = wcs.to_header(relax=True)
+        if whdr['CTYPE1'] == 'RA---TPV' and 'PV1_0' not in whdr.keys():
+            # hips2fits does not like such headers, let's fix it
+            whdr['CTYPE1'] = 'RA---TAN'
+            whdr['CTYPE2'] = 'DEC--TAN'
+
+        params['wcs'] = json.dumps(dict(whdr))
     elif ra is not None and dec is not None and fov is not None:
         params['ra'] = ra
         params['dec'] = dec
@@ -109,7 +115,7 @@ def mask_template(tmpl, cat=None, cat_saturation_mag=None,
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = print if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     if mask_nans:
         tmask = ~np.isfinite(tmpl)
@@ -124,7 +130,7 @@ def mask_template(tmpl, cat=None, cat_saturation_mag=None,
 
             m = photometry.match(tobj['ra'], tobj['dec'], tobj['mag'], tobj['magerr'], tobj['flags'],
                                  cat[cat_col_ra], cat[cat_col_dec], cat[cat_col_mag],
-                                 cat_magerr=cat[cat_col_mag_err], cat_saturation=10,
+                                 cat_magerr=utils.table_get(cat, cat_col_mag_err, 0.01), cat_saturation=10,
                                  sr=cat_sr, verbose=False)
             if m:
                 cat_saturation_mag = np.min(cat[m['cidx']][m['idx']][cat_col_mag])
@@ -192,7 +198,7 @@ def get_ps1_skycells(ra0, dec0, sr0, band='r', _cachedir='~/.stdpipe-cache/ps1/'
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = print if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     # Normalize _cachedir
     if _cachedir is not None:
@@ -231,7 +237,7 @@ def normalize_ps1_skycell(filename, verbose=False):
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = print if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     header = fits.getheader(filename, -1)
 

@@ -15,7 +15,7 @@ def run_psfex(image, mask=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, minarea=5,
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = print if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     # Find the binary
     binname = None
@@ -100,7 +100,7 @@ def load_psf(filename, get_header=False, verbose=False):
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = print if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     log('Loading PSF model from %s' % filename)
 
