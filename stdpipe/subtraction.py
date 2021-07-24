@@ -5,16 +5,18 @@ import numpy as np
 
 from astropy.io import fits
 from astropy.stats import mad_std
+from astropy.table import Table
 
 from astropy.convolution import convolve, Gaussian2DKernel
 
-def run_hotpants(image, template, mask=None, template_mask=None, err=None,
+def run_hotpants(image, template, mask=None, template_mask=None, err=None, template_err=None,
                  extra=None, image_fwhm=None, template_fwhm=None,
                  image_gain=None, template_gain=1000, rel_r=3, rel_rss=4,
-                 get_convolved=False, get_scaled=False, get_noise=False,
+                 obj=None,
+                 get_convolved=False, get_scaled=False, get_noise=False, get_kernel=False, get_header=False,
                  _tmpdir=None, _workdir=None, verbose=False):
     # Simple wrapper around print for logging in verbose mode only
-    log = print if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     if mask is None:
         mask = ~np.isfinite(image)
@@ -29,16 +31,20 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None,
     imin,imax = np.min(image[~mask]), np.max(image[~mask])
     tmin,tmax = np.min(template[~template_mask]), np.max(template[~template_mask])
 
+    # As HOTPANTS uses inclusive checks for high values, let's extend their range just a bit
+    imax += 0.01*(imax - imin)
+    tmax += 0.01*(tmax - tmin)
+
     # Logic from https://arxiv.org/pdf/1608.01006.pdf
     imin = np.median(image[~mask]) - 10*mad_std(image[~mask])
     tmin = np.median(template[~template_mask]) - 10*mad_std(template[~template_mask])
 
-    _nan = imin - 100000
+    _nan = 1e-30 #
 
     workdir = _workdir if _workdir is not None else tempfile.mkdtemp(prefix='hotpants', dir=_tmpdir)
 
     image = image.copy()
-    image[~np.isfinite(image)] = np.nanmedian(image)
+    image[~np.isfinite(image)] = np.nanmedian(image) # _nan
     # image[mask] = _nan
     imagename = os.path.join(workdir, 'image.fits')
     fits.writeto(imagename, image, overwrite=True)
@@ -46,7 +52,7 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None,
     fits.writeto(imaskname, mask.astype(np.uint16), overwrite=True)
 
     template = template.copy()
-    template[~np.isfinite(template)] = np.nanmedian(template)
+    template[~np.isfinite(template)] = np.nanmedian(template) # _nan
     # template[template_mask] = _nan
     templatename = os.path.join(workdir, 'template.fits')
     fits.writeto(templatename, template, overwrite=True)
@@ -55,10 +61,13 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None,
 
     outname = os.path.join(workdir, 'diff.fits')
 
+    stampname = os.path.join(workdir, 'stamps.reg')
+
     params = {
         'inim': imagename,
         'tmplim': templatename,
         'outim': outname,
+        'savexy': stampname,
 
         # Masks
         'imi': imaskname,
@@ -71,6 +80,7 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None,
         # Lower and upper valid values for template
         'tl': tmin,
         'tu': tmax,
+        'tuk': tmax, # Limit used for kernel estimation, why not the same as 'tu'?..
 
         # Normalize result to input image
         'n': 'i',
@@ -81,9 +91,14 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None,
         # Convolve template image
         'c': 't',
 
+        # Add kernel info to the output
+        'hki': True,
+
         # Disable positional variance of the kernel and background
         'ko': 0,
         'bgo': 0,
+
+        'v': 2,
     }
 
     # Error map for input image
@@ -92,21 +107,55 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None,
             # err=True means that we should estimate the noise
             log('Building noise model from the image')
             import sep
-
-            if image_gain is None:
-                image_gain = 1
-
             bg = sep.Background(image, mask)
+            # image[mask] = bg.back()[mask]
             err = bg.rms() # Background noise level
             # Noise should be estimated on smoothed image
-            kernel = Gaussian2DKernel(1 if image_fwhm is None else image_fwhm / 2 / 2.35)
-            smooth = convolve(image, kernel, mask=mask)
-            err = np.sqrt(err**2 + np.abs((smooth - bg.back()))/image_gain) # Contribution from the sources
+            kernel = Gaussian2DKernel(1)
+            smooth = image.copy()
+            smooth[~np.isfinite(smooth)] = np.nanmedian(smooth)
+            smooth = convolve(smooth, kernel, mask=mask, preserve_nan=True)
+            smooth[mask] = bg.back()[mask]
+            serr = np.abs((smooth - bg.back()))
+            if image_gain is not None:
+                serr /= image_gain
+            err = np.sqrt(err**2 + serr) # Contribution from the sources
+            # err[mask] = 1/_nan
+
+            # image[mask|template_mask] = np.random.normal(0, bg.rms()[mask|template_mask])
+            # fits.writeto(imagename, image, overwrite=True)
 
         if hasattr(err, 'shape'):
             errname = os.path.join(workdir, 'err.fits')
             params['ini'] = errname
             fits.writeto(errname, err, overwrite=True)
+
+    if template_err is not None:
+        if type(template_err) is bool and template_err == True:
+            # err=True means that we should estimate the noise
+            log('Building noise model from the template')
+            import sep
+            bg = sep.Background(template, template_mask)
+            template_err = bg.rms() # Background noise level
+            # Noise should be estimated on smoothed image
+            kernel = Gaussian2DKernel(1)
+            smooth = template.copy()
+            smooth[~np.isfinite(smooth)] = np.nanmedian(smooth)
+            smooth = convolve(smooth, kernel, mask=template_mask, preserve_nan=True)
+            smooth[template_mask] = bg.back()[template_mask]
+            serr = np.abs((smooth - bg.back()))
+            if template_gain is not None:
+                serr /= template_gain
+            template_err = np.sqrt(template_err**2 + serr) # Contribution from the sources
+            # template_err[template_mask] = 1/_nan
+
+            # template[mask|template_mask] = np.random.normal(0, bg.rms()[mask|template_mask])
+            # fits.writeto(templatename, template, overwrite=True)
+
+        if hasattr(template_err, 'shape'):
+            terrname = os.path.join(workdir, 'terr.fits')
+            params['tni'] = terrname
+            fits.writeto(terrname, template_err, overwrite=True)
 
     if image_fwhm is not None and template_fwhm is not None:
         # Recommended logic for sigma_match
@@ -129,8 +178,16 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None,
     if extra is not None:
         params.update(extra)
 
+    # Set the stamp locations from detected objects
+    if obj is not None and len(obj):
+        log('Using %d external positions for substamps' % len(obj))
+        xyname = os.path.join(workdir, 'objects.xy')
+        np.savetxt(xyname, [[_['x'] + 1, _['y'] + 1] for _ in Table(obj)], fmt='%.1f')
+        params['ssf'] = xyname
+
     # Build command line
     command = ["hotpants"]
+    # command = ["/home/karpov/tmp/hotpants/hotpants"]
 
     for key in params.keys():
         if params[key] is None:
@@ -178,6 +235,17 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None,
     # Difference image
     result = [fits.getdata(outname, 0)]
 
+    header = fits.getheader(outname)
+
+    if os.path.exists(stampname):
+        with open(stampname, 'r') as f:
+            lines = f.readlines()
+        lines = lines[1:]
+
+        header['NSTAMPS'] = len(lines)
+
+        log('%d stamps used' % len(lines))
+
     if get_convolved:
         # Convolved image
         conv = fits.getdata(outname, 1)
@@ -192,6 +260,15 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None,
         # Noise image
         noise = fits.getdata(outname, 3)
         result.append(noise)
+
+    if get_kernel:
+        # Kernel information
+        kernel = Table.read(outname, format='fits', hdu=4)
+        result.append(kernel)
+
+    if get_header:
+        # Header with metadata
+        result.append(header)
 
     if _workdir is None:
         shutil.rmtree(workdir)
