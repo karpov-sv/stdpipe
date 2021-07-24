@@ -401,7 +401,7 @@ def get_intrinsic_scatter(y, yerr, min=0, max=None):
 
     return C.x[2]
 
-def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_mag, cat_magerr=None, cat_color=None, sr=3/3600, obj_x=None, obj_y=None, spatial_order=0, bg_order=None, threshold=5.0, niter=10, cat_saturation=None, max_intrinsic_rms=0, sn=None, verbose=False, robust=True):
+def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_mag, cat_magerr=None, cat_color=None, sr=3/3600, obj_x=None, obj_y=None, spatial_order=0, bg_order=None, threshold=5.0, niter=10, cat_saturation=None, max_intrinsic_rms=0, sn=None, verbose=False, robust=True, scale_noise=False):
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
@@ -479,10 +479,12 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
             rms = mad_std(((zero - zero_model)/zero_err)[idx])
             intrinsic_rms = get_intrinsic_scatter((zero-zero_model)[idx], zero_err[idx], max=max_intrinsic_rms)
 
+            scale = 1 if not scale_noise else rms
+
             if robust:
-                idx1 = np.abs((zero - zero_model)/np.hypot(zero_err, intrinsic_rms))[idx] < threshold
+                idx1 = np.abs((zero - zero_model)/np.hypot(zero_err, intrinsic_rms))[idx] < threshold*scale
             else:
-                idx1 = np.abs((zero - zero_model)/np.hypot(zero_err, intrinsic_rms))[idx] < threshold
+                idx1 = np.abs((zero - zero_model)/np.hypot(zero_err, intrinsic_rms))[idx] < threshold*scale
 
             if not np.sum(~idx1):
                 log('Fitting converged')
