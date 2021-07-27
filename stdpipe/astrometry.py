@@ -393,6 +393,9 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
     if wcs is not None and wcs.is_celestial:
         # Add WCS information to the header
         header += wcs.to_header(relax=True)
+    else:
+        log("Can't operate without initial WCS")
+        return None
 
     xmlname = os.path.join(workdir, 'scamp.xml')
 
@@ -453,10 +456,16 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
                 'ERRA_WORLD': utils.table_get(cat, cat_col_ra_err, 1/3600),
                 'ERRB_WORLD': utils.table_get(cat, cat_col_dec_err, 1/3600),
 
-                'MAG': cat[cat_col_mag],
+                'MAG': utils.table_get(cat, cat_col_mag, 0),
                 'MAGERR': utils.table_get(cat, cat_col_mag_err, 0.01),
-                'OBSDATE': np.ones_like(cat['RAJ2000'])*2000.0
+                'OBSDATE': np.ones_like(cat[cat_col_ra])*2000.0,
+                'FLAGS': np.zeros_like(cat[cat_col_ra], dtype=np.int),
             })
+
+            # Remove masked values
+            for _ in t_cat.colnames:
+                if np.ma.is_masked(t_cat[_]):
+                    t_cat = t_cat[~t_cat[_].mask]
 
             # Convert units of err columns to degrees, if any
             for _ in ['ERRA_WORLD', 'ERRB_WORLD']:
