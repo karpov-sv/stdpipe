@@ -306,6 +306,10 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
         obj['FLAGS'][obj['IMAFLAGS_ISO'] > 0] |= 0x100 # Masked pixels in the footprint
         obj.remove_column('IMAFLAGS_ISO') # We do not need this column
 
+        # Convert variances to rms
+        obj['ERRX2_IMAGE'] = np.sqrt(obj['ERRX2_IMAGE'])
+        obj['ERRY2_IMAGE'] = np.sqrt(obj['ERRY2_IMAGE'])
+
         for _,__ in [['X_IMAGE', 'x'],
                      ['Y_IMAGE', 'y'],
                      ['ERRX2_IMAGE', 'xerr'],
