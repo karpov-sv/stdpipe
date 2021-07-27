@@ -51,7 +51,10 @@ def refine_astrometry(obj, cat, sr=10/3600, wcs=None, order=0,
             # Matching involving photometric information
             cat_magerr = cat[cat_col_mag_err] if cat_col_mag_err is not None else None
             m = photometry.match(obj['ra'], obj['dec'], obj['mag'], obj['magerr'], obj['flags'], cat[cat_col_ra], cat[cat_col_dec], cat[cat_col_mag], cat_magerr=cat_magerr, sr=sr)
-            if not m or np.sum(m['idx']) < min_matches:
+            if m is None or not m:
+                log('Photometric match failed, cannot refine WCS')
+                return None
+            elif np.sum(m['idx']) < min_matches:
                 log('Too few (%d) good photometric matches, cannot refine WCS' % np.sum(m['idx']))
                 return None
             else:
@@ -266,6 +269,7 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, bg_order=Non
 
         if update:
             obj['mag_calib'] = obj['mag'] + m['zero_fn'](obj['x'], obj['y'], obj['mag'])
+            obj['mag_calib_err'] = np.hypot(obj['magerr'], m['zero_fn'](obj['x'], obj['y'], obj['mag'], get_err=True))
     else:
         log('Photometric calibration failed')
 
