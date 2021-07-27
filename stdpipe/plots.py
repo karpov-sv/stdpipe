@@ -143,7 +143,7 @@ def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, 
             title += ' : limit %.2f' % cutout['meta']['mag_limit']
 
         if 'mag_calib' in cutout['meta']:
-            title += ' : mag = %.2f $\pm$ %.2f' % (cutout['meta'].get('mag_calib', np.nan), cutout['meta'].get('magerr', np.nan))
+            title += ' : mag = %.2f $\pm$ %.2f' % (cutout['meta'].get('mag_calib', np.nan), cutout['meta'].get('mag_calib_err', cutout['meta'].get('magerr', np.nan)))
 
         if additional_title:
             title += ' : ' + additional_title
