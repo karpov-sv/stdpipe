@@ -130,7 +130,7 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
         if remove == False:
             obj_in['candidate_flagged'] = (obj['flags'] & flagmask) > 0
 
-        print(np.sum(cand_idx), 'of them are unflagged')
+        log(np.sum(cand_idx), 'of them are unflagged')
 
     # Reference catalogue
     if cat is not None and remove == False:
@@ -268,8 +268,8 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, bg_order=Non
             m['cat_col_mag2'] = cat_col_mag2
 
         if update:
-            obj['mag_calib'] = obj['mag'] + m['zero_fn'](obj['x'], obj['y'], obj['mag'])
-            obj['mag_calib_err'] = np.hypot(obj['magerr'], m['zero_fn'](obj['x'], obj['y'], obj['mag'], get_err=True))
+            obj['mag_calib'] = obj[obj_col_mag] + m['zero_fn'](obj['x'], obj['y'], obj['mag'])
+            obj['mag_calib_err'] = np.hypot(obj[obj_col_mag_err], m['zero_fn'](obj['x'], obj['y'], obj['mag'], get_err=True))
     else:
         log('Photometric calibration failed')
 
