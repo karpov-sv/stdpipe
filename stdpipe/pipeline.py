@@ -146,7 +146,7 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
         log(np.sum(cand_idx), 'of them are not matched with reference catalogue')
 
     # Vizier catalogues
-    for catname in vizier:
+    for catname in (vizier or []):
         if remove == False:
             if 'candidate_vizier_'+catname not in obj_in.keys():
                 obj_in['candidate_vizier_'+catname] = False
