@@ -1,6 +1,6 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
 
-import os, tempfile, shutil, shlex, re
+import os, tempfile, shutil, shlex, re, warnings
 import numpy as np
 
 from esutil import coords, htm
@@ -40,10 +40,10 @@ def get_frame_center(filename=None, header=None, wcs=None, width=None, height=No
 
     return ra0, dec0, sr
 
-def get_pixscale(filename=None, header=None, wcs=None):
+def get_pixscale(wcs=None, filename=None, header=None):
     '''
     Returns pixel scale of an image in degrees per pixel.
-    Accepts either filename, or FITS header, or WCS structure
+    Accepts either WCS structure, or FITS header, or filename
     '''
     if not wcs:
         if header:
@@ -562,3 +562,53 @@ def store_wcs(filename, wcs, overwrite=True):
 
     hdu = fits.PrimaryHDU(header=wcs.to_header(relax=True))
     hdu.writeto(filename, overwrite=overwrite)
+
+def upscale_wcs(wcs, scale=2, will_rebin=False):
+    """
+    Returns WCS corresponding to the frame upscaled by some (not necessarily integer) factor.
+
+    If you wish to re-bin the image back to original resolution using `utils.rebin_image`,
+    you may wish to set `will_rebin` to True, and it will adjust the CRPIX so that
+    the result will not be shifted.
+    """
+
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        whdr = wcs.to_header(relax=True)
+
+        for _ in ['CRPIX1', 'CRPIX2']:
+            whdr[_] = (whdr[_] - 1) * scale + 1
+
+        for _ in ['PC1_1', 'PC1_2', 'PC2_1', 'PC2_2']:
+            whdr[_] /= scale
+
+        if 'SIP' in whdr['CTYPE1']:
+            # SIP-type distortions
+            for i in range(0, whdr.get('A_ORDER', 0) + 1):
+                for j in range(0, whdr.get('A_ORDER', 0) + 1):
+                    if 'A_%d_%d' % (i, j) in whdr:
+                        whdr['A_%d_%d' % (i, j)] /= scale**(i + j - 1)
+
+            for i in range(0, whdr.get('B_ORDER', 0) + 1):
+                for j in range(0, whdr.get('B_ORDER', 0) + 1):
+                    if 'B_%d_%d' % (i, j) in whdr:
+                        whdr['B_%d_%d' % (i, j)] /= scale**(i + j - 1)
+
+            for i in range(0, whdr.get('AP_ORDER', 0) + 1):
+                for j in range(0, whdr.get('AP_ORDER', 0) + 1):
+                    if 'AP_%d_%d' % (i, j) in whdr:
+                        whdr['AP_%d_%d' % (i, j)] /= scale**(i + j - 1)
+
+            for i in range(0, whdr.get('BP_ORDER', 0) + 1):
+                for j in range(0, whdr.get('BP_ORDER', 0) + 1):
+                    if 'BP_%d_%d' % (i, j) in whdr:
+                        whdr['BP_%d_%d' % (i, j)] /= scale**(i + j - 1)
+
+        new = WCS(whdr)
+
+        if will_rebin:
+            # Switch from conserving pixel center position to pixel corner, so
+            # that naive downscaling back will give the same image as original
+            new.wcs.crpix -= -0.5*scale + 0.5
+
+    return new

@@ -20,10 +20,25 @@ from astropy.convolution import Tophat2DKernel, convolve, convolve_fft
 
 from . import utils
 from . import photometry
+from . import pipeline
+from . import astrometry
 
 # HiPS images
 
-def get_hips_image(hips, ra=None, dec=None, width=None, height=None, fov=None, wcs=None, header=None, asinh=None, normalize=True, get_header=True):
+def get_hips_image(hips, ra=None, dec=None, width=None, height=None, fov=None,
+                   wcs=None, header=None,
+                   asinh=None, normalize=True, upscale=False,
+                   get_header=True, verbose=False):
+    """
+    Load the image from any HiPS survey using CDS hips2fits service.
+
+    The image scale and orientation may be specified by either center coordinates and fov,
+    or by directly passing WCS solution or FITS header containing it.
+    """
+
+    # Simple wrapper around print for logging in verbose mode only
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+
     if header is not None:
         wcs = WCS(header)
         width = header['NAXIS1']
@@ -38,6 +53,20 @@ def get_hips_image(hips, ra=None, dec=None, width=None, height=None, fov=None, w
     }
 
     if wcs is not None and wcs.is_celestial:
+        # Whether we should upscale the template or not
+        if upscale is True:
+            # Let's guess the upscaling that will drive pixel scale beyond 1 arcsec/pix
+            pixscale = astrometry.get_pixscale(wcs=wcs)*3600
+            upscale = int(np.ceil(pixscale / 1))
+
+            if upscale > 1:
+                log('Will upscale the image from %.2f to %.2f arcsec/pix' % (pixscale, pixscale/upscale))
+
+        if upscale and upscale > 1:
+            wcs = astrometry.upscale_wcs(wcs, upscale, will_rebin=True)
+            params['width'] *= upscale
+            params['height'] *= upscale
+
         whdr = wcs.to_header(relax=True)
         if whdr['CTYPE1'] == 'RA---TPV' and 'PV1_0' not in whdr.keys():
             # hips2fits does not like such headers, let's fix it
@@ -50,11 +79,11 @@ def get_hips_image(hips, ra=None, dec=None, width=None, height=None, fov=None, w
         params['dec'] = dec
         params['fov'] = fov
     else:
-        print('Sky position and size are not provided')
+        log('Sky position and size are not provided')
         return None,None
 
     if width is None or height is None:
-        print('Frame size is not provided')
+        log('Frame size is not provided')
         return None,None
 
     url = 'http://alasky.u-strasbg.fr/hips-image-services/hips2fits?' + urlencode(params)
@@ -78,6 +107,10 @@ def get_hips_image(hips, ra=None, dec=None, width=None, height=None, fov=None, w
     if asinh:
         # Fix asinh flux scaling
         image = np.sinh(image*np.log(10)/2.5)
+
+    if upscale and upscale > 1:
+        # We should do downscaling after conversion of the image back to linear flux scaling
+        image = utils.rebin_image(image, upscale)
 
     if normalize:
         # Normalize the image to have median=100 and std=10, corresponding to GAIN=1 assuming Poissonian background
@@ -108,10 +141,23 @@ def dilate_mask(mask, dilate=5):
 def mask_template(tmpl, cat=None, cat_saturation_mag=None,
                   cat_col_mag='rmag', cat_col_mag_err='e_rmag',
                   cat_col_ra='RAJ2000', cat_col_dec='DEJ2000', cat_sr=1/3600,
-                  mask_nans=True,
-                  wcs=None, dilate=5, verbose=False):
+                  mask_nans=True, mask_masked=True,
+                  mask_photometric=False, aper=2, sn=5,
+                  wcs=None, dilate=5, verbose=False, _tmpdir=None):
     """
     Apply various masking heuristics (NaNs, saturated catalogue stars, etc) to the template.
+
+    If `mask_nans` is set, it masks NaN pixels
+
+    If `mask_masked` is set and catalogue is provided, it masks all catalogue stars where
+    `cat_col_mag` or `cat_col_mag_err` fields are either masked or NaNs
+
+    If `mask_photometric` is set and catalogue is provided, it detects the objects on the template,
+    matches them photometrically, and then rejects all the stars that are not used in photometric fit
+    and fainter than the catalogue entries - supposedly, the saturated stars.
+
+    The mask then may be optionally dilated if dilation size is set in `dilate` argument.
+
     """
 
     # Simple wrapper around print for logging in verbose mode only
@@ -123,35 +169,39 @@ def mask_template(tmpl, cat=None, cat_saturation_mag=None,
     else:
         tmask = np.zeros_like(tmpl, dtype=np.bool)
 
-    if cat is not None:
-        if cat_saturation_mag is None:
-            # Apply photometric match to guess catalogue saturation magnitude
-            tobj = photometry.get_objects_sextractor(tmpl, mask=tmask, sn=3, wcs=wcs, aper=3)
-
-            m = photometry.match(tobj['ra'], tobj['dec'], tobj['mag'], tobj['magerr'], tobj['flags'],
-                                 cat[cat_col_ra], cat[cat_col_dec], cat[cat_col_mag],
-                                 cat_magerr=utils.table_get(cat, cat_col_mag_err, 0.01), cat_saturation=10,
-                                 sr=cat_sr, verbose=False)
-            if m:
-                cat_saturation_mag = np.min(cat[m['cidx']][m['idx']][cat_col_mag])
-            else:
-                log('Catalogue matching failed, cannot determine saturation level')
-                cat_saturation_mag = 10
-
-            log('Catalogue saturates at %s = %.1f' % (cat_col_mag, cat_saturation_mag))
-
+    if cat is not None and wcs is not None:
         # Mask the central pixels of saturated stars
         cx, cy = wcs.all_world2pix(cat[cat_col_ra], cat[cat_col_dec], 0)
         cx = np.round(cx).astype(np.int)
         cy = np.round(cy).astype(np.int)
 
+        tidx = np.zeros(len(cat), dtype=np.bool)
+
         # First, we select all catalogue objects with masked measurements
-        tidx = cat[cat_col_mag].mask == True
-        if cat_col_mag_err:
-            tidx |= cat[cat_col_mag_err].mask == True
+        if mask_masked:
+            tidx = cat[cat_col_mag].mask == True
+            tidx |= ~np.isfinite(cat[cat_col_mag])
+            if cat_col_mag_err:
+                tidx |= cat[cat_col_mag_err].mask == True
+                tidx |= ~np.isfinite(cat[cat_col_mag_err])
 
         # Next, we also add the ones corresponding to saturation limit
-        tidx |= cat[cat_col_mag] < cat_saturation_mag
+        if cat_saturation_mag is not None:
+             tidx |= cat[cat_col_mag] < cat_saturation_mag
+
+        # Also, we may mask photometrically saturated stars
+        if mask_photometric:
+            # Detect the stars on the template and match with the catalogue
+            tobj = photometry.get_objects_sextractor(tmpl, mask=tmask, sn=sn, aper=aper, wcs=wcs, _tmpdir=_tmpdir)
+            # tobj = photometry.measure_objects(tobj, tmpl, mask=tmask, fwhm=np.median(tobj['fwhm'][tobj['flags'] == 0]), aper=1)
+
+            tm = pipeline.calibrate_photometry(tobj, cat, sr=cat_sr,
+                                               cat_col_mag=cat_col_mag, cat_col_mag_err=cat_col_mag_err,
+                                               cat_col_ra=cat_col_ra, cat_col_dec=cat_col_dec,
+                                               order=0, accept_flags=0x02, robust=True, scale_noise=True)
+
+            idx = ~tm['idx'] & (tm['zero']-tm['zero_model'] < -0.1)
+            tidx[tm['cidx'][idx]] = True
 
         # ..and keep only the ones inside the image
         tidx &= (cx >= 0) & (cx <= tmpl.shape[1] - 1)
