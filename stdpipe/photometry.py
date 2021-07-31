@@ -405,7 +405,7 @@ def get_intrinsic_scatter(y, yerr, min=0, max=None):
 
     return C.x[2]
 
-def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_mag, cat_magerr=None, cat_color=None, sr=3/3600, obj_x=None, obj_y=None, spatial_order=0, bg_order=None, threshold=5.0, niter=10, cat_saturation=None, max_intrinsic_rms=0, sn=None, verbose=False, robust=True, scale_noise=False):
+def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_mag, cat_magerr=None, cat_color=None, sr=3/3600, obj_x=None, obj_y=None, spatial_order=0, bg_order=None, threshold=5.0, niter=10, accept_flags=0, cat_saturation=None, max_intrinsic_rms=0, sn=None, verbose=False, robust=True, scale_noise=False):
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
@@ -413,8 +413,8 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
 
     oidx,cidx,dist = h.match(obj_ra, obj_dec, cat_ra, cat_dec, sr, maxmatch=0)
 
-    log(len(dist), 'initial matches between', len(obj_ra), 'objects and', len(cat_ra), 'catalogue stars, sr=', sr*3600, 'arcsec')
-    log('Median separation is', np.median(dist)*3600, 'arcsec')
+    log(len(dist), 'initial matches between', len(obj_ra), 'objects and', len(cat_ra), 'catalogue stars, sr =', sr*3600, 'arcsec')
+    log('Median separation is %.2f arcsec' % (np.median(dist)*3600))
 
     omag, omag_err = obj_mag[oidx], obj_magerr[oidx]
     oflags = obj_flags[oidx] if obj_flags is not None else np.zeros_like(omag, dtype=bool)
@@ -456,7 +456,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
     zero_err = np.hypot(omag_err, cmag_err)
     weights = 1.0/zero_err**2
 
-    idx0 = np.isfinite(omag) & np.isfinite(omag_err) & np.isfinite(cmag) & np.isfinite(cmag_err) & (oflags == 0) # initial mask
+    idx0 = np.isfinite(omag) & np.isfinite(omag_err) & np.isfinite(cmag) & np.isfinite(cmag_err) & ((oflags & ~accept_flags) == 0) # initial mask
     if cat_color is not None:
         idx0 &= np.isfinite(ccolor)
     if cat_saturation is not None:
@@ -531,7 +531,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
         if bg_order is not None:
             X += make_series(order=bg_order)
         color_term = C.params[len(X):][0]
-        log('Color term is', color_term)
+        log('Color term is %.2f' % color_term)
     else:
         color_term = None
 
