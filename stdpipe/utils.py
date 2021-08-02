@@ -65,10 +65,16 @@ def download(url, filename=None, overwrite=False, verbose=False):
 
     length = 0
 
-    with open(filename, 'wb') as file, tqdm(desc=desc, total=size, unit='iB', unit_scale=True, unit_divisor=1024) as progress:
+    if verbose:
+        progress = tqdm(desc=desc, total=size, unit='iB', unit_scale=True, unit_divisor=1024)
+    else:
+        progress = None
+
+    with open(filename, 'wb') as file, progress as progress:
         for chunk in response.iter_content(chunk_size=1024):
             chunksize = file.write(chunk)
-            progress.update(chunksize)
+            if progress is not None:
+                progress.update(chunksize)
             length += len(chunk)
 
     if size and length < size:
@@ -236,3 +242,13 @@ def rebin_image(image, nx=1, ny=None):
     shape = (image.shape[0]//ny, ny,
              image.shape[1]//nx, nx)
     return image.reshape(shape).mean(-1).mean(1)
+
+# Simple writing of some data to file
+def file_write(filename, contents=None, append=False):
+    """
+    Simple utility for writing some contents into file.
+    """
+
+    with open(filename, 'a' if append else 'w') as f:
+        if contents is not None:
+            f.write(contents)

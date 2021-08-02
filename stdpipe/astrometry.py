@@ -17,21 +17,24 @@ from scipy.stats import chi2
 
 from . import utils
 
-def get_frame_center(filename=None, header=None, wcs=None, width=None, height=None):
+def get_frame_center(filename=None, header=None, wcs=None, width=None, height=None, shape=None):
     """
     Returns image center RA, Dec, and radius in degrees.
     Accepts either filename, or FITS header, or WCS structure
     """
     if not wcs:
         if header:
-            wcs = WCS(header=header)
+            wcs = WCS(header)
         elif filename:
             header = fits.getheader(filename, -1)
-            wcs = WCS(header=header)
+            wcs = WCS(header)
 
-    if (not width or not height) and header:
-        width = header['NAXIS1']
-        height = header['NAXIS2']
+    if width is None or height is None:
+        if header is not None:
+            width = header['NAXIS1']
+            height = header['NAXIS2']
+        elif shape is not None:
+            height,width = shape
 
     [ra1],[dec1] = wcs.all_pix2world([0], [0], 1)
     [ra0],[dec0] = wcs.all_pix2world([width/2], [height/2], 1)
