@@ -85,73 +85,134 @@ def get_objects_center(obj, col_ra='ra', col_dec='dec'):
 
     return ra0, dec0, sr0
 
-def blind_match_objects(obj, order=4, extra="", update=True, sn=20, _tmpdir=None, verbose=False):
+def blind_match_objects(obj, order=2, update=False, sn=20, get_header=False,
+                        width=None, height=None,
+                        center_ra=None, center_dec=None, radius=None,
+                        scale_lower=None, scale_upper=None, scale_units='arcsecperpix',
+                        config=None, extra={}, _workdir=None, _tmpdir=None, verbose=False):
+    '''
+    Thin wrapper for blind plate solving using local Astrometry.Net and a list of detected objects.
+    '''
+
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
-    wcs = None
+    # Find the binary
     binname = None
-    ext = 0
+    for path in ['.', '/usr/bin', '/usr/local/bin', '/opt/local/bin', '/usr/astrometry/bin', '/usr/local/astrometry/bin', '/opt/local/astrometry/bin']:
+        for exe in ['solve-field']:
+            if os.path.isfile(os.path.join(path, exe)):
+                binname = os.path.join(path, exe)
+                break
 
-    for path in ['.', '/usr/local', '/opt/local']:
-        if os.path.isfile(os.path.join(path, 'astrometry', 'bin', 'solve-field')):
-            binname = os.path.join(path, 'astrometry', 'bin', 'solve-field')
-            break
+    if binname is None:
+        log("Can't find Astrometry.Net binary")
+        return None
 
-    if binname:
-        dirname = tempfile.mkdtemp(prefix='astrometry', dir=_tmpdir)
+    # Sort objects according to decreasing flux
+    aidx = np.argsort(-obj['flux'])
 
-        idx = obj['magerr']<1/sn
-        columns = [fits.Column(name='XIMAGE', format='1D', array=obj['x'][idx]+1),
-                   fits.Column(name='YIMAGE', format='1D', array=obj['y'][idx]+1),
-                   fits.Column(name='FLUX', format='1D', array=obj['flux'][idx])]
-        tbhdu = fits.BinTableHDU.from_columns(columns)
-        filename = os.path.join(dirname, 'list.fits')
-        tbhdu.writeto(filename, overwrite=True)
-        extra += " --x-column XIMAGE --y-column YIMAGE --sort-column FLUX --width %d --height %d" % (np.ceil(max(obj['x']+1)), np.ceil(max(obj['y']+1)))
+    # Filter out least-significant detections, if SN limit is specified
+    if sn is not None and sn > 0:
+        aidx = [_ for _ in aidx if obj['flux'][_]/obj['fluxerr'][_] > sn]
 
-        wcsname = os.path.split(filename)[-1]
-        tmpname = os.path.join(dirname, os.path.splitext(wcsname)[0] + '.tmp')
-        wcsname = os.path.join(dirname, os.path.splitext(wcsname)[0] + '.wcs')
+    if width is None:
+        width = int(np.max(obj['x']))
+    if height is None:
+        height = int(np.max(obj['y']))
 
-        command = "%s -D %s --no-verify --overwrite --no-plots -T %s %s" % (binname, dirname, extra, filename)
+    workdir = _workdir if _workdir is not None else tempfile.mkdtemp(prefix='astrometry', dir=_tmpdir)
 
-        log('Running Astrometry.Net first iteration like that:')
+    columns = [fits.Column(name='XIMAGE', format='1D', array=obj['x'][aidx] + 1),
+               fits.Column(name='YIMAGE', format='1D', array=obj['y'][aidx] + 1),
+               fits.Column(name='FLUX', format='1D', array=obj['flux'][aidx])]
+    tbhdu = fits.BinTableHDU.from_columns(columns)
+    objname = os.path.join(workdir, 'list.fits')
+    tbhdu.writeto(objname, overwrite=True)
+
+    tmpname = os.path.join(workdir, 'list.tmp')
+    wcsname = os.path.join(workdir, 'list.wcs')
+
+    opts = {
+        'x-column': 'XIMAGE',
+        'y-column': 'YIMAGE',
+        'sort-column': 'FLUX',
+        'width': width,
+        'height': height,
+        #
+        'overwrite': True,
+        'no-plots': True,
+        'dir': workdir,
+        'verbose': True if verbose else False,
+    }
+
+    if config is not None:
+        opts['config'] = config
+
+    if order is not None:
+        opts['tweak-order'] = order
+    else:
+        opts['no-tweak'] = True
+
+    if scale_lower is not None:
+        opts['scale-low'] = scale_lower
+    if scale_upper is not None:
+        opts['scale-high'] = scale_upper
+    if scale_units is not None:
+        opts['scale-units'] = scale_units
+
+    if center_ra is not None:
+        opts['ra'] = center_ra
+    if center_dec is not None:
+        opts['dec'] = center_dec
+    if radius is not None:
+        opts['radius'] = radius
+
+    opts.update(extra)
+
+    # Build the command line
+    command = binname + ' ' + shlex.quote(objname) + ' ' + utils.format_long_opts(opts)
+    if not verbose:
+        command += ' > /dev/null 2>/dev/null'
+    log('Will run first iteration of Astrometry.Net like that:')
+    log(command)
+
+    res = os.system(command)
+
+    if res == 0 and os.path.exists(wcsname):
+        log('Successfully run first iteration')
+        shutil.move(wcsname, tmpname)
+
+        opts['verify'] = tmpname
+        command = binname + ' ' + shlex.quote(objname) + ' ' + utils.format_long_opts(opts)
+        if not verbose:
+            command += ' > /dev/null 2>/dev/null'
+        log('Will run second iteration of Astrometry.Net like that:')
         log(command)
 
-        os.system(command)
+        res = os.system(command)
 
-        if order:
-            order_str = "-t %d" % order
+        if res == 0 and os.path.exists(wcsname):
+            log('Successfully run second iteration')
+            header = fits.getheader(wcsname)
+            wcs = WCS(header)
+
+            ra0,dec0,sr0 = get_frame_center(wcs=wcs, width=width, height=height)
+            pixscale = get_pixscale(wcs=wcs)
+
+            log('Got WCS solution with center at %.4f %.4f radius %.2f deg and pixel scale %.2f arcsec/pix' % (ra0, dec0, sr0, pixscale*3600))
+
+            if update and wcs:
+                obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
+
         else:
-            order_str = "-T"
-
-        if os.path.isfile(wcsname):
-            shutil.move(wcsname, tmpname)
-            command = "%s -D %s --overwrite --no-plots %s %s --verify %s %s" % (binname, dirname, order_str, extra, tmpname, filename)
-
-            log('Running Astrometry.Net second iteration like that:')
-            log(command)
-
-            os.system(command)
-
-            if os.path.isfile(wcsname):
-                header = fits.getheader(wcsname)
-                wcs = WCS(header)
-
-                if update and wcs:
-                    obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
-
-                log('Second iteration succeeded')
-            else:
-                log('Second iteration failed')
-        else:
-            log('First iteration failed')
-
-        shutil.rmtree(dirname)
+            log('Error %s running Astrometry.Net' % res)
 
     else:
-        log("Astrometry.Net binary not found")
+        log('Error %s running Astrometry.Net' % res)
+
+    if _workdir is None:
+        shutil.rmtree(workdir)
 
     return wcs
 

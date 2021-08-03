@@ -177,6 +177,31 @@ def format_astromatic_opts(opts):
 
     return result
 
+def format_long_opts(opts):
+    """
+    Auxiliary function to format dictionary of options into a command-line string.
+    Boolean options are added when True, strings are quoted when necessary
+    """
+    result = []
+
+    for key in opts.keys():
+        if opts[key] is None:
+            pass
+        elif type(opts[key]) == bool:
+            if opts[key]:
+                result.append('--%s' % key)
+        else:
+            value = opts[key]
+
+            if type(value) == str:
+                value = shlex.quote(value)
+
+            result.append('--%s %s' % (key, value))
+
+    result = ' '.join(result)
+
+    return result
+
 # Parsing of DATASEC-like keywords
 def parse_det(string):
     """
