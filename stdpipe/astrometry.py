@@ -179,6 +179,7 @@ def blind_match_objects(obj, order=2, update=False, sn=20, get_header=False,
 
     res = os.system(command)
 
+    wcs = None
     if res == 0 and os.path.exists(wcsname):
         log('Successfully run first iteration')
         shutil.move(wcsname, tmpname)
