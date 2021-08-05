@@ -655,12 +655,12 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
                 # Mean, Median and Std, all sigma-clipped
                 bg_stats = sigma_clipped_stats(bg_vals, mask=mask_vals, stdfunc=mad_std)
                 # SExtractor-like background estimation: 3*median - 2*mean
-                bg_est = 3.0*bg_stats[1] - 2.0*bg_stats[0]
+                local_bg_est = 3.0*bg_stats[1] - 2.0*bg_stats[0]
 
-                row['flux'] -= bg_est * area['aperture_sum']
+                row['flux'] -= local_bg_est * area['aperture_sum']
                 # Rough estimation of bg_est error as rms/sqrt(N)
                 row['fluxerr'] = np.hypot(row['fluxerr'], bg_stats[2] / np.sqrt(np.sum(mask_vals == 0)) * area['aperture_sum'] )
-                row['bg_local'] = bg_est
+                row['bg_local'] = local_bg_est
             else:
                 row['flags'] |= 0x400 # Flag the values where local bg estimation failed
 
