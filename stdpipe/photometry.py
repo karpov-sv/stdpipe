@@ -5,7 +5,7 @@ import numpy as np
 
 from astropy.wcs import WCS
 from astropy.io import fits
-from astropy.stats import mad_std
+from astropy.stats import mad_std, sigma_clipped_stats
 from astropy.table import Table
 
 import warnings
@@ -159,7 +159,7 @@ def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.
 
     return obj
 
-def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, sort=True, reject_negative=True, checkimages=[], extra_params=[], extra={}, psf=None, catfile=None, _workdir=None, _tmpdir=None, verbose=False):
+def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, bg_size=None, sort=True, reject_negative=True, checkimages=[], extra_params=[], extra={}, psf=None, catfile=None, _workdir=None, _tmpdir=None, verbose=False):
     '''
     Thin wrapper around SExtractor binary.
 
@@ -206,6 +206,9 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
         'MASK_TYPE': 'NONE', # both 'CORRECT' and 'BLANK' seem to cause systematics?
         'SATUR_LEVEL': (np.nanmax(image) + 1) if mask is None else (np.nanmax(image[~mask]) + 1), # Saturation should be handled in external mask
     }
+
+    if bg_size is not None:
+        opts['BACK_SIZE'] = bg_size
 
     if mask is None:
         mask = np.zeros_like(image, dtype=np.bool)
@@ -418,8 +421,8 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
 
     omag, omag_err = obj_mag[oidx], obj_magerr[oidx]
     oflags = obj_flags[oidx] if obj_flags is not None else np.zeros_like(omag, dtype=bool)
-    cmag = cat_mag[cidx].filled(fill_value=np.nan)
-    cmag_err = cat_magerr[cidx].filled(fill_value=np.nan) if cat_magerr is not None else np.zeros_like(cmag)
+    cmag = np.ma.filled(cat_mag[cidx], fill_value=np.nan)
+    cmag_err = np.ma.filled(cat_magerr[cidx], fill_value=np.nan) if cat_magerr is not None else np.zeros_like(cmag)
 
     if obj_x is not None and obj_y is not None:
         x0, y0 = np.mean(obj_x[oidx]), np.mean(obj_y[oidx])
@@ -445,7 +448,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
         log('Using weighted fitting')
 
     if cat_color is not None:
-        ccolor = cat_color[cidx].filled(fill_value=np.nan)
+        ccolor = np.ma.filled(cat_color[cidx], fill_value=np.nan)
         X += make_series(ccolor, x, y, order=0)
         log('Using color term')
     else:
@@ -463,6 +466,8 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
         idx0 &= cmag >= cat_saturation
     if sn is not None:
         idx0 &= omag_err < 1/sn
+
+    log('%d objects pass initial quality cuts' % np.sum(idx0))
 
     idx = idx0.copy()
 
@@ -560,7 +565,7 @@ def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kw
     else:
         return back
 
-def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=None, err=None, gain=None, bg_size=256, sn=None, get_bg=False, verbose=False):
+def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=None, err=None, gain=None, bg_size=64, sn=None, get_bg=False, verbose=False):
     '''
     Aperture photometry at the positions of already detected objects.
 
@@ -579,15 +584,15 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
 
     # Sanitize the image and make its copy to safely operate on it
     image1 = image.astype(np.double)
-    mask0 = ~np.isfinite(image1)
-    image1[mask0] = np.median(image1[~mask0])
+    mask0 = ~np.isfinite(image1) # Minimal mask
+    # image1[mask0] = np.median(image1[~mask0])
 
     if bg is None or err is None or get_bg:
         log('Estimating global background with %dx%d mesh' % (bg_size, bg_size))
         try:
-            bg_est = photutils.Background2D(image, bg_size, mask=mask, exclude_percentile=10)
+            bg_est = photutils.Background2D(image1, bg_size, mask=mask|mask0, exclude_percentile=10)
         except ValueError:
-            bg_est = photutils.Background2D(image, bg_size, mask=mask, exclude_percentile=30)
+            bg_est = photutils.Background2D(image1, bg_size, mask=mask|mask0, exclude_percentile=30)
 
     if bg is None:
         log('Subtracting global background: median %.1f rms %.2f' % (np.median(bg_est.background), np.std(bg_est.background)))
@@ -595,6 +600,8 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
     else:
         log('Subtracting user-provided background: median %.1f rms %.2f' % (np.median(bg), np.std(bg)))
         image1 -= bg
+
+    image1[mask0] = 0
 
     if err is None:
         log('Using global background noise map: median %.1f rms %.2f + gain %.1f' % (np.median(bg_est.background_rms), np.std(bg_est.background_rms), gain if gain else np.inf))
@@ -612,7 +619,8 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
 
     positions = [(_['x'], _['y']) for _ in obj]
     apertures = photutils.CircularAperture(positions, r=aper)
-    res = photutils.aperture_photometry(image1, apertures, error=err, mask=mask)
+    # Use just a minimal mask here so that the flux from 'soft-masked' (e.g. saturated) pixels is still counted
+    res = photutils.aperture_photometry(image1, apertures, error=err, mask=mask0)
 
     obj['flux'] = res['aperture_sum']
     obj['fluxerr'] = res['aperture_sum_err']
@@ -623,26 +631,38 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
             obj['flags'] = 0
         for i,a in enumerate(apertures):
             am = a.to_mask(method='center')
-            vals = am.multiply(mask)
+            vals = am.multiply(mask|mask0)
             if np.any(vals):
                 obj['flags'][i] |= 0x200
 
+    # Local background
     if bkgann is not None and len(bkgann) == 2:
-        image_ones = np.ones_like(image1)
-
         if fwhm is not None and fwhm > 0:
             bkgann = [_*fwhm for _ in bkgann]
         log('Using local background annulus between %.1f and %.1f pixels' % (bkgann[0], bkgann[1]))
 
-        bgapertures = photutils.CircularAnnulus(positions, r_in=bkgann[0], r_out=bkgann[1])
-        res = photutils.aperture_photometry(image1, bgapertures, error=err, mask=mask)
-        res_bgarea = photutils.aperture_photometry(image_ones, bgapertures, mask=mask)
-        res_area = photutils.aperture_photometry(image_ones, apertures, mask=mask)
+        bg_apertures = photutils.CircularAnnulus(positions, r_in=10, r_out=15)
+        image_ones = np.ones_like(image1)
+        res_area = photutils.aperture_photometry(image_ones, apertures, mask=mask0)
 
-        obj['flux'] -= res_area['aperture_sum'] * res['aperture_sum'] / res_bgarea['aperture_sum']
-        obj['fluxerr'] = np.hypot(obj['fluxerr'], res_area['aperture_sum'] * res['aperture_sum_err'] / res_bgarea['aperture_sum'])
+        obj['bg_local'] = 0.0 # Dedicated column for local background on top of global estimation
 
-        obj['bg'] = res['aperture_sum'] / bgapertures.area
+        for row,area,bg_mask in zip(obj, res_area, bg_apertures.to_mask(method='center')):
+            bg_vals = bg_mask.multiply(image1)[bg_mask.data > 0]
+            mask_vals = bg_mask.multiply(mask|mask0)[bg_mask.data > 0]
+
+            if np.sum(mask_vals == 0) > 0:
+                # Mean, Median and Std, all sigma-clipped
+                bg_stats = sigma_clipped_stats(bg_vals, mask=mask_vals, stdfunc=mad_std)
+                # SExtractor-like background estimation: 3*median - 2*mean
+                bg_est = 3.0*bg_stats[1] - 2.0*bg_stats[0]
+
+                row['flux'] -= bg_est * area['aperture_sum']
+                # Rough estimation of bg_est error as rms/sqrt(N)
+                row['fluxerr'] = np.hypot(row['fluxerr'], bg_stats[2] / np.sqrt(np.sum(mask_vals == 0)) * area['aperture_sum'] )
+                row['bg_local'] = bg_est
+            else:
+                row['flags'] |= 0x400 # Flag the values where local bg estimation failed
 
     idx = obj['flux'] > 0
     for _ in ['mag', 'magerr']:
