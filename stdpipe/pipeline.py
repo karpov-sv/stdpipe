@@ -275,6 +275,38 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, bg_order=Non
 
     return m
 
+def make_random_stars(width=None, height=None, shape=None, nstars=100, minflux=1, maxflux=100000, gain=1, edge=0, wcs=None, verbose=False):
+    """
+    Generate a table of random stars.
+
+    Coordinates are distributed uniformly.
+    Fluxes are log-uniform between user-provided min and max values.
+
+    Returns: the catalogue of generated stars, with x, y and flux fields set.
+    """
+
+    # Simple wrapper around print for logging in verbose mode only
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+
+    if (width is None or height is None) and shape is not None:
+        height,width = shape
+
+    cat = {
+        'x': np.random.uniform(edge, width - 1 - edge, nstars),
+        'y': np.random.uniform(edge, height - edge, nstars),
+        'flux': 10**np.random.uniform(np.log10(minflux), np.log10(maxflux), nstars)
+    }
+    cat = Table(cat)
+
+    if wcs is not None and wcs.celestial:
+        cat['ra'], cat['dec'] = wcs.all_pix2world(cat['x'], cat['y'], 0)
+    else:
+        cat['ra'], cat['dec'] = np.nan, np.nan
+
+    cat['mag'] = -2.5*np.log10(cat['flux'])
+
+    return cat
+
 def place_random_stars(image, psf_model, nstars=100, minflux=1, maxflux=100000, gain=1, saturation=65535, edge=0, wcs=None, verbose=False):
     """
     Randomly place artificial stars into the image.
@@ -287,19 +319,8 @@ def place_random_stars(image, psf_model, nstars=100, minflux=1, maxflux=100000, 
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
-    cat = {
-        'x': np.random.uniform(edge, image.shape[1] - 1 - edge, nstars),
-        'y': np.random.uniform(edge, image.shape[0] - 1 - edge, nstars),
-        'flux': 10**np.random.uniform(np.log10(minflux), np.log10(maxflux), nstars)
-    }
-    cat = Table(cat)
-
-    if wcs is not None and wcs.celestial:
-        cat['ra'], cat['dec'] = wcs.all_pix2world(cat['x'], cat['y'], 0)
-    else:
-        cat['ra'], cat['dec'] = np.nan, np.nan
-
-    cat['mag'] = -2.5*np.log10(cat['flux'])
+    cat = make_random_stars(shape=image.shape, nstars=nstars, minflux=minflux, maxflux=maxflux,
+                            gain=gain, edge=edge, wcs=wcs, verbose=verbose)
 
     for _ in cat:
         psf.place_psf_stamp(image, psf_model, _['x'], _['y'], flux=_['flux'], gain=gain)
