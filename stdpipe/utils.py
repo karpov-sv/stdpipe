@@ -70,12 +70,15 @@ def download(url, filename=None, overwrite=False, verbose=False):
     else:
         progress = None
 
-    with open(filename, 'wb') as file, progress as progress:
+    with open(filename, 'wb') as file:
         for chunk in response.iter_content(chunk_size=1024):
             chunksize = file.write(chunk)
             if progress is not None:
                 progress.update(chunksize)
-            length += len(chunk)
+            length += chunksize # len(chunk)
+
+    if progress is not None:
+        progress.close()
 
     if size and length < size:
         log('Downloaded %d bytes, was expecting %d' % (length, size))

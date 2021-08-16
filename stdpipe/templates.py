@@ -256,7 +256,7 @@ def find_ps1_skycells(ra, dec, sr, band='r', ext='image', cell_radius=0.3, fullp
         # Get just the file name
         return ['rings.v3.skycell.%04d.%03d.stk.%s.unconv%s.fits' % (_['projectionID'], _['skyCellID'], band, '.' + ext if ext != 'image' else '') for _ in __skycells[idx]]
 
-def get_ps1_skycells(ra0, dec0, sr0, band='r', ext='image', normalize=True, _cachedir=None, _tmpdir=None, verbose=False):
+def get_ps1_skycells(ra0, dec0, sr0, band='r', ext='image', normalize=True, overwrite=False, _cachedir=None, _tmpdir=None, verbose=False):
     """
     Get the list of filenames corresponding to skycells in the user-specified sky region.
     The cells are downloaded and stored to the specified cache location.
@@ -279,6 +279,12 @@ def get_ps1_skycells(ra0, dec0, sr0, band='r', ext='image', normalize=True, _cac
         _cachedir = os.path.join(_tmpdir, 'ps1')
         log('Cache location not specified, falling back to %s' % _cachedir)
 
+    # Ensure the cache dir exists
+    try:
+        os.makedirs(_cachedir)
+    except:
+        pass
+
     filenames = []
 
     cells = find_ps1_skycells(ra0, dec0, sr0, band=band, ext=ext, fullpath=True)
@@ -287,14 +293,14 @@ def get_ps1_skycells(ra0, dec0, sr0, band='r', ext='image', normalize=True, _cac
         cellname = os.path.basename(cell)
         filename = os.path.join(_cachedir, cellname)
 
-        if os.path.exists(filename):
+        if os.path.exists(filename) and not overwrite:
             log('%s already downloaded' % cellname)
         else:
             log('Downloading %s' % cellname)
 
             url = 'http://ps1images.stsci.edu/' + cell
 
-            if utils.download(url, filename, verbose=verbose):
+            if utils.download(url, filename, overwrite=overwrite, verbose=verbose):
                 if normalize:
                     normalize_ps1_skycell(filename, verbose=verbose)
 
@@ -331,6 +337,7 @@ def normalize_ps1_skycell(filename, outname=None, verbose=False):
 
             x = data * 0.4 * np.log(10)
             data = header['BOFFSET'] + header['BSOFTEN'] * (np.exp(x) - np.exp(-x))
+            header['FLXSCALE'] = 1/header['BSOFTEN'] # For proper co-adding in SWarp
 
             for _ in ['BSOFTEN', 'BOFFSET', 'BLANK']:
                 header.remove(_, ignore_missing=True)
@@ -461,7 +468,7 @@ def reproject_swarp(input=[], wcs=None, shape=None, width=None, height=None, hea
         'RESAMPLE_DIR': workdir,
         #
         'SUBTRACT_BACK': False, # Do not subtract the backgrounds
-        'FSCALASTRO_TYPE': 'NONE', # and not re-scale the images by default
+        'FSCALASTRO_TYPE': 'VARIABLE', # and not re-scale the images by default
     }
 
     if is_flags:
