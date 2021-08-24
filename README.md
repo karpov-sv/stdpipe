@@ -39,7 +39,7 @@
 
 You may either install it from GitHub directly as 
 ```
-python3 -m pip develop --user git+https://github.com/karpov-sv/stdpipe
+python3 -m pip install --user git+https://github.com/karpov-sv/stdpipe
 ```
 or clone the repository and then execute
 ```
