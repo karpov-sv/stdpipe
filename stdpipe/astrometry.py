@@ -89,7 +89,7 @@ def blind_match_objects(obj, order=2, update=False, sn=20, get_header=False,
                         width=None, height=None,
                         center_ra=None, center_dec=None, radius=None,
                         scale_lower=None, scale_upper=None, scale_units='arcsecperpix',
-                        config=None, extra={}, _workdir=None, _tmpdir=None, verbose=False):
+                        config=None, extra={}, _workdir=None, _tmpdir=None, _exe=None, verbose=False):
     '''
     Thin wrapper for blind plate solving using local Astrometry.Net and a list of detected objects.
     '''
@@ -99,15 +99,27 @@ def blind_match_objects(obj, order=2, update=False, sn=20, get_header=False,
 
     # Find the binary
     binname = None
-    for path in ['.', '/usr/bin', '/usr/local/bin', '/opt/local/bin', '/usr/astrometry/bin', '/usr/local/astrometry/bin', '/opt/local/astrometry/bin']:
-        for exe in ['solve-field']:
-            if os.path.isfile(os.path.join(path, exe)):
-                binname = os.path.join(path, exe)
-                break
+
+    if _exe is not None:
+        # Check user-provided binary path, and fail if not found
+        if os.path.isfile(_exe):
+            binname = _exe
+    else:
+        # Find it in standard paths - does it even go there on any system?..
+        binname = shutil.which('solve-field')
+
+        if binname is None:
+            for path in ['.', '/usr/bin', '/usr/local/bin', '/opt/local/bin', '/usr/astrometry/bin', '/usr/local/astrometry/bin', '/opt/local/astrometry/bin']:
+                for exe in ['solve-field']:
+                    if os.path.isfile(os.path.join(path, exe)):
+                        binname = os.path.join(path, exe)
+                        break
 
     if binname is None:
         log("Can't find Astrometry.Net binary")
         return None
+    # else:
+    #     log("Using Astrometry.Net binary at", binname)
 
     # Sort objects according to decreasing flux
     aidx = np.argsort(-obj['flux'])
@@ -427,7 +439,7 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
                      cat_col_mag='rmag', cat_col_mag_err='e_rmag',
                      cat_mag_lim=99, sn=None, extra={},
                      get_header=False, update=False,
-                     _workdir=None, _tmpdir=None, verbose=False):
+                     _workdir=None, _tmpdir=None, _exe=None, verbose=False):
     """
     Wrapper for running SCAMP on user-provided object list and catalogue
     """
@@ -437,15 +449,23 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
 
     # Find the binary
     binname = None
-    for path in ['.', '/usr/bin', '/usr/local/bin', '/opt/local/bin']:
+
+    if _exe is not None:
+        # Check user-provided binary path, and fail if not found
+        if os.path.isfile(_exe):
+            binname = _exe
+    else:
+        # Find SExtractor binary in common paths
         for exe in ['scamp']:
-            if os.path.isfile(os.path.join(path, exe)):
-                binname = os.path.join(path, exe)
+            binname = shutil.which(exe)
+            if binname is not None:
                 break
 
     if binname is None:
         log("Can't find SCAMP binary")
         return None
+    # else:
+    #     log("Using SCAMP binary at", binname)
 
     workdir = _workdir if _workdir is not None else tempfile.mkdtemp(prefix='scamp', dir=_tmpdir)
 

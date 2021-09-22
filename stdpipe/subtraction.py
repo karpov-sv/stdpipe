@@ -14,9 +14,29 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, templ
                  image_gain=None, template_gain=1000, rel_r=3, rel_rss=4,
                  obj=None,
                  get_convolved=False, get_scaled=False, get_noise=False, get_kernel=False, get_header=False,
-                 _tmpdir=None, _workdir=None, verbose=False):
+                 _tmpdir=None, _workdir=None, _exe=None, verbose=False):
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+
+    # Find the binary
+    binname = None
+
+    if _exe is not None:
+        # Check user-provided binary path, and fail if not found
+        if os.path.isfile(_exe):
+            binname = _exe
+    else:
+        # Find HOTPANTS binary in common paths
+        for exe in ['hotpants']:
+            binname = shutil.which(exe)
+            if binname is not None:
+                break
+
+    if binname is None:
+        log("Can't find HOTPANTS binary")
+        return None
+    # else:
+    #     log("Using HOTPANTS binary at", binname)
 
     if mask is None:
         mask = ~np.isfinite(image)
@@ -186,8 +206,7 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, templ
         params['ssf'] = xyname
 
     # Build command line
-    command = ["hotpants"]
-    # command = ["/home/karpov/tmp/hotpants/hotpants"]
+    command = [binname]
 
     for key in params.keys():
         if params[key] is None:

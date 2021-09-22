@@ -159,7 +159,7 @@ def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.
 
     return obj
 
-def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, bg_size=None, sort=True, reject_negative=True, checkimages=[], extra_params=[], extra={}, psf=None, catfile=None, _workdir=None, _tmpdir=None, verbose=False):
+def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, bg_size=None, sort=True, reject_negative=True, checkimages=[], extra_params=[], extra={}, psf=None, catfile=None, _workdir=None, _tmpdir=None, _exe=None, verbose=False):
     '''
     Thin wrapper around SExtractor binary.
 
@@ -177,15 +177,23 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
 
     # Find the binary
     binname = None
-    for path in ['.', '/usr/bin', '/usr/local/bin', '/opt/local/bin']:
+
+    if _exe is not None:
+        # Check user-provided binary path, and fail if not found
+        if os.path.isfile(_exe):
+            binname = _exe
+    else:
+        # Find SExtractor binary in common paths
         for exe in ['sex', 'sextractor', 'source-extractor']:
-            if os.path.isfile(os.path.join(path, exe)):
-                binname = os.path.join(path, exe)
+            binname = shutil.which(exe)
+            if binname is not None:
                 break
 
     if binname is None:
         log("Can't find SExtractor binary")
         return None
+    # else:
+    #     log("Using SExtractor binary at", binname)
 
     workdir = _workdir if _workdir is not None else tempfile.mkdtemp(prefix='sex', dir=_tmpdir)
     obj = None

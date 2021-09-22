@@ -390,7 +390,7 @@ def get_ps1_image_and_mask(band='r', **kwargs):
 # Image re-projection and mosaicking code
 def reproject_swarp(input=[], wcs=None, shape=None, width=None, height=None, header=None, extra={},
                     is_flags=False, use_nans=True, get_weights=False,
-                    _workdir=None, _tmpdir=None, verbose=False):
+                    _workdir=None, _tmpdir=None, _exe=None, verbose=False):
     """
     Wrapper for running SWarp for re-projecting and mosaicking of images onto target WCS grid.
 
@@ -408,15 +408,23 @@ def reproject_swarp(input=[], wcs=None, shape=None, width=None, height=None, hea
 
     # Find the binary
     binname = None
-    for path in ['.', '/usr/bin', '/usr/local/bin', '/opt/local/bin']:
+
+    if _exe is not None:
+        # Check user-provided binary path, and fail if not found
+        if os.path.isfile(_exe):
+            binname = _exe
+    else:
+        # Find SWarp binary in common paths
         for exe in ['swarp']:
-            if os.path.isfile(os.path.join(path, exe)):
-                binname = os.path.join(path, exe)
+            binname = shutil.which(exe)
+            if binname is not None:
                 break
 
     if binname is None:
         log("Can't find SWarp binary")
         return None
+    # else:
+    #     log("Using SWarp binary at", binname)
 
     if (width is None or height is None) and shape is not None:
         height,width = shape
