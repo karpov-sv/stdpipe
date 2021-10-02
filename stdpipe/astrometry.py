@@ -482,9 +482,14 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
         log("Can't operate without initial WCS")
         return None
 
+    # Dummy config filename, to prevent loading from current dir
+    confname = os.path.join(workdir, 'empty.conf')
+    utils.file_write(confname)
+
     xmlname = os.path.join(workdir, 'scamp.xml')
 
     opts = {
+        'c': confname,
         'VERBOSE_TYPE': 'QUIET',
         'SOLVE_PHOTOM': 'N',
         'CHECKPLOT_TYPE': 'NONE',

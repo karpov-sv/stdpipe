@@ -50,7 +50,12 @@ def run_psfex(image, mask=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, minarea=5,
     catname = os.path.join(workdir, 'out.cat')
     psfname = os.path.join(workdir, 'out.psf')
 
+    # Dummy config filename, to prevent loading from current dir
+    confname = os.path.join(workdir, 'empty.conf')
+    utils.file_write(confname)
+
     opts = {
+        'c': confname,
         'VERBOSE_TYPE': 'QUIET',
         'CHECKPLOT_TYPE': 'NONE',
         'CHECKIMAGE_TYPE': 'NONE',

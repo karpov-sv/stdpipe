@@ -205,7 +205,12 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
         imagename = os.path.join(workdir, 'image.fits')
         fits.writeto(imagename, image, header, overwrite=True)
 
+    # Dummy config filename, to prevent loading from current dir
+    confname = os.path.join(workdir, 'empty.conf')
+    utils.file_write(confname)
+
     opts = {
+        'c': confname,
         'VERBOSE_TYPE': 'QUIET',
         'DETECT_MINAREA': minarea,
         'GAIN': gain,
@@ -465,7 +470,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
     X = np.vstack(X).T
     zero = cmag - omag # We will build a model for this definition of zero point
     zero_err = np.hypot(omag_err, cmag_err)
-    weights = 1.0/zero_err**2
+    # weights = 1.0/zero_err**2
 
     idx0 = np.isfinite(omag) & np.isfinite(omag_err) & np.isfinite(cmag) & np.isfinite(cmag_err) & ((oflags & ~accept_flags) == 0) # initial mask
     if cat_color is not None:
@@ -479,6 +484,10 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
 
     idx = idx0.copy()
 
+    intrinsic_rms = 0
+    scale_err = 1
+    total_err = zero_err
+
     for iter in range(niter):
         if np.sum(idx) < 3:
             log("Fit failed - %d objects remaining" % np.sum(idx))
@@ -486,41 +495,37 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
 
         if robust:
             # Rescale the arguments with weights
-            C = sm.RLM(zero[idx]/zero_err[idx], (X[idx].T/zero_err[idx]).T).fit()
+            C = sm.RLM(zero[idx]/total_err[idx], (X[idx].T/total_err[idx]).T).fit()
         else:
-            C = sm.WLS(zero[idx], X[idx], weights=weights[idx]).fit()
+            C = sm.WLS(zero[idx], X[idx], weights=1/total_err[idx]**2).fit()
 
         zero_model = np.sum(X*C.params, axis=1)
         zero_model_err = np.sqrt(C.cov_params(X).diagonal())
 
+        intrinsic_rms = get_intrinsic_scatter((zero-zero_model)[idx], total_err[idx], max=max_intrinsic_rms) if max_intrinsic_rms > 0 else 0
+
+        scale_err = 1 if not scale_noise else np.sqrt(C.scale) # rms
+        total_err = np.hypot(zero_err*scale_err, intrinsic_rms)
+
         if threshold:
-            rms = mad_std(((zero - zero_model)/zero_err)[idx])
-            intrinsic_rms = get_intrinsic_scatter((zero-zero_model)[idx], zero_err[idx], max=max_intrinsic_rms)
+            idx1 = np.abs((zero - zero_model)/total_err)[idx] < threshold
+        else:
+            idx1 = np.ones_like(idx[idx])
 
-            scale = 1 if not scale_noise else rms
+        log('Iteration', iter, ':', np.sum(idx), '/', len(idx), '- rms', '%.2f' % np.std((zero - zero_model)[idx0]), '%.2f' % np.std((zero - zero_model)[idx]), '- normed', '%.2f' % np.std((zero - zero_model)[idx]/zero_err[idx]), '%.2f' % np.std((zero - zero_model)[idx]/total_err[idx]), '- scale %.2f %.2f' % (np.sqrt(C.scale), scale_err), '- rms', '%.2f' % intrinsic_rms)
 
-            if robust:
-                idx1 = np.abs((zero - zero_model)/np.hypot(zero_err, intrinsic_rms))[idx] < threshold*scale
-            else:
-                idx1 = np.abs((zero - zero_model)/np.hypot(zero_err, intrinsic_rms))[idx] < threshold*scale
-
-            if not np.sum(~idx1):
-                log('Fitting converged')
-                break
-            else:
-                idx[idx] &= idx1
-
-        log('Iteration', iter, ':', np.sum(idx), '/', len(idx), '-', np.std((zero - zero_model)[idx0]), np.std((zero - zero_model)[idx]), '-', np.std((zero - zero_model)[idx]/zero_err[idx]))
-
-        if not threshold:
+        if not np.sum(~idx1):# and new_intrinsic_rms <= intrinsic_rms:
+            log('Fitting converged')
             break
+        else:
+            idx[idx] &= idx1
 
     log(np.sum(idx), 'good matches')
     if max_intrinsic_rms > 0:
         log('Intrinsic scatter is %.2f' % intrinsic_rms)
 
     # Export the model
-    def zero_fn(xx, yy, mag=None, get_err=False):
+    def zero_fn(xx, yy, mag=None, get_err=False, add_intrinsic_rms=False):
         if xx is not None and yy is not None:
             x, y = xx - x0, yy - y0
         else:
@@ -535,7 +540,10 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
 
         if get_err:
             # It follows the implementation from https://github.com/statsmodels/statsmodels/blob/081fc6e85868308aa7489ae1b23f6e72f5662799/statsmodels/base/model.py#L1383
-            return np.sqrt(np.dot(X, np.dot(C.cov_params()[0:X.shape[1],0:X.shape[1]], np.transpose(X))).diagonal())
+            err = np.sqrt(np.dot(X, np.dot(C.cov_params()[0:X.shape[1], 0:X.shape[1]], np.transpose(X))).diagonal())
+            if add_intrinsic_rms:
+                err = np.hypot(err, intrinsic_rms)
+            return err
         else:
             return np.sum(X*C.params[0:X.shape[1]], axis=1)
 
@@ -554,6 +562,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
             'color': ccolor, 'color_term': color_term,
             'zero': zero, 'zero_err': zero_err,
             'zero_model': zero_model, 'zero_model_err':zero_model_err, 'zero_fn': zero_fn,
+            'error_scale': np.sqrt(C.scale),
             'intrinsic_rms': intrinsic_rms,
             'obj_zero': zero_fn(obj_x, obj_y),
             'ox': ox, 'oy': oy, 'oflags': oflags,

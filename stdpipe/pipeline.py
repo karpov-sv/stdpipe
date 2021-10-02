@@ -259,8 +259,8 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, bg_order=Non
 
     if m:
         log('Photometric calibration finished successfully.')
-        if m['color_term']:
-            log('Color term is %.2f' % m['color_term'])
+        # if m['color_term']:
+        #     log('Color term is %.2f' % m['color_term'])
 
         m['cat_col_mag'] = cat_col_mag
         if cat_col_mag1 and cat_col_mag2:
