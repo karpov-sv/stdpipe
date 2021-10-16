@@ -352,7 +352,7 @@ def normalize_ps1_skycell(filename, outname=None, verbose=False):
 
 # PS1 higher level retrieval
 def get_ps1_image(band='r', ext='image', wcs=None, shape=None,
-                  width=None, height=None, header=None,
+                  width=None, height=None, header=None, extra={},
                   _cachedir=None, _tmpdir=None, verbose=False):
     """
     Load the images of specified type (image or mask) from PanSTARRS and re-project
@@ -376,7 +376,7 @@ def get_ps1_image(band='r', ext='image', wcs=None, shape=None,
         height = header['NAXIS2']
 
     coadd = reproject_swarp(cellnames, wcs=wcs, width=width, height=height,
-                            is_flags=(ext == 'mask'),
+                            is_flags=(ext == 'mask'), extra=extra,
                             _tmpdir=_tmpdir, verbose=verbose)
 
     return coadd
