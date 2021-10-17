@@ -26,6 +26,7 @@ setup(
     url='',
 
     install_requires=requirements,
-    packages=find_packages(),
-    include_package_data = True,
+    packages=['stdpipe'],
+    package_data={'stdpipe':['data/*']},
+    include_package_data=True,
 )
