@@ -35,24 +35,26 @@ def imshow(image, qq=None, show_colorbar=True, show_axis=True, stretch='linear',
         ax = plt.gca()
 
     image = image.astype(np.double)
+    good_idx = np.isfinite(image)
 
-    if qq is None and 'vmin' not in kwargs and 'vmax' not in kwargs:
-        # Sane defaults for quantiles if no manual limits provided
-        qq = [0.5, 99.5]
+    if np.sum(good_idx):
+        if qq is None and 'vmin' not in kwargs and 'vmax' not in kwargs:
+            # Sane defaults for quantiles if no manual limits provided
+            qq = [0.5, 99.5]
 
-    if qq is not None:
-        # Presente of qq quantiles overwrites vmin/vmax even if they are present
-        kwargs['vmin'],kwargs['vmax'] = np.percentile(image[np.isfinite(image)], qq)
+        if qq is not None:
+            # Presente of qq quantiles overwrites vmin/vmax even if they are present
+            kwargs['vmin'],kwargs['vmax'] = np.percentile(image[good_idx], qq)
 
-    if not 'interpolation' in kwargs:
-        # Rough heuristic to choose interpolation method based on image dimensions
-        if image.shape[0] < 300 and image.shape[1] < 300:
-            kwargs['interpolation'] = 'nearest'
-        else:
-            kwargs['interpolation'] = 'bicubic'
+        if not 'interpolation' in kwargs:
+            # Rough heuristic to choose interpolation method based on image dimensions
+            if image.shape[0] < 300 and image.shape[1] < 300:
+                kwargs['interpolation'] = 'nearest'
+            else:
+                kwargs['interpolation'] = 'bicubic'
 
-    if stretch and stretch != 'linear':
-        kwargs['norm'] = simple_norm(image, stretch, min_cut=kwargs.pop('vmin', None), max_cut=kwargs.pop('vmax', None))
+        if stretch and stretch != 'linear':
+            kwargs['norm'] = simple_norm(image, stretch, min_cut=kwargs.pop('vmin', None), max_cut=kwargs.pop('vmax', None))
 
     img = ax.imshow(image, **kwargs)
     if not show_axis:
