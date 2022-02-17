@@ -432,7 +432,8 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
     log(len(dist), 'initial matches between', len(obj_ra), 'objects and', len(cat_ra), 'catalogue stars, sr =', sr*3600, 'arcsec')
     log('Median separation is %.2f arcsec' % (np.median(dist)*3600))
 
-    omag, omag_err = obj_mag[oidx], obj_magerr[oidx]
+    omag = np.ma.filled(obj_mag[oidx], fill_value=np.nan)
+    omag_err = np.ma.filled(obj_magerr[oidx], fill_value=np.nan)
     oflags = obj_flags[oidx] if obj_flags is not None else np.zeros_like(omag, dtype=bool)
     cmag = np.ma.filled(cat_mag[cidx], fill_value=np.nan)
     cmag_err = np.ma.filled(cat_magerr[cidx], fill_value=np.nan) if cat_magerr is not None else np.zeros_like(cmag)
@@ -562,6 +563,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
             'color': ccolor, 'color_term': color_term,
             'zero': zero, 'zero_err': zero_err,
             'zero_model': zero_model, 'zero_model_err':zero_model_err, 'zero_fn': zero_fn,
+            'params': C.params,
             'error_scale': np.sqrt(C.scale),
             'intrinsic_rms': intrinsic_rms,
             'obj_zero': zero_fn(obj_x, obj_y),
