@@ -63,7 +63,7 @@ def get_cat_vizier(ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}, extra=[]
 
     # Augment catalogue with additional bandpasses
 
-    if catalog == 'ps1':
+    if catalog == 'ps1' or catalog == 'atlas':
         # Alternative PS1 transfromation from https://arxiv.org/pdf/1706.06147.pdf, Stetson, seems better with Landolt than official one
         cat['B'] = cat['gmag'] + 0.199 + 0.540*(cat['gmag'] - cat['rmag']) + 0.016*(cat['gmag'] - cat['rmag'])**2
         cat['V'] = cat['gmag'] - 0.020 - 0.498*(cat['gmag'] - cat['rmag']) - 0.008*(cat['gmag'] - cat['rmag'])**2
@@ -80,18 +80,6 @@ def get_cat_vizier(ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}, extra=[]
         cat['g_SDSS'] = cat['gmag'] + 0.01808 + 0.13595*(cat['gmag'] - cat['imag']) - 0.01941*(cat['gmag'] - cat['imag'])**2 + 0.00183*(cat['gmag'] - cat['imag'])**3
         cat['r_SDSS'] = cat['rmag'] + 0.01836 + 0.03577*(cat['gmag'] - cat['imag']) - 0.02612*(cat['gmag'] - cat['imag'])**2 + 0.00558*(cat['gmag'] - cat['imag'])**3
         cat['i_SDSS'] = cat['imag'] - 0.01170 + 0.00400*(cat['gmag'] - cat['imag']) - 0.00066*(cat['gmag'] - cat['imag'])**2 + 0.00058*(cat['gmag'] - cat['imag'])**3
-
-    elif catalog == 'atlas':
-        # Conversion of ATLAS-RefCat2 mags to Pan-STARRS ones, https://arxiv.org/pdf/1809.09157.pdf
-        gmag = cat['gmag'] - 0.009 - 0.061*(cat['gmag'] - cat['rmag'])
-        rmag = cat['rmag'] + 0.065 - 0.026*(cat['gmag'] - cat['rmag'])
-        imag = cat['imag'] - 0.015 - 0.068*(cat['rmag'] - cat['imag'])
-
-        # Alternative PS1 transfromation from https://arxiv.org/pdf/1706.06147.pdf, Stetson, seems better with Landolt than official one
-        cat['B'] = gmag + 0.199 + 0.540*(gmag - rmag) + 0.016*(gmag - rmag)**2
-        cat['V'] = gmag - 0.020 - 0.498*(gmag - rmag) - 0.008*(gmag - rmag)**2
-        cat['R'] = rmag - 0.163 - 0.086*(gmag - rmag) - 0.061*(gmag - rmag)**2
-        cat['I'] = imag - 0.387 - 0.123*(gmag - rmag) - 0.034*(gmag - rmag)**2
 
     elif catalog == 'gaiadr2':
         # My simple Gaia DR2 to Johnson conversion based on Stetson standards
