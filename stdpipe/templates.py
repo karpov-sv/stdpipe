@@ -8,6 +8,7 @@ import tempfile
 import shlex
 import time
 import shutil
+from requests.exceptions import HTTPError
 
 from urllib.parse import urlencode
 
@@ -96,9 +97,12 @@ def get_hips_image(hips, ra=None, dec=None, width=None, height=None, fov=None,
         return None,None
 
     url = 'http://alasky.u-strasbg.fr/hips-image-services/hips2fits?' + urlencode(params)
-
     t0 = time.time()
-    hdu = fits.open(url)
+    try:
+        hdu = fits.open(url)
+    except HTTPError:
+        log(f'HIPS file download failed')
+        return None,None        
     t1 = time.time()
 
     log('Downloaded HiPS image in %.2f s' % (t1 - t0))
