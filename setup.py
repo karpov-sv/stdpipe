@@ -15,6 +15,8 @@ requirements = [
     'photutils',
     'statsmodels',
     'esutil',
+    'tqdm',
+    'regions'
 ]
 
 setup(

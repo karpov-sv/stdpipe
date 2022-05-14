@@ -100,7 +100,7 @@ def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], show_colo
         ax.set_autoscale_on(False)
         ax.plot(x, y, 'b.', alpha=0.3)
 
-def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, mark_x=None, mark_y=None, title=None, additional_title=None, **kwargs):
+def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, mark_x=None, mark_y=None, mark_r=5.0, title=None, additional_title=None, **kwargs):
     curplot = 1
 
     nplots = len(planes)
@@ -109,7 +109,7 @@ def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, 
         fig = plt.figure(figsize=[nplots*4, 4+1.0], dpi=75, tight_layout=True)
 
     for name in planes:
-        if name in cutout:
+        if name in cutout and cutout[name] is not None:
             ax = fig.add_subplot(1, nplots, curplot)
             curplot += 1
 
@@ -125,7 +125,7 @@ def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, 
             ax.set_title(name.upper())
 
             if mark_x is not None and mark_y is not None:
-                ax.add_artist(Circle((mark_x, mark_y), 5.0, edgecolor='red', facecolor='none', ls='-', lw=2))
+                ax.add_artist(Circle((mark_x, mark_y), mark_r, edgecolor='red', facecolor='none', ls='-', lw=2))
 
             if curplot > nplots:
                 break

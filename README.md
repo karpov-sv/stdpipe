@@ -35,7 +35,7 @@
 
 # Installation
 
-*STDpipe* is available at https://gitlab.in2p3.fr/icare/stdpipe and is mirrored at https://github.com/karpov-sv/stdpipe
+*STDpipe* is available at https://github.com/karpov-sv/stdpipe and is mirrored at https://gitlab.in2p3.fr/icare/stdpipe
 
 You may either install it from GitHub directly as 
 ```

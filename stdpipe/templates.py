@@ -95,17 +95,28 @@ def get_hips_image(hips, ra=None, dec=None, width=None, height=None, fov=None,
     if width is None or height is None:
         log('Frame size is not provided')
         return None,None
+      
+    for baseurl in ['http://alasky.u-strasbg.fr/hips-image-services/hips2fits', 'http://alaskybis.u-strasbg.fr/hips-image-services/hips2fits']:
+        url = baseurl + '?' + urlencode(params)
 
-    url = 'http://alasky.u-strasbg.fr/hips-image-services/hips2fits?' + urlencode(params)
-    t0 = time.time()
-    try:
-        hdu = fits.open(url)
-    except HTTPError:
-        log(f'HIPS file download failed')
-        return None,None        
-    t1 = time.time()
+        try:
+            t0 = time.time()
+            hdu = fits.open(url)
+            t1 = time.time()
+            log('Downloaded HiPS image in %.2f s' % (t1 - t0))
+            break
+        except KeyboardInterrupt:
+            raise
+        except:
+            log('Failed downloading HiPS image from', url)
+            hdu = None
 
-    log('Downloaded HiPS image in %.2f s' % (t1 - t0))
+    if hdu is None:
+        log('Cannot download HiPS image!')
+        if get_header:
+            return None, None
+        else:
+            return None
 
     image = hdu[0].data.astype(np.double)
     header = hdu[0].header
@@ -357,7 +368,7 @@ def normalize_ps1_skycell(filename, outname=None, verbose=False):
 # PS1 higher level retrieval
 def get_ps1_image(band='r', ext='image', wcs=None, shape=None,
                   width=None, height=None, header=None, extra={},
-                  _cachedir=None, _tmpdir=None, verbose=False):
+                  _cachedir=None, _tmpdir=None, _workdir=None, verbose=False):
     """
     Load the images of specified type (image or mask) from PanSTARRS and re-project
     to requested WCS pixel grid.
@@ -381,7 +392,7 @@ def get_ps1_image(band='r', ext='image', wcs=None, shape=None,
 
     coadd = reproject_swarp(cellnames, wcs=wcs, width=width, height=height,
                             is_flags=(ext == 'mask'), extra=extra,
-                            _tmpdir=_tmpdir, verbose=verbose)
+                            _tmpdir=_tmpdir, _workdir=_workdir, verbose=verbose)
 
     return coadd
 
@@ -442,7 +453,18 @@ def reproject_swarp(input=[], wcs=None, shape=None, width=None, height=None, hea
     if wcs is not None and wcs.is_celestial:
         # Add WCS information to the header
         astrometry.clear_wcs(header)
-        header += wcs.to_header(relax=True)
+        whdr = wcs.to_header(relax=True)
+
+        # Here we will try to fix some common problems with WCS not supported by SWarp
+        # FIXME: handle SIP distortions!
+        if wcs.wcs.has_pc() and 'PC1_1' not in whdr:
+            pc = wcs.wcs.get_pc()
+            whdr['PC1_1'] = pc[0, 0]
+            whdr['PC1_2'] = pc[0, 1]
+            whdr['PC2_1'] = pc[1, 0]
+            whdr['PC2_2'] = pc[1, 1]
+
+        header += whdr
     else:
         wcs = WCS(header)
 
@@ -518,7 +540,7 @@ def reproject_swarp(input=[], wcs=None, shape=None, width=None, height=None, hea
     command = binname + ' ' + utils.format_astromatic_opts(opts) + ' ' + ' '.join([shlex.quote(_) for _ in filenames])
     if not verbose:
         command += ' > /dev/null 2>/dev/null'
-    log('Will run SCAMP like that:')
+    log('Will run SWarp like that:')
     log(command)
 
     # Run the command!
