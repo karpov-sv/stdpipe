@@ -8,7 +8,6 @@ import tempfile
 import shlex
 import time
 import shutil
-from requests.exceptions import HTTPError
 
 from urllib.parse import urlencode
 
@@ -95,7 +94,7 @@ def get_hips_image(hips, ra=None, dec=None, width=None, height=None, fov=None,
     if width is None or height is None:
         log('Frame size is not provided')
         return None,None
-      
+
     for baseurl in ['http://alasky.u-strasbg.fr/hips-image-services/hips2fits', 'http://alaskybis.u-strasbg.fr/hips-image-services/hips2fits']:
         url = baseurl + '?' + urlencode(params)
 
