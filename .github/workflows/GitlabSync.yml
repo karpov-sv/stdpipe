@@ -6,6 +6,7 @@ on:
 
 jobs:
   sync:
+    if: github.repository == 'karpov-sv/stdpipe'
     runs-on: ubuntu-latest
     name: Git Repo Sync
     steps:
