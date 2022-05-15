@@ -33,8 +33,6 @@ setup(
     extras_require={
         "example": [
             'astroscrappy',
-            'regions',
-            'tqdm',
         ],
     },    
 )
