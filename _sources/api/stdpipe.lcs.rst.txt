@@ -1,0 +1,4 @@
+.. automodule:: stdpipe.lcs
+   :members:
+   :undoc-members:
+   :show-inheritance:

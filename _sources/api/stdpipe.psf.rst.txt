@@ -1,0 +1,4 @@
+.. automodule:: stdpipe.psf
+   :members:
+   :undoc-members:
+   :show-inheritance:

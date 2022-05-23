@@ -1,0 +1,4 @@
+.. automodule:: stdpipe.plots
+   :members:
+   :undoc-members:
+   :show-inheritance:

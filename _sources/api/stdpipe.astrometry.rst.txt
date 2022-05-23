@@ -1,0 +1,4 @@
+.. automodule:: stdpipe.astrometry
+   :members:
+   :undoc-members:
+   :show-inheritance:

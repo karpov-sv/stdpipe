@@ -1,0 +1,4 @@
+.. automodule:: stdpipe.photometry
+   :members:
+   :undoc-members:
+   :show-inheritance:

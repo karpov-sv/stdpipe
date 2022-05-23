@@ -1,0 +1,29 @@
+stdpipe package
+===============
+
+Submodules
+----------
+
+.. toctree::
+   :maxdepth: 4
+
+   stdpipe.astrometry
+   stdpipe.catalogs
+   stdpipe.cutouts
+   stdpipe.db
+   stdpipe.lcs
+   stdpipe.photometry
+   stdpipe.pipeline
+   stdpipe.plots
+   stdpipe.psf
+   stdpipe.subtraction
+   stdpipe.templates
+   stdpipe.utils
+
+Module contents
+---------------
+
+.. automodule:: stdpipe
+   :members:
+   :undoc-members:
+   :show-inheritance:

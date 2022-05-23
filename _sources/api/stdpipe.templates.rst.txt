@@ -1,0 +1,4 @@
+.. automodule:: stdpipe.templates
+   :members:
+   :undoc-members:
+   :show-inheritance:

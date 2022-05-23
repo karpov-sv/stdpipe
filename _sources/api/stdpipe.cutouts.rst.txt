@@ -1,0 +1,4 @@
+.. automodule:: stdpipe.cutouts
+   :members:
+   :undoc-members:
+   :show-inheritance:
