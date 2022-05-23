@@ -67,23 +67,26 @@ master_doc = "index"
 
 # General information about the project.
 project = "stdpipe"
-copyright = "2020, The SkyPortal Team"
-author = "The SkyPortal Team"
+copyright = "2022, Sergey Karpov"
+author = "Sergey Karpov"
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
 # built documents.
 #
 
-version = "vUndefined"
-setup_lines = open("../stdpipe/_version.py").readlines()
-for line in setup_lines:
-    if line.startswith("__version__ = "):
-        try:
-            version = line.split('"')[1]
-        except IndexError:
-            version = line.split("'")[1]
-        break
+version = "0.0"
+try:
+    setup_lines = open("../stdpipe/_version.py").readlines()
+    for line in setup_lines:
+        if line.startswith("__version__ = "):
+            try:
+                version = line.split('"')[1]
+            except IndexError:
+                version = line.split("'")[1]
+            break
+except:
+    pass
 
 # The full version, including alpha/beta/rc tags.
 release = version
