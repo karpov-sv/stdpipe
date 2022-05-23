@@ -16,7 +16,15 @@ requirements = [
     'statsmodels',
     'esutil',
     'tqdm',
-    'regions'
+    'regions',
+
+    # Sphinx for documentation
+    'Sphinx',
+    'sphinx_rtd_theme',
+    'sphinx_math_dollar',
+    'recommonmark',
+    'numpydoc',
+
 ]
 
 setup(
@@ -34,5 +42,5 @@ setup(
         "example": [
             'astroscrappy',
         ],
-    },    
+    },
 )
