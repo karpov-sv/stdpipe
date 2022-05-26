@@ -3,6 +3,8 @@
 
 from setuptools import setup, find_packages
 
+__version__ = '0.1'
+
 requirements = [
     'configargparse',
     'numpy',
@@ -29,7 +31,7 @@ requirements = [
 
 setup(
     name='stdpipe',
-    version='0.1',
+    version=__version__,
     description='Simple Transient Detection Pipeline',
     author='Sergey Karpov',
     author_email='karpov.sv@gmail.com',

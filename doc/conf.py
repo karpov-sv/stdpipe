@@ -33,11 +33,11 @@ sys.path.insert(0, os.path.abspath(".."))
 # ones.
 extensions = [
     "recommonmark",
-    "sphinx_math_dollar",
+    # "sphinx_math_dollar",
     #    'sphinx.ext.autodoc',
     "sphinx.ext.autosummary",
     #    'sphinx.ext.pngmath',
-    "numpydoc",
+    # "numpydoc",
     #    'plot2rst',
     "sphinx.ext.intersphinx",
     #    'sphinx.ext.linkcode',
@@ -66,7 +66,7 @@ source_suffix = {
 master_doc = "index"
 
 # General information about the project.
-project = "stdpipe"
+project = "STDPipe"
 copyright = "2022, Sergey Karpov"
 author = "Sergey Karpov"
 
@@ -77,7 +77,7 @@ author = "Sergey Karpov"
 
 version = "0.0"
 try:
-    setup_lines = open("../stdpipe/_version.py").readlines()
+    setup_lines = open("../setup.py").readlines()
     for line in setup_lines:
         if line.startswith("__version__ = "):
             try:
@@ -85,6 +85,7 @@ try:
             except IndexError:
                 version = line.split("'")[1]
             break
+    from setup import version
 except:
     pass
 
