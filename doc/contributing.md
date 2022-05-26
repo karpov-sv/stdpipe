@@ -1,12 +1,12 @@
-## How to Contribute
+# How to Contribute
 
-### License
+## License
 
 STDPipe is released under the MIT license, which means that you are allowed to modify the code for your own purposes, as long as you retain our [copyright notice](https://github.com/karpov-sv/stdpipe/blob/master/LICENSE.txt).
 
 However, we would love to grow the stdpipe community, and integrate improvements directly into our [code repository on GitHub](https://github.com/karpov-sv/stdpipe).
 
-### Including your changes
+## Including your changes
 
 To make a code contribution to the project, follow these steps (which
 are outlined in more detail in [this GitHub
@@ -26,7 +26,7 @@ For a more detailed explanation of the open contribution process, see
 the [scikit-image contributors' guide](http://scikit-image.org/docs/stable/contribute.html).
 We follow a very similar process; some guidance follows below.
 
-### Bug Reports
+## Bug Reports
 
 While we appreciate code changes, it is also very helpful simply to
 know when STDPipe does not function correctly.  Please [file any

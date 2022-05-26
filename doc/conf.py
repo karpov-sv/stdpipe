@@ -35,7 +35,7 @@ extensions = [
     "myst_parser",
     # "recommonmark",
     # "sphinx_math_dollar",
-    #    'sphinx.ext.autodoc',
+    # "sphinx.ext.autodoc",
     "sphinx.ext.autosummary",
     #    'sphinx.ext.pngmath',
     # "numpydoc",
