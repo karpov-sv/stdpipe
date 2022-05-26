@@ -25,6 +25,7 @@ On your Linux/MacOS/WSL terminal, run the following commands to install anaconda
 
 (For 32-bit installation, skip the ‘_64’ in both commands)
 
+
 NOTE: If you already have Anaconda3 installed, please make sure that it is updated to the latest version (conda update --all). Also check that you do not have multiple
 versions of python installed in usr/lib/ directory as it can cause version conflicts while installing dependencies.
 
@@ -85,8 +86,16 @@ Use the commands below to install the rest of dependencies and the package itsel
 * $ python setup.py develop
 
 
+**Keeping up to date**
 
-**First Test for STDPipe**
+The command above installs the package to your Python environment in an *editable* way - it means that all changes you may make to the source tree (where you cloned the code) will immediately be reflected in the installed package, you do not need to repeat the installation.
+
+As the code base in the repository evolves fast -- new features are being added, bugs fixed, etc -- it is a good idea to update your cloned code from the upstream often. The following command from inside stdpipe folder will do it:
+
+* $ git pull
+
+
+**Quick testing the installation**
 
 Run the following commands:
 

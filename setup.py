@@ -24,8 +24,7 @@ requirements = [
     'Sphinx',
     'sphinx_rtd_theme',
     'sphinx_math_dollar',
-    'recommonmark',
-    'numpydoc',
+    'myst_parser',
 
 ]
 
