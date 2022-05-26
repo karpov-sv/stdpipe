@@ -28,7 +28,7 @@ User Guide
    installation
    usage
    contributing
-   API documentation <api/stdpipe>
+   API documentation <api/modules>
 
 Contributing
 ------------

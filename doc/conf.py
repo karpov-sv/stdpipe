@@ -36,6 +36,7 @@ extensions = [
     # "recommonmark",
     # "sphinx_math_dollar",
     # "sphinx.ext.autodoc",
+    "sphinxcontrib.apidoc",
     "sphinx.ext.autosummary",
     #    'sphinx.ext.pngmath',
     # "numpydoc",
@@ -330,6 +331,12 @@ texinfo_documents = [
 # erd_path = os.path.join(os.path.dirname(__file__), 'images/erd.png')
 # eralchemy.render_er(models.Base, erd_path)
 
+# ApiDoc
+apidoc_module_dir = '../stdpipe'
+apidoc_output_dir = 'api'
+apidoc_excluded_paths = ['tests']
+apidoc_separate_modules = True
+apidoc_toc_file = None
 
 def setup(app):
     app.add_css_file("stdpipe-docs.css")
