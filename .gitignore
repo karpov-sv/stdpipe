@@ -113,4 +113,9 @@ ENV/
 
 # Project specific
 tests/
+cutouts/
 
+
+# sphinx
+doc/_build
+doc/api
