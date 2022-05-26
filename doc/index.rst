@@ -1,5 +1,5 @@
 STDPipe - Simple Transient Detection Pipeline
------------------------------------------------------
+---------------------------------------------
 
 *AKA: random codes noone else will ever use*
 
@@ -16,28 +16,34 @@ Design principles:
 Quick Start
 -----------
 
-See notebooks/stdpipe_tutorial.ipynb for an example
-File for testing available here: https://pc048b.fzu.cz/~karpov/20210222223821-052-RA.fits.processed.fits
+See `notebooks/stdpipe_tutorial.ipynb <https://github.com/karpov-sv/stdpipe/blob/master/notebooks/stdpipe_tutorial.ipynb>`_ for an example notebook demonstrating basic steps of a typical image processing with *STDPipe*. This notebook uses the image available
+`here <https://pc048b.fzu.cz/~karpov/20210222223821-052-RA.fits.processed.fits>`_.
 
 User Guide
 ----------
 
 .. toctree::
-   :maxdepth: 1
+   :maxdepth: 2
 
    installation
+   usage
    contributing
-   authors
+   API documentation <api/stdpipe>
 
 Contributing
 ------------
 
-STDPipe is released under the MIT license.  We encourage you to
+*STDPipe* is released under the MIT license.  We encourage you to
 modify it, reuse it, and contribute changes back for the benefit of
 others.  We follow standard open source development practices: changes
 are submitted as pull requests and, once they pass the test suite,
 reviewed by the team before inclusion.  Please also see
 `our contributing guide <./contributing.html>`_.
+
+Authors
+-------
+
+*STDPipe* is primarily written by Sergey Karpov.
 
 .. Indices and tables
 .. ==================

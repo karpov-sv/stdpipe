@@ -1,12 +1,12 @@
-# Instructions for STDPipe installation
+# Installation
 
 
 *STDpipe* is available at [https://github.com/karpov-sv/stdpipe](https://github.com/karpov-sv/stdpipe) and is mirrored at [https://gitlab.in2p3.fr/icare/stdpipe](https://gitlab.in2p3.fr/icare/stdpipe)
 
-In order to use it, you will need a working Python (>=3.6) installation, as well as a number of additional Python libraries and external packages. Below you will find some basic instructions how to set it up (Anaconda one, but you may use others as well) if you do not have it already.
+In order to use it, you will need a working Python (>=3.6) installation, as well as a number of additional Python libraries and external packages. Below you will find some basic instructions how to set it up (using Anaconda environment as an example, but you may use any other as well) if you do not have it already.
 
 
-## Preparing Anaconda environment
+## Preparing the environment (optional)
 
 The steps highlighted below are primarily for Linux and MacOS systems.
 Windows users are advised to use WSL (preferrably Ubuntu 20.04) for smooth installation.
@@ -35,13 +35,14 @@ Now do:
 
 **Creating separate environment**
 
-Create a new environment using this command (environment name is stdpipe_env in this case):
+Create a new environment using this command (environment name is `stdpipe` in this case):
 
-* $ conda create --name stdpipe_env
+* $ conda create --name stdpipe
+* $ conda activate stdpipe
 
-* $ conda activate stdpipe_env
-
-NOTE: If this gives an error like: CommandNotFoundError: Your shell has not been properly configured to use 'conda activate', then run:
+NOTE: If this gives an error like:
+    CommandNotFoundError:
+Your shell has not been properly configured to use 'conda activate', then run:
 
 * $ source ~/anaconda3/etc/profile.d/conda.sh
 
@@ -68,24 +69,23 @@ Install conda astropy dependencies
 * $ conda install -c astropy astroquery
 
 
-## Main Installation
+## STDPipe installation
 
 
 Clone the STDPipe repository from GitHub at [https://github.com/karpov-sv/stdpipe](https://github.com/karpov-sv/stdpipe)
-
 
 Note that we link above to the main branch, but suggest making changes on your own fork (please also see our [contributing guide](./contributing.html)). Now, after forking, run the following command to clone the repository into your currently directory (by default, in your home directory):
 
 
 * $ git clone https://github.com/your_github_username/stdpipe
-Change directory to the stdpipe folder:
 
+Change directory to the stdpipe folder:
 
 * $ cd stdpipe
 
-Use the commands below to install the dependencies given in requirements.txt file which are necessary for stdpipe:
+Use the commands below to install the rest of dependencies and the package itself in an *editable* manner so that it will be updated automatically when you update the code:
 
-* $ python setup.py install
+* $ python setup.py develop
 
 
 
