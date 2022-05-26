@@ -19,13 +19,6 @@ requirements = [
     'esutil',
     'tqdm',
     'regions',
-
-    # Sphinx for documentation
-    'Sphinx',
-    'sphinx_rtd_theme',
-    'sphinx_math_dollar',
-    'myst_parser',
-
 ]
 
 setup(
