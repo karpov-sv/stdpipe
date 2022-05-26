@@ -74,10 +74,7 @@ Install conda astropy dependencies
 
 Clone the STDPipe repository from GitHub at [https://github.com/karpov-sv/stdpipe](https://github.com/karpov-sv/stdpipe)
 
-Note that we link above to the main branch, but suggest making changes on your own fork (please also see our [contributing guide](./contributing.html)). Now, after forking, run the following command to clone the repository into your currently directory (by default, in your home directory):
-
-
-* $ git clone https://github.com/your_github_username/stdpipe
+* $ git clone https://github.com/karpov-sv/stdpipe.git
 
 Change directory to the stdpipe folder:
 
