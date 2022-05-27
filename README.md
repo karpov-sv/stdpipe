@@ -39,8 +39,7 @@
 
 The package is in constant development, so to keep track of the changes the suggested way of installing it is by cloning the repository
 ```
-git clone https://github.com/karpov-sv/stdpipe
-
+git clone https://github.com/karpov-sv/stdpipe.git
 ```
 and then installing from it in development (or "editable") mode by running the command
 ```
