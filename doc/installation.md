@@ -15,9 +15,9 @@ Ubuntu 20.04 is available for free download on Microsoft Store.
 You may safely skip these steps if you already have a working Python environment where you would like to install *STDPipe*.
 
 
-**Installing Anaconda3**
+**Installing Anaconda**
 
-On your Linux/MacOS/WSL terminal, run the following commands to install anaconda (replace 5.3.1 by the latest version, and adjust operating system name):
+On your Linux/MacOS/WSL terminal, run the following commands to install [Anaconda](https://www.anaconda.com) (replace 5.3.1 by the latest version, and adjust operating system name):
 
 * $ wget https://repo.anaconda.com/archive/Anaconda3-5.3.1-Linux-x86_64.sh
 
@@ -120,12 +120,18 @@ This instruction file will likely cover the issues you might face during your in
  - [HOTPANTS](https://github.com/acbecker/hotpants)
  - [Astrometry.Net](https://github.com/dstndstn/astrometry.net)
 
-Most of them are also available in the repositories of various Linux distributions, and may be conveniently installed from there
+Most of them are also available in the repositories of various Linux distributions, and may be conveniently installed from there (see below).
+
+HOTPANTS image subtraction package cannot presently (as far as I know) be installed from any package manager, and has to be compiled manually.
 
 ### Ubuntu
 
 * $ sudo apt install sextractor scamp psfex swarp
 
+Astrometry.Net may also be installed from repository, but might require additional manual configuration steps (and quite a lot of disk space for larger indices!), so install it only when you really need it, and when you really know what you are doing!
+
+* $ sudo apt install astrometry.net
+
 ### Anaconda
 
-* $ conda install -f conda-forge astromatic-source-extractor astromatic-scamp astromatic-psfex astromatic-swarp
+* $ conda install -c conda-forge astromatic-source-extractor astromatic-scamp astromatic-psfex astromatic-swarp

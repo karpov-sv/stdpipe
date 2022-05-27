@@ -37,15 +37,16 @@
 
 *STDpipe* is available at https://github.com/karpov-sv/stdpipe and is mirrored at https://gitlab.in2p3.fr/icare/stdpipe
 
-You may either install it from GitHub directly as
+The package is in constant development, so to keep track of the changes the suggested way of installing it is by cloning the repository
 ```
-python3 -m pip install --user git+https://github.com/karpov-sv/stdpipe
+git clone https://github.com/karpov-sv/stdpipe
+
 ```
-or better clone the repository and then execute
+and then installing from it in development (or "editable") mode by running the command
 ```
 python3 setup.py develop --user
 ```
-to install the package in development (or "editable") mode. This way you may update the repository or apply local patches, and it will immediately be reflected in the installed package.
+This way you may update the repository or apply local patches, and it will immediately be reflected in the installed package.
 
 
 Apart of Python requirements that will be installed automatically, *STDPipe* also (optionally) makes use of the following external software:
@@ -59,6 +60,8 @@ Most of them may be installed from your package manager. E.g. on Debian or Ubunt
 ```
 sudo apt install sextractor scamp psfex swarp
 ```
+
+You may also check more detailed installation instructions [here](https://stdpipe.readthedocs.io/en/latest/installation.html).
 
 # Usage
 
