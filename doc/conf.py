@@ -337,6 +337,3 @@ apidoc_output_dir = 'api'
 apidoc_excluded_paths = ['tests']
 apidoc_separate_modules = True
 apidoc_toc_file = None
-
-def setup(app):
-    app.add_css_file("stdpipe-docs.css")
