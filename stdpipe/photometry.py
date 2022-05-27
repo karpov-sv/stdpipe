@@ -383,7 +383,11 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
         result = [result]
 
         for name in checknames:
-            result.append(fits.getdata(name))
+            if os.path.exists(name):
+                result.append(fits.getdata(name))
+            else:
+                log("Cannot find requested output checkimage file", name)
+                result.append(None)
 
     if _workdir is None:
         shutil.rmtree(workdir)
