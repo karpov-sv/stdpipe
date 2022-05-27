@@ -15,7 +15,7 @@
  - ~~pre-processing~~ - should be handled before in an instrument-specific way
      - bias/dark subtraction, flatfielding, masking
  - object detection and photometry
-     - SExtractor or SEP for detection, photutils for photometry 
+     - SExtractor or SEP for detection, photutils for photometry
  - astrometric calibration
      - Astrometry.Net for blind WCS solving
      - SCAMP or Astropy-based code for refinement
@@ -37,14 +37,16 @@
 
 *STDpipe* is available at https://github.com/karpov-sv/stdpipe and is mirrored at https://gitlab.in2p3.fr/icare/stdpipe
 
-You may either install it from GitHub directly as 
+You may either install it from GitHub directly as
 ```
 python3 -m pip install --user git+https://github.com/karpov-sv/stdpipe
 ```
-or clone the repository and then execute
+or better clone the repository and then execute
 ```
 python3 setup.py develop --user
 ```
+to install the package in development (or "editable") mode. This way you may update the repository or apply local patches, and it will immediately be reflected in the installed package.
+
 
 Apart of Python requirements that will be installed automatically, *STDPipe* also (optionally) makes use of the following external software:
  - [SExtractor](https://github.com/astromatic/sextractor)
@@ -53,6 +55,11 @@ Apart of Python requirements that will be installed automatically, *STDPipe* als
  - [HOTPANTS](https://github.com/acbecker/hotpants)
  - [Astrometry.Net](https://github.com/dstndstn/astrometry.net)
 
+Most of them may be installed from your package manager. E.g. on Debian or Ubuntu systems it may look like that:
+```
+sudo apt install sextractor scamp psfex swarp
+```
+
 # Usage
 
-There is no documentation for *STDPipe* yet, but you may check the examples inside [notebooks/](notebooks/) folder, especially the [tutorial](notebooks/stdpipe_tutorial.ipynb) that demonstrates basic steps of a typical image processing.
+The [documentation for *STDPipe*](https://stdpipe.readthedocs.io/) is now being actively written. In the meantime you may check the examples inside [notebooks/](notebooks/) folder, especially the [tutorial](notebooks/stdpipe_tutorial.ipynb) that demonstrates basic steps of a typical image processing.

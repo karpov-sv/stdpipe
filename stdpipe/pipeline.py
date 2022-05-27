@@ -1,3 +1,8 @@
+"""
+Module containing higher-level pipeline building blocks, wrapping together lower-level
+functionality of STDPipe modules.
+"""
+
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 import os
