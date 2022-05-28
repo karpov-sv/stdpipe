@@ -11,8 +11,6 @@ from astropy.wcs.utils import fit_wcs_from_points
 from astropy.coordinates import SkyCoord
 from astropy.table import Table
 
-from astroquery.astrometry_net import AstrometryNet
-
 from scipy.stats import chi2
 
 from . import utils
@@ -90,6 +88,33 @@ def blind_match_objects(obj, order=2, update=False, sn=20, get_header=False,
                         center_ra=None, center_dec=None, radius=None,
                         scale_lower=None, scale_upper=None, scale_units='arcsecperpix',
                         config=None, extra={}, _workdir=None, _tmpdir=None, _exe=None, verbose=False):
+
+    """Thin wrapper for blind plate solving using local Astrometry.Net and a list of detected objects.
+
+    It requires `solve-field` binary from Astrometry.Net and some index files to be locally available.
+
+    :param obj: List of objects on the frame that should contain at least `x`, `y` and `flux` columns.
+    :param order: Order for the SIP spatial distortion polynomial
+    :param update: If set, the object list will be updated in-place to contain correct `ra` and `dec` sky coordinates
+    :param sn: If provided, only objects with signal to noise ratio exceeding this value will be used for matching.
+    :param get_header: If True, function will return the FITS header object instead of WCS solution
+    :param width: Image width, to be used for guessing pixel coordinats of frame center. Optional.
+    :param height: Image height, to be used for guessing pixel coordinats of frame center. Optional.
+    :param center_ra: Approximate center RA of the field, degrees. Optional.
+    :param center_dec: Approximate center Dec of the field, degrees. Optional.
+    :param radius: If set, the server will look for solutions only within this radius from the center specified above.
+    :param scale_lower: Optional lower limit for the solution scale.
+    :param scale_upper: Optional upper limit for the solution scale.
+    :param scale_units: Units of the `scale_lower`/`scale_upper` parameters. May be one of `arcsecperpix`, `arcminwidth`, or `degwidth`.
+    :param config: Path to config file for `solve-field`, optional.
+    :param extra: Dictionary of additional parameters to be passed to `solve-field` binary, optional.
+    :param _workdir: If specified, all temporary files will be created in this directory, and will be kept intact after running `solve-field`. May be used for debugging exact inputs and outputs of the executable. Optional
+    :param _tmpdir: If specified, all temporary files will be created in a dedicated directory (that will be deleted after running the executable) inside this path.
+    :param _exe: Full path to `solve-field` executable. If not provided, the code tries to locate it automatically in your :envvar:`PATH`.
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :returns: Either astrometric solution as astropy.wcs.WCS object, or FITS header if :code:`get_header=True`
+    """
+
     '''
     Thin wrapper for blind plate solving using local Astrometry.Net and a list of detected objects.
     '''
@@ -234,11 +259,31 @@ def blind_match_astrometrynet(obj, order=2, update=False, sn=20, get_header=Fals
                               solve_timeout=600, api_key=None,
                               center_ra=None, center_dec=None, radius=None,
                               scale_lower=None, scale_upper=None, scale_units='arcsecperpix', **kwargs):
-    '''
-    Thin wrapper for remote plate solving using Astrometry.Net and a list of detected objects.
-    Most of the parameters are passed directly to astroquery.astrometrynet.AstrometryNet.solve_from_source_list routine.
+
+    """Thin wrapper for remote plate solving using Astrometry.Net and a list of detected objects.
+    Most of the parameters are passed directly to `astroquery.astrometrynet.AstrometryNet.solve_from_source_list` routine.
     API key may either be provided as an argument or specified in ~/.astropy/config/astroquery.cfg
-    '''
+
+    :param obj: List of objects on the frame that should contain at least `x`, `y` and `flux` columns.
+    :param order: Order for the SIP spatial distortion polynomial
+    :param update: If set, the object list will be updated in-place to contain correct `ra` and `dec` sky coordinates
+    :param sn: If provided, only objects with signal to noise ratio exceeding this value will be used for matching.
+    :param get_header: If True, function will return the FITS header object instead of WCS solution
+    :param width: Image width, to be used for guessing pixel coordinats of frame center. Optional.
+    :param height: Image height, to be used for guessing pixel coordinats of frame center. Optional.
+    :param solve_timeout: Timeout in seconds to wait for the solution from remote server.
+    :param api_key: API key, optional. If not set, it should be configured in your ~/.astropy/config/astroquery.cfg file
+    :param center_ra: Approximate center RA of the field, degrees. Optional.
+    :param center_dec: Approximate center Dec of the field, degrees. Optional.
+    :param radius: If set, the server will look for solutions only within this radius from the center specified above.
+    :param scale_lower: Optional lower limit for the solution scale.
+    :param scale_upper: Optional upper limit for the solution scale.
+    :param scale_units: Units of the `scale_lower`/`scale_upper` parameters. May be one of `arcsecperpix`, `arcminwidth`, or `degwidth`.
+    :returns: Either astrometric solution as astropy.wcs.WCS object, or FITS header if :code:`get_header=True`
+    """
+
+    # Import required module - we postpone it until now to hide warnings for API key
+    from astroquery.astrometry_net import AstrometryNet
 
     # Sort objects according to decreasing flux
     aidx = np.argsort(-obj['flux'])
@@ -360,6 +405,16 @@ def refine_wcs(obj, cat, order=2, match=True, sr=3/3600, update=False,
     return wcs
 
 def clear_wcs(header, remove_comments=False, remove_history=False, remove_underscored=False, copy=False):
+    """Clears WCS related keywords from FITS header
+
+    :param header: Header to operate on
+    :param remove_comments: Whether to also remove COMMENT keywords
+    :param remove_history: Whether to also remove HISTORY keywords
+    :param remove_underscored: Whether to also remove all keywords starting with underscore (often made by e.g. Astrometry.Net)
+    :param copy: If True, do not change original FITS header
+    :returns: Modified FITS header
+
+    """
     if copy:
         header = header.copy()
 
@@ -440,11 +495,33 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
                      cat_mag_lim=99, sn=None, extra={},
                      get_header=False, update=False,
                      _workdir=None, _tmpdir=None, _exe=None, verbose=False):
-    """
-    Wrapper for running SCAMP on user-provided object list and catalogue
+    """Wrapper for running SCAMP on user-provided object list and catalogue to get refined astrometric solution.
+
+    :param obj: List of objects on the frame that should contain at least `x`, `y` and `flux` columns.
+    :param cat: Reference astrometric catalogue
+    :param wcs: Initial WCS
+    :param header: FITS header containing initial astrometric solution, optional.
+    :param sr: Matching radius in degrees
+    :param order: Polynomial order for PV distortion solution (1 or greater)
+    :param cat_col_ra: Catalogue column name for Right Ascension
+    :param cat_col_dec: Catalogue column name for Declination
+    :param cat_col_ra_err: Catalogue column name for Right Ascension error
+    :param cat_col_dec_err: Catalogue column name for Declination error
+    :param cat_col_mag: Catalogue column name for the magnitude in closest band
+    :param cat_col_mag_err: Catalogue column name for the magnitude error
+    :param cat_mag_lim: Magnitude limit for catalogue stars
+    :param sn: If provided, only objects with signal to noise ratio exceeding this value will be used for matching.
+    :param extra: Dictionary of additional parameters to be passed to SCAMP binary, optional.
+    :param get_header: If True, function will return the FITS header object instead of WCS solution
+    :param update: If set, the object list will be updated in-place to contain correct `ra` and `dec` sky coordinates
+    :param _workdir: If specified, all temporary files will be created in this directory, and will be kept intact after running SCAMP. May be used for debugging exact inputs and outputs of the executable. Optional
+    :param _tmpdir: If specified, all temporary files will be created in a dedicated directory (that will be deleted after running the executable) inside this path.
+    :param _exe: Full path to SCAMP executable. If not provided, the code tries to locate it automatically in your :envvar:`PATH`.
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :returns: Refined astrometric solution, or FITS header if :code:`get_header=True`
     """
 
-    # Simple wrapper around print for logging in verbose mode only
+     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     # Find the binary

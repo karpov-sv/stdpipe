@@ -30,10 +30,30 @@ def refine_astrometry(obj, cat, sr=10/3600, wcs=None, order=0,
                       cat_col_ra_err='e_RAJ2000', cat_col_dec_err='e_DEJ2000',
                       n_iter=3, use_photometry=True, min_matches=5, method='astropy',
                       update=True, verbose=False, **kwargs):
-    """
-    Higher-level astrometric refinement routine.
-    """
 
+    """Higher-level astrometric refinement routine that may use either SCAMP or pure Python based methods.
+
+    :param obj: List of objects on the frame that should contain at least `x`, `y` and `flux` columns.
+    :param cat: Reference astrometric catalogue
+    :param sr: Matching radius in degrees
+    :param wcs: Initial WCS
+    :param order: Polynomial order for SIP or PV distortion solution
+    :param cat_col_mag: Catalogue column name for the magnitude in closest band
+    :param cat_col_mag_err: Catalogue column name for the magnitude error
+    :param cat_col_ra: Catalogue column name for Right Ascension
+    :param cat_col_dec: Catalogue column name for Declination
+    :param cat_col_ra_err: Catalogue column name for Right Ascension error
+    :param cat_col_dec_err: Catalogue column name for Declination error
+    :param n_iter: Number of iterations for Python-based matching
+    :param use_photometry: Use photometry-assisted method in Python-based matching
+    :param min_matches: Minimal number of good matches in Python-based matching
+    :param method: May be either 'scamp' or 'astropy' or 'astrometrynet'
+    :param update: If set, the object list will be updated in-place to contain correct `ra` and `dec` sky coordinates
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :param kwargs: All other parameters will be directly passed to :func:`~stdpipe.astrometry.refine_wcs_scamp`
+    :returns: Refined astrometric solution
+
+    """
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 

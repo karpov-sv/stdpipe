@@ -255,8 +255,8 @@ latex_documents = [
     (
         master_doc,
         "stdpipe.tex",
-        "stdpipe Documentation",
-        "The stdpipe Team",
+        "STDPipe Documentation",
+        "The STDPipe Team",
         "manual",
     ),
 ]
@@ -286,7 +286,7 @@ latex_documents = [
 
 # One entry per manual page. List of tuples
 # (source start file, name, description, authors, manual section).
-man_pages = [(master_doc, "stdpipe", "stdpipe Documentation", [author], 1)]
+man_pages = [(master_doc, "stdpipe", "STDPipe Documentation", [author], 1)]
 
 # If true, show URL addresses after external links.
 # man_show_urls = False
@@ -301,10 +301,10 @@ texinfo_documents = [
     (
         master_doc,
         "stdpipe",
-        "stdpipe Documentation",
+        "STDPipe Documentation",
         author,
         "stdpipe",
-        "One line description of project.",
+        "Simple Transient Detection Pipeline",
         "Miscellaneous",
     ),
 ]
