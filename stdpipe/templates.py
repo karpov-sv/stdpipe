@@ -415,6 +415,10 @@ def reproject_swarp(input=[], wcs=None, shape=None, width=None, height=None, hea
     by passing `RESAMPLING_TYPE=FLAGS` and `COMBINE_TYPE=OR`.
 
     If `use_nans=True`, the regions with zero weights will be filled with NaNs (or 0xFFFF).
+
+    Any additional configuration parameter may be passed to SWarp through `extra` argument which
+    should be the dictionary with parameter names as keys.
+
     """
 
     # Simple wrapper around print for logging in verbose mode only

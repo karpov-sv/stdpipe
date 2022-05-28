@@ -52,6 +52,7 @@ Apart of Python requirements that will be installed automatically, *STDPipe* als
  - [SExtractor](https://github.com/astromatic/sextractor)
  - [SCAMP](https://github.com/astromatic/scamp)
  - [PSFEx](https://github.com/astromatic/psfex)
+ - [SWarp](https://github.com/astromatic/swarp)
  - [HOTPANTS](https://github.com/acbecker/hotpants)
  - [Astrometry.Net](https://github.com/dstndstn/astrometry.net)
 
