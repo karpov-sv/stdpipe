@@ -5,6 +5,7 @@ numpydoc
 myst_parser
 sphinxcontrib-apidoc
 
+extension-helpers
 numpy
 scipy
 astropy>=4.1
