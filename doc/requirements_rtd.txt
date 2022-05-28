@@ -18,3 +18,4 @@ statsmodels
 esutil==0.6.0
 tqdm
 psycopg2
+regions

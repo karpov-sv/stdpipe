@@ -18,6 +18,7 @@ requirements = [
     'statsmodels',
     'esutil',
     'tqdm',
+    'regions'
 ]
 
 setup(
