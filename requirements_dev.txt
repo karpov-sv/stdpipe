@@ -15,6 +15,6 @@ astroquery>0.4.1
 sep
 photutils
 statsmodels
-esutil==0.6.8
+esutil==0.6.0
 tqdm
 psycopg2
