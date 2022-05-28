@@ -49,6 +49,9 @@ You may want to stack/coadd or mosaic some images before processing them. While 
 You may check `simple example notebook <https://github.com/karpov-sv/stdpipe/blob/master/notebooks/image_stacking.ipynb>`_
 that shows how to do it.
 
+.. attention::
+   The stacking modify the statistical properties of resulting image! The reasons are both averaging (or especially median averaging!) of the images that modify effective gain value (typically increasing it by the factor equal to number of averaged images), and pixel interpolation when re-projecting the images onto the same pixel grid.
+
 *STDPipe* also contains a simple wrapper for `SWarp <https://github.com/astromatic/swarp>`_ re-projection code, :func:`stdpipe.templates.reproject_swarp`, that is implemented to resemble the calling conventions of `reproject <https://github.com/astropy/reproject>`_ package routines as much as possible - i.e. allows directly stacking the image files without loading them to memory first:
 
 .. autofunction:: stdpipe.templates.reproject_swarp

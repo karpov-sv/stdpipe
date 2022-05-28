@@ -30,6 +30,31 @@ catalogs = {
 }
 
 def get_cat_vizier(ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}, extra=[]):
+    """Download any catalogue from Vizier.
+
+    The catalogue may be anything recognizable by Vizier. For some most popular ones, we have additional support - we try to augment them with photometric measurements not originally present there, based on some analytical magnitude conversion formulae. These catalogues are:
+
+    -  ps1 - Pan-STARRS DR1. We augment it with Johnson-Cousins B, V, R and I magnitudes
+    -  gaiadr2 - Gaia DR2. We augment it  with Johnson-Cousins B, V, R and I magnitudes, as well as Pan-STARRS and SDSS ones
+    -  gaiaedr3 - Gaia eDR3
+    -  skymapper - SkyMapper DR1.1
+    -  vsx - AAVSO Variable Stars Index
+    -  apass - AAVSO APASS DR9
+    -  sdss - SDSS DR12
+    -  atlas - ATLAS-RefCat2, compilative all-sky reference catalogue with uniform zero-points in Pan-STARRS-like bands. We augment it with Johnson-Cousins B, V, R and I magnitudes the same way as Pan-STARRS.
+    -  usnob1 - USNO-B1
+    -  gsc - Guide Star Catalogue 2.2
+
+    :param ra0: Right Ascension of the field center, degrees
+    :param dec0: Declination of the field center, degrees
+    :param sr0: Field radius, degrees
+    :param catalog: Any Vizier catalogue identifier, or a catalogue short name (see above)
+    :param limit: Limit for the number of returned rows, optional
+    :param filters: Dictionary with column filters to be applied on Vizier side. Dictionary key is the column name, value - filter expression as documented at https://vizier.u-strasbg.fr/vizier/vizHelp/cst.htx
+    :param extra: List of extra column names to return in addition to default ones.
+    :returns: astropy.table.Table with catalogue as returned by Vizier, with some additional columns added for supported catalogues.
+    """
+
     # TODO: add positional errors
 
     if catalog in catalogs:
@@ -122,6 +147,18 @@ def get_cat_vizier(ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}, extra=[]
     return cat
 
 def xmatch_objects(obj, catalog='ps1', sr=3/3600, col_ra='ra', col_dec='dec'):
+    """Cross-match object list with Vizier catalogue using CDS XMatch service.
+
+    Any Vizier catalogue may be used for cross-matching.
+
+    :param obj: astropy.table.Table with objects
+    :param catalog: Any Vizier catalogue identifier, or a catalogue short name
+    :param sr: Cross-matching radius in degrees
+    :param col_ra: Column name in `obj` table containing Right Ascension values
+    :param col_dec: Column name in `obj` table containing Declination values
+    :returns: The table of matched objects augmented with some fields from the Vizier catalogue.
+    """
+
     if catalog in catalogs:
         vizier_id = catalogs.get(catalog)['vizier']
     else:
@@ -131,7 +168,23 @@ def xmatch_objects(obj, catalog='ps1', sr=3/3600, col_ra='ra', col_dec='dec'):
 
     return xcat
 
-def xmatch_skybot(obj, sr=10/3600, time=None, location='500', col_ra='ra', col_dec='dec', col_id='id'):
+def xmatch_skybot(obj, sr=10/3600, time=None, col_ra='ra', col_dec='dec', col_id='id'):
+    """Cross-match object list with positions of Solar System objects using SkyBoT service
+
+    The routine works by requesting the list of all solar system objects in a cone containing all
+    input objects, and then cross-matching them using the radius defined by `sr` parameter. Then it
+    returns the table of solar system objects plus a column of unique identifiers corresponding
+    to user objects.
+
+    :param obj: astropy.table.Table with objects
+    :param sr: Cross-matching radius in degrees
+    :param time: Time of the observation corresponding to the objects
+    :param col_ra: Column name in `obj` table containing Right Ascension values
+    :param col_dec: Column name in `obj` table containing Declination values
+    :param col_id: Column name in `obj` table containing some unique object identifier
+    :returns: The table of solar system objects augmented with `col_id` column of matched objects.
+    """
+
     ra0,dec0,sr0 = astrometry.get_objects_center(obj)
 
     try:

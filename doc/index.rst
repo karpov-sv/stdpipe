@@ -23,7 +23,7 @@ User Guide
 ----------
 
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 3
 
    installation
    usage
@@ -38,7 +38,7 @@ modify it, reuse it, and contribute changes back for the benefit of
 others.  We follow standard open source development practices: changes
 are submitted as pull requests and, once they pass the test suite,
 reviewed by the team before inclusion.  Please also see
-`our contributing guide <./contributing.html>`_.
+:doc:`our contributing guide <contributing>`.
 
 Authors
 -------

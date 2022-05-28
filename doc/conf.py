@@ -33,17 +33,11 @@ sys.path.insert(0, os.path.abspath(".."))
 # ones.
 extensions = [
     "myst_parser",
-    # "recommonmark",
     # "sphinx_math_dollar",
     "sphinx.ext.autodoc",
     "sphinxcontrib.apidoc",
     "sphinx.ext.autosummary",
-    #    'sphinx.ext.pngmath',
-    # "numpydoc",
-    #    'plot2rst',
     "sphinx.ext.intersphinx",
-    #    'sphinx.ext.linkcode',
-    #    'sphinx_gallery.gen_gallery'
 ]
 
 mathjax_config = {
@@ -113,7 +107,7 @@ exclude_patterns = ["_build"]
 
 # The reST default role (used for this markup: `text`) to use for all
 # documents.
-default_role = 'obj'
+default_role = 'code'
 
 # If true, '()' will be appended to :func: etc. cross-reference text.
 # add_function_parentheses = True

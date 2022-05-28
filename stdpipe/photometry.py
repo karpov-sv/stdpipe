@@ -1,3 +1,7 @@
+"""
+Routines for object detection and photometry.
+"""
+
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 import os, shutil, tempfile, shlex
@@ -39,8 +43,37 @@ def make_kernel(r0=1.0, ext=1.0):
 
     return image
 
-def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.0, bkgann=None, r0=0.5, gain=1, edge=0, minnthresh=2, minarea=5, relfluxradius=2.0, wcs=None, use_fwhm=False, use_mask_large=False, subtract_bg=True, npix_large=100, sn=10.0, verbose=True, **kwargs):
-    # Simple wrapper around print for logging in verbose mode only
+def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.0, bkgann=None, r0=0.5, gain=1, edge=0, minnthresh=2, minarea=5, relfluxradius=2.0, wcs=None, bg_size=64, use_fwhm=False, use_mask_large=False, subtract_bg=True, npix_large=100, sn=10.0, verbose=True, **kwargs):
+    """Opject detection and simple aperture photometry using `SEP <https://github.com/kbarbary/sep>`_ routines, with the signature as similar as possible to :func:`~stdpipe.photometry.get_objects_sextractor` function.
+
+    Detection flags are documented at https://sep.readthedocs.io/en/v1.1.x/reference.html - they are different from SExtractor ones!
+
+    :param image: Input image as a NumPy array
+    :param header: Image header, optional
+    :param mask: Image mask as a boolean array (True values will be masked), optional
+    :param err: Image noise map as a NumPy array, optional
+    :param thresh: Detection threshold in sigmas above local background
+    :param aper: Circular aperture radius in pixels, to be used for flux measurement
+    :param bkgann: Background annulus (tuple with inner and outer radii) to be used for local background estimation. Inside the annulus, simple arithmetic mean of unmasked pixels is used for computing the background, and thus it is subject to some bias in crowded stellar fields. If not set, global background model is used instead.
+    :param r0: Smoothing kernel size (sigma) to be used for improving object detection
+    :param gain: Image gain, e/ADU
+    :param edge: Reject all detected objects closer to image edge than this parameter
+    :param minnthresh: Minumal number of pixels above the threshold to be considered a detection
+    :param minarea: Minimal number of pixels in the object to be considered a detection
+    :param relfluxradius:
+    :param wcs: Astrometric solution to be used for assigning sky coordinates (`ra`/`dec`) to detected objects
+    :param bg_size: Background grid size in pixels
+    :param use_fwhm: If True, the aperture will be set to 1.5*FWHM (if greater than `aper`)
+    :param use_mask_large: If True, filter out large objects (with footprints larger than `npix_large` pixels)
+    :param npix_large: Threshold for rejecting large objects (if `use_mask_large` is set)
+    :param subtract_bg: Whether to subtract the background (default) or not
+    :param sn: Minimal S/N ratio for the object to be considered a detection
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :returns: astropy.table.Table object with detected objects
+    """
+
+    # Simple Wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     if r0 > 0.0:
@@ -58,7 +91,7 @@ def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.
 
     log("Building background map")
 
-    bg = sep.Background(image, mask=mask|mask_bg, bw=64, bh=64)
+    bg = sep.Background(image, mask=mask|mask_bg, bw=bg_size, bh=bg_size)
     if subtract_bg:
         image1 = image - bg.back()
     else:
@@ -160,17 +193,39 @@ def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.
     return obj
 
 def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, bg_size=None, sort=True, reject_negative=True, checkimages=[], extra_params=[], extra={}, psf=None, catfile=None, _workdir=None, _tmpdir=None, _exe=None, verbose=False):
-    '''
-    Thin wrapper around SExtractor binary.
+    """Thin wrapper around SExtractor binary.
 
-    It processes the image provided as a NumPy array, with optional mask and noise (err) arrays.
+    It processes the image taking into account optional mask and noise map, and returns the list of detected objects and optionally a set of SExtractor-produced checkimages.
 
-    It optionally filters out the detections having too small S/N ratio (sn) or the ones located too close to frame edges (edge), as well as detections with negative fluxes (reject_negatives).
+    You may check the SExtractor documentation at https://sextractor.readthedocs.io/en/latest/ for more details about possible parameters and general principles of its operation.
+    E.g. detection flags (returned in `flags` column of results table) are documented at https://sextractor.readthedocs.io/en/latest/Flagging.html#extraction-flags-flags . In addition to these flags, any object having pixels masked by the input `mask` in its footprint will have :code:`0x100` flag set.
 
-    The resulting detections are returned as an Astropy Table, and may be optionally stored to the file specified with catfile option.
-
-    The routine also optionally returns as an arrays the following checkimages: BACKGROUND, BACKGROUND_RMS, MINIBACKGROUND,  MINIBACK_RMS, -BACKGROUND, FILTERED, OBJECTS, -OBJECTS, SEGMENTATION, APERTURES
-    '''
+    :param image: Input image as a NumPy array
+    :param header: Image header, optional
+    :param mask: Image mask as a boolean array (True values will be masked), optional
+    :param err: Image noise map as a NumPy array, optional
+    :param thresh: Detection threshold, in sigmas above local background, to be used for `DETECT_THRESH` parameter of SExtractor call
+    :param aper: Circular aperture radius in pixels, to be used for flux measurement
+    :param r0: Smoothing kernel size (sigma) to be used for improving object detection
+    :param gain: Image gain, e/ADU
+    :param edge: Reject all detected objects closer to image edge than this parameter
+    :param minarea: Minimal number of pixels in the object to be considered a detection (`DETECT_MINAREA` parameter of SExtractor)
+    :param wcs: Astrometric solution to be used for assigning sky coordinates (`ra`/`dec`) to detected objects
+    :param sn: Minimal S/N ratio for the object to be considered a detection
+    :param bg_size: Background grid size in pixels (`BACK_SIZE` SExtractor parameter)
+    :param sort: Whether to sort the detections in decreasing brightness or not
+    :param reject_negative: Whether to reject the detections with negative fluxes
+    :param checkimages: List of SExtractor checkimages to return along with detected objects. Any SExtractor checkimage type may be used here (e.g. `BACKGROUND`, `BACKGROUND_RMS`, `MINIBACKGROUND`,  `MINIBACK_RMS`, `-BACKGROUND`, `FILTERED`, `OBJECTS`, `-OBJECTS`, `SEGMENTATION`, `APERTURES`). Optional.
+    :param extra_params: List of extra object parameters to return for the detection. See :code:`sex -dp` for the full list.
+    :param extra: Dictionary of extra configuration parameters to be passed to SExtractor call, with keys as parameter names. See :code:`sex -dd` for the full list.
+    :param psf: Path to PSFEx-made PSF model file to be used for PSF photometry. If provided, a set of PSF-measured parameters (`FLUX_PSF`, `MAG_PSF` etc) are added to detected objects. Optional
+    :param catfile: If provided, output SExtractor catalogue file will be copied to this location, to be reused by external codes. Optional.
+    :param _workdir: If specified, all temporary files will be created in this directory, and will be kept intact after running SExtractor. May be used for debugging exact inputs and outputs of the executable. Optional
+    :param _tmpdir: If specified, all temporary files will be created in a dedicated directory (that will be deleted after running the executable) inside this path.
+    :param _exe: Full path to SExtractor executable. If not provided, the code tries to locate it automatically in your :envvar:`PATH`.
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :returns: Either the astropy.table.Table object with detected objects, or a list with table of objects (first element) and checkimages (consecutive elements), if checkimages are requested.
+    """
 
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
@@ -589,15 +644,30 @@ def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kw
         return back
 
 def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=None, err=None, gain=None, bg_size=64, sn=None, get_bg=False, verbose=False):
-    '''
-    Aperture photometry at the positions of already detected objects.
+    """Aperture photometry at the positions of already detected objects.
 
-    It will estimate and subtract the background unless external background estimation (bg) is provided, and use user-provided noise map if requested.
+    It will estimate and subtract the background unless external background estimation (`bg`) is provided, and use user-provided noise map (`err`) if requested.
 
-    If the mask is provided, it will set 0x200 bit in object flags if at least one of aperture pixels is masked.
+    If the `mask` is provided, it will set 0x200 bit in object `flags` if at least one of aperture pixels is masked.
 
-    The results may optionally filtered to drop the detections with low signal to noise ratio if sn parameter is set and positive. It will also filter out the events with negative flux.
-    '''
+    The results may optionally filtered to drop the detections with low signal to noise ratio if `sn` parameter is set and positive. It will also filter out the events with negative flux.
+
+
+    :param obj: astropy.table.Table with initial object detections to be measured
+    :param image: Input image as a NumPy array
+    :param aper: Circular aperture radius in pixels, to be used for flux measurement
+    :param bkgann: Background annulus (tuple with inner and outer radii) to be used for local background estimation. If not set, global background model is used instead.
+    :param fwhm: If provided, `aper` and `bkgann` will be measured in units of this value (so they will be specified in units of FWHM)
+    :param mask: Image mask as a boolean array (True values will be masked), optional
+    :param bg: If provided, use this background (NumPy array with same shape as input image) instead of automatically computed one
+    :param err: Image noise map as a NumPy array to be used instead of automatically computed one, optional
+    :param gain: Image gain, e/ADU, used to build image noise model
+    :param bg_size: Background grid size in pixels
+    :param sn: Minimal S/N ratio for the object to be considered good. If set, all measurements with magnitude errors exceeding 1/SN will be discarded
+    :param get_bg: If True, the routine will also return estimated background and background noise images
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :returns: The copy of original table with `flux`, `fluxerr`, `mag` and `magerr` columns replaced with the values measured in the routine. If :code:`get_bg=True`, also returns the background and background error images.
+    """
 
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
