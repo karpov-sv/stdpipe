@@ -16,3 +16,4 @@ photutils
 statsmodels
 esutil
 tqdm
+psycopg2
