@@ -241,14 +241,41 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
 
 def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, bg_order=None,
                          obj_col_mag='mag', obj_col_mag_err='magerr',
+                         obj_col_ra='ra', obj_col_dec='dec',
+                         obj_col_x='x', obj_col_y='y',
                          cat_col_mag='R', cat_col_mag_err=None,
                          cat_col_mag1=None, cat_col_mag2=None,
                          cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
                          update=True, verbose=False, **kwargs):
-    """
-    Higher-level photometric calibration routine
-    """
 
+    """Higher-level photometric calibration routine.
+
+    It wraps :func:`stdpipe.photometry.match` routine with some convenient defaults so that it is easier to use with typical tabular data.
+
+    :param obj: Table of detected objects
+    :param cat: Reference photometric catalogue
+    :param sr: Matching radius in degrees, optional
+    :param pixscale: Pixel scale, degrees per pixel. If specified, and `sr` is not set, then median value of half of FWHM, multiplied by pixel scale, is used as a matching radius.
+    :param order: Order of zero point spatial polynomial (0 for constant).
+    :param bg_order: Order of additive flux term spatial polynomial (None to disable this term in the model)
+    :param obj_col_mag: Column name for object instrumental magnitude
+    :param obj_col_mag_err: Column name for object magnitude error
+    :param obj_col_ra: Column name for object Right Ascension
+    :param obj_col_dec: Column name for object Declination
+    :param obj_col_x: Column name for object x coordinate
+    :param obj_col_y: Column name for object y coordinate
+    :param cat_col_mag: Column name for catalogue magnitude
+    :param cat_col_mag_err: Column name for catalogue magnitude error
+    :param cat_col_mag1: Column name for the first catalogue magnitude defining the stellar color
+    :param cat_col_mag2: Column name for the second catalogue magnitude defining the stellar color
+    :param cat_col_ra: Column name for catalogue Right Ascension
+    :param cat_col_dec: Column name for catalogue Declination
+    :param update: If True, `mag_calib` and `mag_calib_err` columns with calibrated magnitude (without color term) and its error will be added to the object table
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
+    :param kwargs: The rest of keyword arguments will be directly passed to :func:`stdpipe.photometry.match`.
+    :returns: The dictionary with photometric results, as returned by :func:`stdpipe.photometry.match`.
+
+    """
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 

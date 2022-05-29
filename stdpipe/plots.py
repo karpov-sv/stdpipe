@@ -30,7 +30,17 @@ def colorbar(obj=None, ax=None, size="5%", pad=0.1):
     ax.get_figure().sca(ax)
 
 def imshow(image, qq=None, show_colorbar=True, show_axis=True, stretch='linear', ax=None, **kwargs):
-    """Simple wrapper around pyplot.imshow with histogram-based intensity scaling"""
+    """Simple wrapper around pyplot.imshow with histogram-based intensity scaling, optional colorbar, etc.
+
+    :param image: Numpy 2d array to display
+    :param qq: two-element tuple (or list) with quantiles that define lower and upper limits for image intensity normalization. Default is `[0.5, 99.5]`. Will be superseded by manually provided `vmin` and `vmax` arguments.
+    :param show_colorbar: Whether to show a colorbar alongside the image
+    :param show_axis: Whether to show the axes around the image
+    :param stretch: Image intensity stretching mode - e.g. `linear`, `log`, `asinh`, or anything else supported by Astropy visualization layer
+    :param ax: Matplotlib Axes object to be used for plotting, optional
+    :param kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.imshow`
+
+    """
     if ax is None:
         ax = plt.gca()
 
@@ -73,6 +83,22 @@ def imshow(image, qq=None, show_colorbar=True, show_axis=True, stretch='linear',
     return img
 
 def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], show_colorbar=True, show_axis=True, show_dots=False, ax=None, **kwargs):
+    """Plots various statistical estimators binned onto regular grid from the set of irregular data points (`x`, `y`, `value`).
+
+    :param x: Abscissae of the data points
+    :param y: Ordinates of the data points
+    :param value: Values of the data points
+    :param bins: Number of bins per axis
+    :param statistic: Statistical estimator to plot, may be `mean`, `median`, or a function
+    :param qq: two-element tuple (or list) with quantiles that define lower and upper limits for image intensity normalization. Default is `[0.5, 97.5]`. Will be superseded by manually provided `vmin` and `vmax` arguments.
+    :param show_colorbar: Whether to show a colorbar alongside the image
+    :param show_axis: Whether to show the axes around the image
+    :param show_dots: Whether to overlay the positions of data points onto the plot
+    :param ax: Matplotlib Axes object to be used for plotting, optional
+    :param kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.imshow`
+    :returns: None
+
+    """
     gmag0, xe, ye, binnumbers = binned_statistic_2d(x, y, value, bins=bins, statistic=statistic)
 
     vmin1,vmax1 = np.percentile(gmag0[np.isfinite(gmag0)], qq)
@@ -153,6 +179,28 @@ def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, 
     fig.suptitle(title)
 
 def plot_photometric_match(m, ax=None, mode='mag', show_masked=True, show_final=True, **kwargs):
+    """Convenience plotting routine for photometric match results.
+
+    It plots various representations of the photometric match results returned by :func:`stdpipe.photometry.match` or :func:`stdpipe.pipeline.calibrate_photometry`, depending on the `mode` parameter:
+
+    -  `mag` - displays photometric residuals as a function of catalogue magnitude
+    -  `color` - displays photometric residuals as a function of catalogue color
+    -  `zero` - displays the map of empirical zero point, i.e. difference of catalogue and instrumental magnitudes for all matched objects
+    -  `model` - displays the map of zero point model
+    -  `residuals` - displays fitting residuals between zero point and its model
+    -  `dist` - displays the map of angular separation between matched objects and stars, in arcseconds
+
+    The parameter `show_dots` controls whether to overlay the positions of the matched objects onto the maps, when applicable.
+
+    :param m: Dictionary with photometric match results
+    :param ax: Matplotlib Axes object to be used for plotting, optional
+    :param mode: plotting mode - one of `mag`, `color`, `zero`, `model`, `residuals`, or `dist`
+    :param show_masked: Whether to show masked objects
+    :param show_final: Whether to additionally highlight the objects used for the final fit, i.e. not rejected during iterative thresholding
+    :param kwargs: the rest of parameters will be directly passed to :func:`stdpipe.plots.binned_map` when applicable.
+    :returns: None
+
+    """
     if ax is None:
         ax = plt.gca()
 
@@ -224,10 +272,24 @@ from contextlib import contextmanager
 
 @contextmanager
 def figure_saver(filename=None, show=False, tight_layout=True, **kwargs):
-    '''
-    Simple matplotlib Figure() wrapper, implemented as a context manager.
+    """Simple matplotlib Figure() wrapper, implemented as a context manager.
     It stores the figure to specified file, and optionally displays it interactively if run inside Jupyter.
-    '''
+
+    Intended to be used as:
+
+    .. code-block:: python
+
+        with figure_saver('/tmp/figure.png', show=True, figsize=(10, 6)) as fig:
+            ax = fig.add_subplot(111)
+            ax.plot(x, y, '.-')
+
+    :param filename: Name of a file where to store the image. May be in any format supported by Matplotlib
+    :param show: Whether to also display the figure inside Jupuyter notebook
+    :param tight_layout: Whether to call :code:`fig.tight_layout()` on the figure before saving/displaying it
+    :param kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.Figure`
+
+    """
+
     fig = plt.Figure(**kwargs)
 
     try:

@@ -481,6 +481,62 @@ def get_intrinsic_scatter(y, yerr, min=0, max=None):
     return C.x[2]
 
 def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_mag, cat_magerr=None, cat_color=None, sr=3/3600, obj_x=None, obj_y=None, spatial_order=0, bg_order=None, threshold=5.0, niter=10, accept_flags=0, cat_saturation=None, max_intrinsic_rms=0, sn=None, verbose=False, robust=True, scale_noise=False):
+    """Low-level photometric matching routine.
+
+    It tries to build the photometric model for objects detected on the image that includes catalogue magnitude, positionally-dependent zero point, linear color term, optional additive flux term, and also takes into account possible intrinsic magnitude scatter on top of measurement errors.
+
+    :param obj_ra: Array of Right Ascension values for the objects
+    :param obj_dec: Array of Declination values for the objects
+    :param obj_mag: Array of instrumental magnitude values for the objects
+    :param obj_magerr: Array of instrumental magnitude errors for the objects
+    :param obj_flags: Array of flags for the objects
+    :param cat_ra: Array of catalogue Right Ascension values
+    :param cat_dec: Array of catalogue Declination values
+    :param cat_mag: Array of catalogue magnitudes
+    :param cat_magerr: Array of catalogue magnitude errors
+    :param cat_color: Array of catalogue color values, optional
+    :param sr: Matching radius, degrees
+    :param obj_x: Array of `x` coordinates of objects on the image, optional
+    :param obj_y: Array of `y` coordinates of objects on the image, optional
+    :param spatial_order: Order of zero point spatial polynomial (0 for constant).
+    :param bg_order: Order of additive flux term spatial polynomial (None to disable this term in the model)
+    :param threshold: Rejection threshold (relative to magnitude errors) for object-catalogue pair to be rejected from the fit
+    :param niter: Number of iterations for the fitting
+    :param accept_flags: Bitmask for acceptable object flags. Objects having any other
+    :param cat_saturation: Saturation level for the catalogue - stars brighter than this magnitude will be excluded from the fit
+    :param max_intrinsic_rms: Maximal intrinsic RMS to use during the fitting. If set to 0, no intrinsic scatter is included in the noise model.
+    :param sn: Minimal acceptable signal to noise ratio (1/obj_magerr) for the objects to be included in the fit
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :param robust: Whether to use robust least squares fitting routine instead of weighted least squares
+    :param scale_noise: Whether to re-scale the noise model (object and catalogue magnitude errors) to match actual scatter of the data points or not. Intrinsic scatter term is not being scaled this way.
+    :returns: The dictionary with photometric results, as described below.
+
+    The results of photometric matching are returned in a dictionary with the following fields:
+
+    -  `oidx`, `cidx`, `dist` - indices of positionally matched objects and catalogue stars, as well as their pairwise distances in degrees
+    -  `omag`, `omagerr`, `cmag`, `cmagerr` - arrays of object instrumental magnitudes of matched objects, corresponding catalogue magnitudes, and their errors. Array lengths are equal to the number of positional matches.
+    -  `color` - catalogue colors corresponding to the matches, or zeros if no color term fitting is requested
+    -  `ox`, `oy`, `oflags` - coordinates of matched objects on the image, and their flags
+    -  `zero`, `zero_err` - empirical zero points (catalogue - instrumental magnitudes) for every matched object, as well as its errors, derived as a hypotenuse of their corresponding errors.
+    -  `zero_model`, `zero_model_err` - modeled "full" zero points (including color terms) for matched objects, and their corresponding errors from the fit
+    -  `color_term` - fitted color term. Instrumental photometric system is defined as :code:`obj_mag = cat_mag - color*color_term`
+    -  `zero_fn` - function to compute the zero point (without color term) at a given position and for a given instrumental magnitude of object, and optionally its error.
+    -  `obj_zero` - zero points for all input objects (not necessarily matched to the catalogue) computed through aforementioned function, i.e. without color term
+    -  `params` - Internal parameters of the fittting polynomial
+    -  `intrinsic_rms`, `error_scale` - fitted values of intrinsic scatter and noise scaling
+    -  `idx` - boolean index of matched objects/catalogue stars used in the final fit (i.e. not rejected during iterative thresholding, and passing initial quality cuts
+    -  `idx0` - the same but with just initial quality cuts taken into account
+
+    Returned zero point computation function has the following signature:
+
+    :obj:`zero_fn(xx, yy, mag=None, get_err=False, add_intrinsic_rms=False)`
+
+    where `xx` and `yy` are coordinates on the image, `mag` is object instrumental magnitude (needed to compute additive flux term). If :code:`get_err=True`, the function returns estimated zero point error instead of zero point, and `add_intrinsic_rms` controls whether this error estimation should also include intrinsic scatter term or not.
+
+    The zero point returned by this function does not include the contribution of color term. Therefore, in order to derive the final calibrated magnitude for the object, you will need to manually add the color contribution: :code:`mag_calibrated = mag_instrumental + color*color_term`, where `color` is a true object color, and `color_term` is reported in the photometric results.
+
+    """
+
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
@@ -625,7 +681,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
             'params': C.params,
             'error_scale': np.sqrt(C.scale),
             'intrinsic_rms': intrinsic_rms,
-            'obj_zero': zero_fn(obj_x, obj_y),
+            'obj_zero': zero_fn(obj_x, obj_y, mag=obj_mag),
             'ox': ox, 'oy': oy, 'oflags': oflags,
             'idx': idx, 'idx0': idx0}
 
