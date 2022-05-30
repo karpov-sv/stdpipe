@@ -32,11 +32,27 @@ def get_hips_image(hips, ra=None, dec=None, width=None, height=None, fov=None,
                    wcs=None, shape=None, header=None,
                    asinh=None, normalize=True, upscale=False,
                    get_header=True, verbose=False):
-    """
-    Load the image from any HiPS survey using CDS hips2fits service.
+    """Load the image from any HiPS survey using CDS hips2fits service.
 
     The image scale and orientation may be specified by either center coordinates and fov,
     or by directly passing WCS solution or FITS header containing it.
+
+    :param hips: HiPS identifier of the survey to use. See full list at https://aladin.u-strasbg.fr/hips/list
+    :param ra: Image center Right Ascension in degrees, optional
+    :param dec: Image center Declination in degrees, optional
+    :param width: Image width in pixels, optional
+    :param height: Image height in pixels, optional
+    :param fov: Image angular size in degrees, optional
+    :param wcs: Input WCS as :class:`astropy.wcs.WCS` object. May be used instead of manually specifying `ra`, `dec` and `fov` parameters.
+    :param shape: Image shape - tuple of (height, width) values. May be used instead of `width` and `height`
+    :param header: Image header containing image dimensions and WCS. May be passed to function instead of manually specifying them
+    :param asinh: Whether the HiPS survey is expected to be in non-linear `asinh` scale. For Pan-STARRS which uses it, the scaling will be used automatically unless you specify :code:`asinh=False` here
+    :param normalize: Whether to try pseudo-normalizing the image so that its background mean value is 100 and background rms is 10. May be useful if your software fails analyzing small floating-point image levels.
+    :param upscale: If set, the routine will request upscaled image, and then will downscale it before returning to user. Useful e.g. for requesting Pan-STARRS images that are stored in non-linear asinh scaling, and thus suffer from photometric errors if you request the image with larger pixel scales. Upscaling (to better than 1''/pixel scale) typically overcomes this problem - the price is increasing network traffic.
+    :param get_header: Whether to also return the FITS header alongside with the image.
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :returns: The image from HiPS survey projected onto requested pixel grid, or image and FITS header if :code:`get_header=True`
+
     """
 
     # Simple wrapper around print for logging in verbose mode only
@@ -174,19 +190,39 @@ def mask_template(tmpl, cat=None, cat_saturation_mag=None,
                   mask_nans=True, mask_masked=True,
                   mask_photometric=False, aper=2, sn=5,
                   wcs=None, dilate=5, verbose=False, _tmpdir=None):
-    """
-    Apply various masking heuristics (NaNs, saturated catalogue stars, etc) to the template.
 
-    If `mask_nans` is set, it masks NaN pixels
+    """Apply various masking heuristics (NaNs, saturated catalogue stars, etc) to the template image.
 
-    If `mask_masked` is set and catalogue is provided, it masks all catalogue stars where
-    `cat_col_mag` or `cat_col_mag_err` fields are either masked or NaNs
+    If `mask_nans` is set, it masks all `NaN` pixels in the template
 
-    If `mask_photometric` is set and catalogue is provided, it detects the objects on the template,
-    matches them photometrically, and then rejects all the stars that are not used in photometric fit
-    and fainter than the catalogue entries - supposedly, the saturated stars.
+    If catalogue `cat` is provided, it will also try some catalogue-based masking as described below:
 
-    The mask then may be optionally dilated if dilation size is set in `dilate` argument.
+    -  If `cat_saturation_mag` is set, it will mask central pixels of all catalogue stars brighter than this magnitude.
+
+    -  If `mask_masked` is set, it also masks all catalogue stars where `cat_col_mag` or `cat_col_mag_err` fields are either masked (using Numpy masked arrays infrastructure) or set to `NaN`
+
+    -  If `mask_photometric` is set and catalogue is provided, it detects the objects on the template, matches them photometrically, and then rejects all the stars that are not used in photometric fit and fainter than the catalogue entries - supposedly, the saturated stars with central pixels either interpolated out or lost some flux due to bleeding.
+
+    Finally, the mask then may be optionally dilated if dilation size is set in `dilate` argument.
+
+    :param tmpl: Input template image as a Numpy array.
+    :param cat: Input catalogue to be used for masking, optional
+    :param cat_saturation_mag: Saturation level for the catalogue stars.
+    :param cat_col_mag: Column name for catalogue magnitudes
+    :param cat_col_mag_err: Column name for catalogue magnitude errors
+    :param cat_col_ra: Column name for catalogue Right Ascension
+    :param cat_col_dec: Column name for catalogue Declination
+    :param cat_sr: Catalogue matching radius in degrees
+    :param mask_nans: Whether to mask template pixels set to `NaN`
+    :param mask_masked: Whether to mask central pixels of catalogue stars masked in the catalogue, or with magnitudes set to `NaN`
+    :param mask_photometric: Whether to apply photometric-based masking heuristic as described above
+    :param aper: Aperture size for performing photometry on the template for photometric-based masking
+    :param sn: Minimal signal to noise ratio for detecting stars in the template for photometric-based masking
+    :param wcs: Template WCS as :class:`astropy.wcs.WCS` object.
+    :param dilate: Dilation kernel size for dilating the mask to extend masked regions (e.g. to better cover wings of saturated stars)
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :param _tmpdir: If specified, all temporary files will be created in a dedicated directory (that will be deleted after running the executable) inside this path.
+    :returns: Mask for the template image.
 
     """
 
@@ -368,9 +404,24 @@ def normalize_ps1_skycell(filename, outname=None, verbose=False):
 def get_ps1_image(band='r', ext='image', wcs=None, shape=None,
                   width=None, height=None, header=None, extra={},
                   _cachedir=None, _tmpdir=None, _workdir=None, verbose=False):
-    """
-    Load the images of specified type (image or mask) from PanSTARRS and re-project
-    to requested WCS pixel grid.
+
+    """Downloads the images of specified type (image or mask) from PanSTARRS and mosaics / re-projects
+    them to requested WCS pixel grid.
+
+    :param band: Pan-STARRS photometric band (one of `g`, `r`, `i`, `z`, or `y`)
+    :param ext: Image type - either `image` or `mask`
+    :param wcs: Output WCS projection as :class:`astropy.wcs.WCS` object
+    :param shape: Output image shape as (height, width) tuple, may be specified instead of `width` and `height`
+    :param width: Output image width in pixels, optional
+    :param height: Output image height in pixels, optional
+    :param header: The header containing image dimensions and WCS, to be used instead of `wcs`, `width` and `height`
+    :param extra: Dictionary of extra SWarp parameters to be passed to underlying call to :func:`stdpipe.templates.reproject_swarp`
+    :param _cachedir: If specified, this directory will be used as a location to cache downloaded Pan-STARRS images so that they may be re-used between calls. If not specified, :file:`ps1` directory will be created for it in your system temporary directory (:file:`/tmp` on Linux)
+    :param _tmpdir: If specified, all temporary files will be created in a dedicated directory (that will be deleted after running the executable) inside this path.
+    :param _workdir: If specified, all temporary files will be created in this directory, and will be kept intact after running SWarp. May be used for debugging exact inputs and outputs of the executable. Optional
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :returns: Returns the image re-projected onto requested pixel grid
+
     """
 
     # Simple wrapper around print for logging in verbose mode only
@@ -396,6 +447,16 @@ def get_ps1_image(band='r', ext='image', wcs=None, shape=None,
     return coadd
 
 def get_ps1_image_and_mask(band='r', **kwargs):
+    """Convenience wrapper for simultaneously requesting the image and corresponding mask from Pan-STARRS image archive.
+
+    Uses :func:`stdpipe.templates.get_ps1_image` to do the job
+
+    :param band: Pan-STARRS photometric band (one of `g`, `r`, `i`, `z`, or `y`)
+    :param \**kwargs: The rest of parameters will be directly passed to :func:`stdpipe.templates.get_ps1_image`
+    :returns: Image and mask
+
+    """
+
     image = get_ps1_image(band=band, ext='image', **kwargs)
     mask = get_ps1_image(band=band, ext='mask', **kwargs)
 

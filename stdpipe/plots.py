@@ -38,7 +38,7 @@ def imshow(image, qq=None, show_colorbar=True, show_axis=True, stretch='linear',
     :param show_axis: Whether to show the axes around the image
     :param stretch: Image intensity stretching mode - e.g. `linear`, `log`, `asinh`, or anything else supported by Astropy visualization layer
     :param ax: Matplotlib Axes object to be used for plotting, optional
-    :param kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.imshow`
+    :param \**kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.imshow`
 
     """
     if ax is None:
@@ -95,7 +95,7 @@ def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], show_colo
     :param show_axis: Whether to show the axes around the image
     :param show_dots: Whether to overlay the positions of data points onto the plot
     :param ax: Matplotlib Axes object to be used for plotting, optional
-    :param kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.imshow`
+    :param \**kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.imshow`
     :returns: None
 
     """
@@ -197,7 +197,7 @@ def plot_photometric_match(m, ax=None, mode='mag', show_masked=True, show_final=
     :param mode: plotting mode - one of `mag`, `color`, `zero`, `model`, `residuals`, or `dist`
     :param show_masked: Whether to show masked objects
     :param show_final: Whether to additionally highlight the objects used for the final fit, i.e. not rejected during iterative thresholding
-    :param kwargs: the rest of parameters will be directly passed to :func:`stdpipe.plots.binned_map` when applicable.
+    :param \**kwargs: the rest of parameters will be directly passed to :func:`stdpipe.plots.binned_map` when applicable.
     :returns: None
 
     """
@@ -286,7 +286,7 @@ def figure_saver(filename=None, show=False, tight_layout=True, **kwargs):
     :param filename: Name of a file where to store the image. May be in any format supported by Matplotlib
     :param show: Whether to also display the figure inside Jupuyter notebook
     :param tight_layout: Whether to call :code:`fig.tight_layout()` on the figure before saving/displaying it
-    :param kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.Figure`
+    :param \**kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.Figure`
 
     """
 

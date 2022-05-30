@@ -50,7 +50,7 @@ def refine_astrometry(obj, cat, sr=10/3600, wcs=None, order=0,
     :param method: May be either 'scamp' or 'astropy' or 'astrometrynet'
     :param update: If set, the object list will be updated in-place to contain correct `ra` and `dec` sky coordinates
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :param kwargs: All other parameters will be directly passed to :func:`~stdpipe.astrometry.refine_wcs_scamp`
+    :param \**kwargs: All other parameters will be directly passed to :func:`~stdpipe.astrometry.refine_wcs_scamp`
     :returns: Refined astrometric solution
 
     """
@@ -272,7 +272,7 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, bg_order=Non
     :param cat_col_dec: Column name for catalogue Declination
     :param update: If True, `mag_calib` and `mag_calib_err` columns with calibrated magnitude (without color term) and its error will be added to the object table
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
-    :param kwargs: The rest of keyword arguments will be directly passed to :func:`stdpipe.photometry.match`.
+    :param \**kwargs: The rest of keyword arguments will be directly passed to :func:`stdpipe.photometry.match`.
     :returns: The dictionary with photometric results, as returned by :func:`stdpipe.photometry.match`.
 
     """

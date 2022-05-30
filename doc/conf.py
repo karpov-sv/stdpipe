@@ -38,6 +38,7 @@ extensions = [
     "sphinxcontrib.apidoc",
     "sphinx.ext.autosummary",
     "sphinx.ext.intersphinx",
+    "sphinx.ext.autosectionlabel",
 ]
 
 mathjax_config = {
