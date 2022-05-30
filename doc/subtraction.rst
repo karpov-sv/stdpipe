@@ -43,7 +43,8 @@ Using original Pan-STARRS images
 Running image subtraction
 -------------------------
 
-*STDPipe* has some basic support for image subtraction through the interface to `HOTPANTS <https://github.com/acbecker/hotpants>`_ image subtraction code that is implemented in :func:`stdpipe.subtraction.run_hotpants`.
+*STDPipe* has some basic support for image subtraction through the interface to `HOTPANTS <https://github.com/acbecker/hotpants>`_ image subtraction code that is implemented in :func:`stdpipe.subtraction.run_hotpants`. We recommend checking the HOTPANTS documentation to better understand the concepts and options for it.
+
 
 
 .. autofunction:: stdpipe.subtraction.run_hotpants

@@ -15,6 +15,45 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, templ
                  obj=None,
                  get_convolved=False, get_scaled=False, get_noise=False, get_kernel=False, get_header=False,
                  _tmpdir=None, _workdir=None, _exe=None, verbose=False):
+    """Wrapper for running HOTPANTS to subtract a template from science image.
+
+    To better understand the logic and available subtraction options you may check HOTPANTS documentation at https://github.com/acbecker/hotpants
+
+    The routine tries to be clever and select reasonable defaults for running HOTPANTS, but you may always directly specify any HOTPANTS option manually through `extra` parameter.
+
+    The noise model for both science and template images may optionally be provided as an external parameters (`err` and `template_err`). Moreover, if these parameters are set to `True`, the routine will try to build noise models itself. To do so, it will estimate the image background and background RMS. Then, this background RMS map is used as a primary component of the noise map. On top of that, the contribution of the sources is added by subtracting the background from original image, smoothing it a bit to mitigate pixel-level noise a bit, and then converting everything above zero to corresponding Poissonian noise contribution by dividing with gain value and taking a square root.
+
+    `rel_r` and `rel_rss` define the scaling of corresponding HOTPANTS parameters (which are the convolution kernel half width and half-width of the sub-stamps used for kernel fitting) with image FWHM.
+
+    The routine also uses "officially recommedned" logic for defining HOTPANTS `ng` parameter, that is to set it to :code:`[3, 6, 0.5*sigma_match, 4, 1.0*sigma_match, 2, 2.0*sigma_match]` where :code:`sigma_match = np.sqrt(image_fwhm**2 - template_fwhm**2) / 2.35`. This approach assumes that :code:`image_fwhm > template_fwhm`, and of course needs `image_fwhm` and `template_fwhm` to be provided.
+
+    :param image: Input science image as a Numpy array
+    :param template: Input template image, should have the same shape as a science image
+    :param mask: Science image mask as a boolean array (True values will be masked), optional
+    :param template_mask: Template image mask as a boolean array (True values will be masked), optional
+    :param err: Science image error map (expected RMS of every pixel). If set to `True`, the code will try to build the noise map directly from the image and `image_gain` parameter. Optional
+    :param template_err: Template image error map. If set to `True`, the code will try to build the noise map directly from the template and `template_gain` parameter. Optional
+    :param extra: Extra parameters to be passed to HOTPANTS executable. Should be a dictionary with parameter names as keys. Optional
+    :param image_fwhm: FWHM of science image in pixels, optional
+    :param template_fwhm: FWHM of template image in pixels, optional
+    :param image_gain: Gain of science image
+    :param template_gain: Gain of template image
+    :param rel_r: If specified, HOTPANTS `r` parameters will be set to :code:`image_fwhm*rel_r`
+    :param rel_rss: If specified, HOTPANTS `rss` parameters will be set to :code:`image_fwhm*rel_rss`
+    :param obj: List of objects detected on science image. If provided, it will be used to better place the sub-stamps used to derive the convolution kernel.
+    :param get_convolved: Whether to also return the convolved template image
+    :param get_scaled: Whether to also return noise-normalized difference image
+    :param get_noise: Whether to also return difference image noise model
+    :param get_kernel: Whether to also return convolution kernel used in the subtraction
+    :param get_header: Whether to also return the FITS header from HOTPANTS output file
+    :param _workdir: If specified, all temporary files will be created in this directory, and will be kept intact after running HOTPANTS. May be used for debugging exact inputs and outputs of the executable. Optional
+    :param _tmpdir: If specified, all temporary files will be created in a dedicated directory (that will be deleted after running the executable) inside this path.
+    :param _exe: Full path to HOTPANTS executable. If not provided, the code tries to locate it automatically in your :envvar:`PATH`.
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :returns:
+
+    """
+
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
@@ -271,7 +310,7 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, templ
         result.append(conv)
 
     if get_scaled:
-        # Noise-scaled image
+        # Noise-scaled difference image
         sdiff = fits.getdata(outname, 2)
         result.append(sdiff)
 

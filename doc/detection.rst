@@ -6,7 +6,7 @@ Detecting objects on the image
 
 *STDPipe* currently contains two functions for detecting objects on the image, one based on external `SExtractor <https://github.com/astromatic/sextractor>`_ binary (:func:`stdpipe.photometry.get_objects_sextractor`), other - on Python `SEP <https://github.com/kbarbary/sep>`_ library (:func:`stdpipe.photometry.get_objects_sextractor`). They have mostly identical signatures and arguments, but differ in minor details like meaning of returned detection flags etc.
 
-The detection in both cases is based on building the noise model through (grid-based) background and background rms estimation, and then extracting the groups of connected pixels above some pre-defined threshold. Optionally, before the thresholding, the image may be smoothed with some small kernel in order to improve the detection of fainter obects.
+The detection in both cases is based on building the noise model through (grid-based) background and background rms estimation, and then extracting the groups of connected pixels above some pre-defined threshold. Optionally, before the thresholding, the image may be smoothed with some small kernel in order to improve the detection of fainter objects. We recommend checking the `SExtractor documentation <https://sextractor.readthedocs.io/>`_ to better understand the concepts of it.
 
 Also, the routines may automatically reject the objects detected too close to frame edge, and probably truncated or improperly measured - this is controlled by `edge` argument. Less significant detections - with :math:`\frac1{\rm magerr} < {\rm S/N}` - may also be automatically rejected by providing the `sn` argument.
 
