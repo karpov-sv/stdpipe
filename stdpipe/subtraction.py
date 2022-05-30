@@ -50,7 +50,7 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, templ
     :param _tmpdir: If specified, all temporary files will be created in a dedicated directory (that will be deleted after running the executable) inside this path.
     :param _exe: Full path to HOTPANTS executable. If not provided, the code tries to locate it automatically in your :envvar:`PATH`.
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :returns:
+    :returns: The difference image and, optionally, other kinds of images as requested by the `get_*` options above
 
     """
 

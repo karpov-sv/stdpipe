@@ -16,10 +16,13 @@ We have some simple convenience routines that may be used to quickly extract som
 .. code-block:: python
 
    # Get the center position, size and pixel scale for the image from WCS
-   center_ra,center_dec,center_sr = astrometry.get_frame_center(wcs=wcs, width=image.shape[1], height=image.shape[0])
+   center_ra,center_dec,center_sr = astrometry.get_frame_center(wcs=wcs,
+                width=image.shape[1], height=image.shape[0])
    pixscale = astrometry.get_pixscale(wcs=wcs)
 
-   print('Frame center is %.2f %.2f radius %.2f deg, %.2f arcsec/pixel' % (center_ra, center_dec, center_sr, pixscale*3600))
+   print('Frame center is %.2f %.2f radius %.2f deg, %.2f arcsec/pixel' %
+                (center_ra, center_dec, center_sr, pixscale*3600))
+
 
 Initial astrometric solution (blind solving)
 --------------------------------------------
@@ -62,9 +65,13 @@ Example of using the code for solving the astrometry if not set in the header:
        pixscale_upp = 3
 
        # We will use no more than 500 brightest objects with S/N>10 to solve
-       wcs = astrometry.blind_match_astrometrynet(obj[:500], center_ra=ra0, center_dec=dec0, radius=sr0, scale_lower=pixscale_low, scale_upper=pixscale_upp, sn=10)
+       wcs = astrometry.blind_match_astrometrynet(obj[:500], center_ra=ra0, center_dec=dec0,
+                radius=sr0, scale_lower=pixscale_low, scale_upper=pixscale_upp, sn=10)
        # .. or the same using local solver with custom config
-       wcs = astrometry.blind_match_objects(obj[:500], center_ra=ra0, center_dec=dec0, radius=sr0, scale_lower=pixscale_low, scale_upper=pixscale_upp, sn=10, verbose=True, _exe='/home/karpov/astrometry/bin/solve-field', config='/home/karpov/astrometry/etc/astrometry-2mass.cfg')
+       wcs = astrometry.blind_match_objects(obj[:500], center_ra=ra0, center_dec=dec0, radius=sr0,
+                scale_lower=pixscale_low, scale_upper=pixscale_upp, sn=10, verbose=True,
+                _exe='/home/karpov/astrometry/bin/solve-field',
+                config='/home/karpov/astrometry/etc/astrometry-2mass.cfg')
 
        if wcs is not None and wcs.is_celestial:
            print('Blind solving succeeded!')
@@ -92,11 +99,13 @@ Example:
 .. code-block:: python
 
    # Let's use SCAMP for astrometric refinement.
-   wcs = pipeline.refine_astrometry(obj, cat, 5*pixscale, wcs=wcs, method='scamp', cat_col_mag='rmag', verbose=True)
+   wcs = pipeline.refine_astrometry(obj, cat, 5*pixscale, wcs=wcs,
+                method='scamp', cat_col_mag='rmag', verbose=True)
 
    if wcs is not None:
        # Update WCS info in the header
-       astrometry.clear_wcs(header, remove_comments=True, remove_underscored=True, remove_history=True)
+       astrometry.clear_wcs(header, remove_comments=True,
+                remove_underscored=True, remove_history=True)
        header.update(wcs.to_header(relax=True))
 
 .. autofunction:: stdpipe.astrometry.refine_wcs_scamp

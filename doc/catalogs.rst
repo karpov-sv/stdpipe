@@ -19,13 +19,16 @@ The following example shows how to get a reference catalogue for a given image
    wcs = WCS(header)
 
    # Get the center position, size and pixel scale for the image from WCS
-   center_ra,center_dec,center_sr = astrometry.get_frame_center(wcs=wcs, width=image.shape[1], height=image.shape[0])
+   center_ra,center_dec,center_sr = astrometry.get_frame_center(wcs=wcs,
+                width=image.shape[1], height=image.shape[0])
    pixscale = astrometry.get_pixscale(wcs=wcs)
 
-   print('Frame center is %.2f %.2f radius %.2f deg, %.2f arcsec/pixel' % (center_ra, center_dec, center_sr, pixscale*3600))
+   print('Frame center is %.2f %.2f radius %.2f deg, %.2f arcsec/pixel' %
+                (center_ra, center_dec, center_sr, pixscale*3600))
 
    # Load Pan-STARRS stars for this region brighter than r=18.0 mag
-   cat = catalogs.get_cat_vizier(center_ra, center_dec, center_sr, 'ps1', filters={'rmag':'<18'})
+   cat = catalogs.get_cat_vizier(center_ra, center_dec, center_sr, 'ps1',
+                filters={'rmag':'<18'})
    print(len(cat), 'catalogue stars')
 
 .. autofunction:: stdpipe.catalogs.get_cat_vizier

@@ -13,10 +13,12 @@ Image subtraction requires template image that has to be astrometrically aligned
 .. code-block:: python
 
    # Get r band image from PanSTARRS with science image original resolution and orientation
-   tmpl = templates.get_hips_image('PanSTARRS/DR1/r', wcs=wcs, width=image.shape[1], height=image.shape[0], get_header=False, verbose=True)
+   tmpl = templates.get_hips_image('PanSTARRS/DR1/r', wcs=wcs,
+                width=image.shape[1], height=image.shape[0], get_header=False, verbose=True)
 
    # Now mask some brighter stars in the template as we know they are saturated in Pan-STARRS
-   tmask = templates.mask_template(tmpl, cat, cat_col_mag='rmag', cat_saturation_mag=15, wcs=wcs, dilate=3, verbose=True)
+   tmask = templates.mask_template(tmpl, cat, cat_col_mag='rmag', cat_saturation_mag=15,
+                wcs=wcs, dilate=3, verbose=True)
 
    # And now the same - using original Pan-STARRS images and masks
    tmpl,tmask = templates.get_ps1_image_and_mask('r', wcs=wcs, width=, height=, verbose=True)
@@ -60,14 +62,22 @@ Running image subtraction
 
 .. code-block:: python
 
-   # Run the subtraction getting back all possible image planes, assuming the template to be noise-less, and estimating image noise model from its statistics. And also pre-flatting the images before subtraction to get rid of possible background inhomogeneities.
+   # Run the subtraction getting back all possible image planes, assuming the template
+   # to be noise-less, and estimating image noise model from its statistics.
+   # And also pre-flatting the images before subtraction to get rid
+   # of possible background inhomogeneities.
 
    import photutils
 
    bg = photutils.Background2D(image, 128, mask=mask, exclude_percentile=30).background
    tbg = photutils.Background2D(tmpl, 128, mask=tmask, exclude_percentile=30).background
 
-   diff,conv,sdiff,ediff = subtraction.run_hotpants(image-bg, tmpl-tbg, mask=mask, template_mask=tmask, get_convolved=True, get_scaled=True, get_noise=True, image_fwhm=fwhm, template_fwhm=1.5, image_gain=gain, template_gain=1e6, err=True, verbose=True)
+   diff,conv,sdiff,ediff = subtraction.run_hotpants(image-bg, tmpl-tbg,
+                mask=mask, template_mask=tmask,
+                get_convolved=True, get_scaled=True, get_noise=True,
+                image_fwhm=fwhm, template_fwhm=1.5,
+                image_gain=gain, template_gain=1e6,
+                err=True, verbose=True)
 
    # Now we have:
    # - `diff` for the difference image

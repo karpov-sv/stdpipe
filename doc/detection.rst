@@ -26,12 +26,14 @@ Below are some examples of object detection.
 
 .. code-block:: python
 
-   # We will detect objects using SExtractor and get their measurements in apertures with 3 pixels radius
+   # We will detect objects using SExtractor and get their measurements
+   # in apertures with 3 pixels radius.
    # We will also ignore anything closer than 10 pixels to image edge
    obj = photometry.get_objects_sextractor(image, mask=mask, aper=3.0, gain=gain, edge=10)
    print(len(obj), 'objects detected')
 
-   # Rough estimation of average FWHM of detected objects, taking into account only unflagged (e.g. not saturated) ones
+   # Rough estimation of average FWHM of detected objects, taking into account
+   # only unflagged (e.g. not saturated) ones
    fwhm = np.median(obj['fwhm'][obj['flags'] == 0])
    print('Average FWHM is %.1f pixels' % fwhm)
 
@@ -40,7 +42,9 @@ Next example shows how to receive extra columns, as well as checkimages, from SE
 .. code-block:: python
 
    # Now we will also get segmentation map and a column with object numbers correspoding to this map
-   obj,segm = photometry.get_objects_sextractor(image, mask=mask, aper=3.0, gain=gain, edge=10, extra_params=['NUMBER'], checkimages=['SEGMENTATION'], verbose=True)
+   obj,segm = photometry.get_objects_sextractor(image, mask=mask,
+                aper=3.0, gain=gain, edge=10, extra_params=['NUMBER'],
+                checkimages=['SEGMENTATION'], verbose=True)
 
    # We may now e.g. completely mask the footprints of objects having masked pixels
    fmask = np.zeros_like(mask)
@@ -56,12 +60,17 @@ Finally, using SExtractor star/galaxy separators - `CLASS_STAR` and `SPREAD_MODE
 
    # Run SExtractor
    # You should provide correct path to default.nnw file from SExtractor installation on your system!
-   obj = photometry.get_objects_sextractor(image, mask=mask, edge=10, wcs=wcs, aper=3.0, extra_params=['CLASS_STAR', 'NUMBER'], extra={'SEEING_FWHM':fwhm, 'STARNNW_NAME':'/Users/karpov/opt/miniconda3/envs/stdpipe//share/sextractor/default.nnw'}, psf='/tmp/psf.psf', verbose=True)
+   obj = photometry.get_objects_sextractor(image, mask=mask, edge=10, wcs=wcs,
+                aper=3.0, extra_params=['CLASS_STAR', 'NUMBER'],
+                extra={'SEEING_FWHM':fwhm, 'STARNNW_NAME':'/Users/karpov/opt/miniconda3/envs/stdpipe//share/sextractor/default.nnw'},
+                psf='/tmp/psf.psf', verbose=True)
 
    for i,cand in enumerate(obj):
-       print('Candidate %d at x/y = %.1f %.1d and RA/Dec = %.4f %.4f' % (i, cand['x'], cand['y'], cand['ra'], cand['dec']))
+       print('Candidate %d at x/y = %.1f %.1d and RA/Dec = %.4f %.4f' %
+                (i, cand['x'], cand['y'], cand['ra'], cand['dec']))
 
-       print('SPREAD_MODEL = %.3f +/- %.3f, CLASS_STAR = %.2f' % (cand['spread_model'], cand['spreaderr_model'], cand['CLASS_STAR']))
+       print('SPREAD_MODEL = %.3f +/- %.3f, CLASS_STAR = %.2f' %
+                (cand['spread_model'], cand['spreaderr_model'], cand['CLASS_STAR']))
 
 .. attention::
    The most important problem with object detection using these routines is handling of blended objects, as the codes we are using can't properly deblend close groups, except for simplest cases.
@@ -80,9 +89,11 @@ The photometric measurements returned by the routines above are sometimes not th
 
 .. code-block:: python
 
-   # We will pass this FWHM to measurement function so that aperture and background radii will be relative to it.
+   # We will pass this FWHM to measurement function so that aperture and
+   # background radii will be relative to it.
    # We will also reject all objects with measured S/N < 5
-   obj = photometry.measure_objects(obj, image, mask=mask, fwhm=fwhm, gain=gain, aper=1.0, bkgann=[5, 7], sn=5, verbose=True)
+   obj = photometry.measure_objects(obj, image, mask=mask, fwhm=fwhm, gain=gain,
+                aper=1.0, bkgann=[5, 7], sn=5, verbose=True)
    print(len(obj), 'objects properly measured')
 
 

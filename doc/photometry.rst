@@ -40,14 +40,19 @@ The calibration routine performs an iterative weighted linear least square (or r
 
 .. code-block:: python
 
-   # Photometric calibration using 2 arcsec matching radius, r magnitude, g-r color and second order spatial variations
-   m = pipeline.calibrate_photometry(obj, cat, sr=2/3600, cat_col_mag='rmag', cat_col_mag1='gmag', cat_col_mag2='rmag', max_intrinsic_rms=0.02, order=2, verbose=True)
+   # Photometric calibration using 2 arcsec matching radius, r magnitude,
+   # g-r color and second order spatial variations
+   m = pipeline.calibrate_photometry(obj, cat, sr=2/3600, cat_col_mag='rmag',
+                cat_col_mag1='gmag', cat_col_mag2='rmag',
+                max_intrinsic_rms=0.02, order=2, verbose=True)
 
-   # The code above automatically augments the object list with calibrated magnitudes, but we may also do it manually
+   # The code above automatically augments the object list with calibrated
+   # magnitudes, but we may also do it manually
    obj['mag_calib'] = obj['mag'] + m['zero_fn'](obj['x'], obj['y'])
    obj['mag_calib_err'] = np.hypot(obj['magerr'], m['zero_fn'](obj['x'], obj['y'], get_err=True))
 
-   # Now, if we happen to know object colors, we may also compute proper color-corrected magnitudes:
+   # Now, if we happen to know object colors, we may also compute
+   # proper color-corrected magnitudes:
    obj['mag_calib_color'] = obj['mag_calib'] + obj['color']*m['color_term']
 
 .. autofunction:: stdpipe.photometry.match
