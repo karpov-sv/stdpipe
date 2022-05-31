@@ -98,22 +98,45 @@ def refine_astrometry(obj, cat, sr=10/3600, wcs=None, order=0,
     return wcs
 
 def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
+                                obj_col_ra = 'ra', obj_col_dec = 'dec',
                                 cat=None, cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
                                 vizier=['ps1', 'usnob1', 'gsc'], skybot=True, ned=False,
                                 flagged=True, flagmask=0xff00,
                                 col_id=None, get_candidates=True, remove=True, verbose=False):
-    """
-    Higher-level transient candidate filtering routine.
+    """Higher-level transient candidate filtering routine.
 
     It optionally filters out the following classes of objects:
-       - flagged ones, i.e. with obj['flags'] != 0
-       - positionally coincident with stars from provided cataloge table (if cat != None)
-       - positionally coincident with stars from Vizier catalogues provided as a list of names (if vizier is non-empty)
-       - positionally and temporally coincident with Solar system objects from SkyBoT service (if skybot = True)
-       - positionally and temporally coincident with NED objects (if ned = True)
 
-    If get_candidates = False, it returns only the indices of "good" objects, else returning filtered object list
-    If get_candidates = True and remove = False, it does not filter the objects but just mark them in added columns
+       - flagged ones, i.e. with :code:`obj['flags'] != 0`
+       - positionally coincident with stars from provided cataloge table (if :code:`cat != None`)
+       - positionally coincident with stars from Vizier catalogues provided as a list of names (if `vizier` is non-empty)
+       - positionally and temporally coincident with Solar system objects from SkyBoT service (if :code:`skybot = True`)
+       - positionally and temporally coincident with NED objects (if :code:`ned = True`).
+
+    If :code:`get_candidates = False`, it returns only the indices of "good" objects, else returning filtered object list.
+    If :code:`get_candidates = True` and :code:`remove = False`, it does not remove the objects but just mark them in added columns corresponding to various filters applied.
+
+    The routine will not modify the original list, but return its filtered / modified copy instead.
+
+    :param obj: Input object list
+    :param obj_col_ra: Column name for object Right Ascension
+    :param obj_col_dec: Column name for object Declination
+    :param sr: Matching radius in degrees
+    :param pixscale: Pixel scale. If provided, and `sr` is not specified, the latter will be set to half median of FWHMs of objects
+    :param time: Time corresponding to the object observations, as :class:`astropy.time.Time` or :class:`datetime.datetime` object.
+    :param cat: Input reference catalogue, as :class:`astropy.table.Table` or similar object. Optional
+    :param cat_col_ra: Column name for catalogue Right Ascension
+    :param cat_col_dec: Column name for catalogue Declination
+    :param vizier: List of Vizier catalogue identifiers, or their short names, to cross-match the objects with.
+    :param skybot: Whether to cross-match the objects with the positions of known minor planets at the time of observations (specified through `time` parameter)
+    :param ned: Whether to cross-match the positions of objects with NED database entries
+    :param flagged: Whether to filter out flagged objects, keeping only the ones with :code:`(obj['flags'] & flagmask) == 0`
+    :param flagmask: The mask to be used for filtering of flagged objects. Will be ANDed with object flags, so should have a bit set for every relevant mask bit
+    :param col_id: Column name for some unique identifier that should not appear twice in the object list. If not specified, new column `stdpipe_id` with unique integer identifiers will be created automatically
+    :param get_candidates: Whether to return the list of candidates, or (if :code:`get_candidates=False`) just a boolean mask of objects surviving the filters
+    :param remove: Whether to remove the filtered entries from the returned list. If not, a number of additional columns (all having names `candidate_*`) will be added for every filter used, with `True` set if the filter matches the object. Finally, the boolean column `candidate_good` will have `True` for the objects surviving all the filters
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :returns: Either the copy of the list with "good" candidates, or (if :code:`get_candidates=False`) just a boolean mask of objects surviving the filters, with the same size as original objects list.
     """
 
     # Simple wrapper around print for logging in verbose mode only

@@ -333,3 +333,6 @@ apidoc_excluded_paths = ['tests']
 apidoc_separate_modules = True
 apidoc_toc_file = None
 apidoc_module_first = True
+
+# Autodoc
+autodoc_member_order = 'bysource'

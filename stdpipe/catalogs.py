@@ -1,3 +1,7 @@
+"""
+Module containing the routines for handling various online catalogues.
+"""
+
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 import os, posixpath, shutil, tempfile
@@ -207,6 +211,19 @@ def xmatch_skybot(obj, sr=10/3600, time=None, col_ra='ra', col_dec='dec', col_id
     return xcat
 
 def xmatch_ned(obj, sr=3/3600, col_ra='ra', col_dec='dec', col_id='id'):
+    """Cross-match object list with NED database entries
+
+    The routine is extremely inefficient as it has to query the objects one by one!
+
+    :param obj: astropy.table.Table with objects
+    :param sr: Cross-matching radius in degrees
+    :param col_ra: Column name in `obj` table containing Right Ascension values
+    :param col_dec: Column name in `obj` table containing Declination values
+    :param col_id: Column name in `obj` table containing some unique object identifier
+    :returns: The table of NED objects augmented with `id` column containing the identifiers from `col_id` columns of matched objects.
+
+    """
+
     xcat = []
 
     # FIXME: is there more optimal way to query NED for multiple sky positions?..

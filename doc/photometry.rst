@@ -14,7 +14,7 @@ The model includes:
 and its fitting is implemented in :func:`stdpipe.photometry.match` function, and wrapped into a bit higher-level and easier to use :func:`stdpipe.pipeline.calibrate_photometry`. The routines perform an iterative fitting with rejection of pairs deviating too much (more than `threshold` sigmas) from the model that is defined like that:
 
 .. math::
-   {\rm Catalogue} = {\rm Instrumental} + C\cdot{\rm color} + ZP(x, y, {\rm spatial_order}) + {\rm additive} + {\rm error}
+   {\rm Catalogue} = {\rm Instrumental} + C\cdot{\rm color} + ZP(x, y, {\rm spatial\_order}) + {\rm additive} + {\rm error}
 
 where
 
@@ -29,7 +29,7 @@ Zero point :math:`ZP` is a spatially varying polynomial with the degree controll
 Additive flux term is defined by linearizing the additional flux in every photometric aperture (e.g. due to incorrect background level determination) and has a form
 
 .. math::
-   {\rm additive} = -2.5/\log(10)/10^{-0.4\cdot{\rm Instrumental}} \cdot {\rm bg_corr}(x, y, {\rm bg_order})
+   {\rm additive} = -2.5/\log(10)/10^{-0.4\cdot{\rm Instrumental}} \cdot {\rm bg_corr}(x, y, {\rm bg\_order})
 
 where :math:`{\rm bg_corr}` is a flux correction inside the aperture. This term is also spatially dependent, and is controlled by `bg_order` parameter. If :code:`bg_order=None`, the fitting for this term is disabled.
 

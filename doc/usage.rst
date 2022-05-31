@@ -46,6 +46,7 @@ Data processing
    astrometry
    photometry
    subtraction
+   transients
 
 Common principles
 -----------------
