@@ -9,7 +9,8 @@ Design principles:
  - implemented as a library of routines covering most common tasks
  - operates on standard Python objects: NumPy arrays for images, Astropy Tables for catalogs and object lists, etc
  - does not try to re-implement the things already implemented in other Python packages
- - conveniently wraps external codes that do not have their own Python interfaces (*SExtractor*, *SCAMP*, *PSFEx*, *HOTPANTS*, *Astrometry.Net*, ...)
+ - conveniently wraps external codes that do not have their own Python interfaces (*SExtractor*, *SCAMP*, *PSFEx*, *HOTPANTS*, *Astrometry.Net*, ...):
+
      - wrapping is transparent: all data passed from Python, all options customizable from Python, all (or most of) outputs available back
      - everything operates on temporary files, nothing is kept after the run unless explicitly asked for
 

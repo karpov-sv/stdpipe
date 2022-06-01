@@ -85,6 +85,9 @@ Use the commands below to install the rest of dependencies and the package itsel
 
 * $ python setup.py develop
 
+Alternative installation command (try it if the one above fails - they use slightly different strategies of installing the dependencies, so results may really vary!) would be
+
+* $ pip install -e .
 
 **Keeping up to date**
 
