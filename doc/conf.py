@@ -40,6 +40,7 @@ extensions = [
     "sphinx.ext.intersphinx",
     "sphinx.ext.autosectionlabel",
     "sphinx.ext.viewcode",
+    "sphinx-prompt",
 ]
 
 mathjax_config = {

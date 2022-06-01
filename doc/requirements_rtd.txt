@@ -4,6 +4,7 @@ sphinx_math_dollar
 numpydoc
 myst_parser
 sphinxcontrib-apidoc
+sphinx-prompt
 
 extension-helpers
 numpy
