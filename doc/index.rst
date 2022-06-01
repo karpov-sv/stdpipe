@@ -28,6 +28,7 @@ User Guide
 
    installation
    usage
+   todo
    contributing
    API documentation <api/modules>
 
