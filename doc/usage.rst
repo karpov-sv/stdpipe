@@ -47,6 +47,7 @@ Data processing
    photometry
    subtraction
    transients
+   cutouts
 
 Common principles
 -----------------

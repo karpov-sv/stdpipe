@@ -1,3 +1,7 @@
+"""
+Module for cropping the images and creating image cutouts / postage stamps
+"""
+
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 import numpy as np
@@ -20,8 +24,8 @@ def crop_image_centered(data, x0, y0, r0, header=None):
     Also adjusts the FITS header, if provided, to shift the origin of WCS solution
     so that it is still valid for the cutout.
 
-    The size of image is 2*ceil(r0) + 1.
-    The original center is inside the pixel at x,y = ceil(r0),ceil(r0)
+    The size of image is :code:`2*ceil(r0) + 1`.
+    The original center is inside the pixel at :code:`x,y = ceil(r0),ceil(r0)`
     """
 
     # x1,x2 = int(np.floor(x0 - r0)), int(np.ceil(x0 + r0))
@@ -75,7 +79,44 @@ def crop_image(data, x1, y1, width, height, header=None):
     else:
         return sub
 
-def get_cutout(image, candidate, radius, mask=None, background=None, diff=None, template=None, convolved=None, err=None, footprint=None, header=None, time=None, filename=None, name=None):
+def get_cutout(image, candidate, radius, mask=None, background=None, diff=None, template=None, convolved=None, err=None, footprint=None, header=None, wcs=None, time=None, filename=None, name=None):
+    """Create the cutout from one or more image planes based on the candidate object.
+
+    The object may be either a row from :class:`astropy.table.Table`, or a dictionary with at least
+    `x` and `y` keys present and containing the pixel coordinates of the objects in the image.
+    The cutout will be centered so that object center is inside its central pixel, and its size will
+    be :code:`2*ceil(radius) + 1` pixels.
+
+    :param image: The science image for `image` plane of the cutout
+    :param candidate: The candidate object that should at least contain `x` and `y` fields
+    :param radius: Cutout radius in pixels. Cutout will have a square shape with :code:`2*ceil(radius) + 1` width
+    :param mask: The mask image for `mask` plane of the cutout, optional
+    :param background: The background for `background` plane of the cutout, optional
+    :param diff: Difference image for `diff` plane of the cutout, optional
+    :param template: Template image for `template` plane of the cutout, optional
+    :param convolved: Convolved template image for `convolved` plane of the cutout, optional
+    :param err: Noise model image for `err` plane of the cutout, optional
+    :param footprint: Candidate footprint (boolean) image for `footprint` plane of the cutout, optional
+    :param header: The header for original image. It will be copied to `header` field of the cutout and modified accordingly to properly represent the shape and WCS of the cutout. Optional
+    :param wcs: WCS for the original image. Will be copied to `wcs` field of the cutout with appropriate adjustment of the center so that it properly represents the astrometric solution on the cutout. Takes precedence over `header` parameter in defining cutout WCS. Optional
+    :param time: Time (:class:`astropy.time.Time` or :class:`datetime.datetime` or a string representation compatible with them) of the original image acquisition, to be copied to `time` field of the cutout. Optional
+    :param filename: Filename of the original image, to be stored in `filename` field of the cutout. Optional
+    :param name: The object name, to be stored in the `name` field of the cutout. Optional
+    :returns: Cutout structure as described below.
+
+    Cutout is represented by a dictionary with at least the following fields:
+
+    - `image` - primary image plane, centered on the candidate position
+    - `mask`, `background`, `diff`, `template`, `convolved`, `err`, `footprint` - corresponding secondary image planes, if provided as parameters to the routine
+    - `header` - header of the original image modified to properly represent the cutout WCS, if provided as a parameter to the routine
+    - `wcs` - WCS solution for the original image, modified to properly represent the cutout WCS, if provided as a parameter to the routine
+    - `meta` - dictionary of additional metadata for the cutout. It will be populated with all fields of the candidate object, plus additionally:
+
+        - `time` - original image timestamp as :class:`astropy.time.Time` object, if provided
+        - `filename` - Original image filename, if provided
+        - `name` - object name. If not provided, and if the candidate has `ra` and `dec` fields set, the name will be automatically constructed in a JHHMMSS.SS+DDMMSS.S form
+
+    """
     x0, y0 = candidate['x'], candidate['y']
 
     _ = crop_image_centered(image, x0, y0, radius, header=header)
@@ -86,10 +127,15 @@ def get_cutout(image, candidate, radius, mask=None, background=None, diff=None, 
 
     cutout = {'image': crop, 'meta': {}}
 
-    if crophead is not None:
-        wcs = WCS(crophead)
-        cutout['header'] = crophead
+    if wcs is not None:
         cutout['wcs'] = wcs
+
+    if crophead is not None:
+        cutout['header'] = crophead
+
+        if wcs is None:
+            wcs = WCS(crophead)
+            cutout['wcs'] = wcs
 
     # Image planes
     if mask is not None:
@@ -132,6 +178,16 @@ def get_cutout(image, candidate, radius, mask=None, background=None, diff=None, 
     return cutout
 
 def write_cutout(cutout, filename):
+    """Store the cutout as a multi-extension FITS file.
+
+    For every cutout plane, separate FITS extension with corresponding image name will be created.
+    The rest of metadata will be stored as FITS keywords in the primary header.
+
+    :param cutout: Cutout structure
+    :param filename: Name of FITS file where to store the cutout
+
+    """
+
     hdus = []
 
     # Store metadata to primary header
@@ -172,6 +228,13 @@ def write_cutout(cutout, filename):
     fits.HDUList(hdus).writeto(filename, overwrite=True)
 
 def load_cutout(filename):
+    """Restore the cutout from multi-extension FITS file written by :func:`stdpipe.cutouts.write_cutout`.
+
+    :param filename: Name of FITS file containing the cutout
+    :returns: Cutout structure
+
+    """
+
     hdus = fits.open(filename)
 
     cutout = {'meta': {}}
@@ -198,13 +261,39 @@ def load_cutout(filename):
     return cutout
 
 def adjust_cutout(cutout, max_shift=2, max_scale=1.1, inner=None, normalize=False, fit_bg=False, verbose=False):
-    """
-    Try to apply some positional adjustment to the cutout in order to minimize the difference.
-    It will add one more image plane, 'adjusted', with the minimized difference between the original image and convolved template.
+    """Try to apply some positional and scaling adjustment to the cutout in order to minimize the difference between the science image and the template.
 
-    If normalize=True, the adjusted image will be divided by the errors.
+    It will add one more image plane, `adjusted`, with the optimized difference between the original image and convolved template.
 
-    If inner is set to an integer value, only the central box with this size will be used for minimization.
+    If :code:`normalize=True`, the adjusted image will be normalized by the noise model (`err` plane of the cutout).
+
+    If `inner` is set to an integer value, only the central box with this size (in pixels) will be used for the optimization.
+
+    The optimization parameters are bounded by the `max_shift` and `max_scale` parameters.
+
+    If :code:`fit_bg=True`, the difference of image and convolved template background levels will be also fitted for as a free patameter. If not, for both planes the background level will be estimated using SExtractor *mode* algorithm (:code:`2.5*median - 1.5*mean` of unmasked regions) and subtracted prior to fitting using only shift and scale as free parameters.
+
+    :param cutout: Cutout structure as returned by :func:`stdpipe.cutouts.get_cutout`
+    :param max_shift: Upper bound for the possible positional adjustment in pixels. The shift will be limited to :code:`(-max_shift, max_shift)` range
+    :param max_scale: Upper bound for the possible scaling adjustment. The scale will be limited to :code:`(1/max_scale, max_scale)` range.
+    :param inner: If specified, only :code:`inner x inner` innermost pixels of the cutout will be used for the optimization
+    :param normalize: Whether to normalize the resulting `adjusted` cutout layer to the noise model (`err` layer)
+    :param fit_bg: Whether to include the difference in background levels between the science image and the template as a free parameter in the optimization
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :returns: `True` if optimization succeeded, `False` if it failed.
+
+    On success, an additional plane `adjusted` with optimized difference between the science image and the template will be added to the cutout. Also, the following fields will be added to cutout `meta` dictionary:
+
+    - `adjust_chi2_0` - chi-squared statistics before the optimization, computed inside the `inner` region if requested, or over the whole cutout otherwise
+    - `adjust_chi2` - chi-squared statistics after the optimization
+    - `adjust_df` - number of degrees of freedom
+    - `adjust_pval` - p-value corresponding to `adjust_chi2` and `adjust_df`
+    - `adjust_dx` - positional adjustment applied in `x` direction
+    - `adjust_dy` - positional adjustment applied in `y` direction
+    - `adjust_scale` - scaling adjustment applied
+    - `adjust_bg` - the value of science image background. Will be optimized if :code:`fit_bg=True`, or just estimated from the cutout prior to optimization
+    - `adjust_tbg` - the value of template background. Will be optimized if :code:`fit_bg=True`, or just estimated from the cutout prior to optimization
+
     """
 
     # Simple wrapper around print for logging in verbose mode only

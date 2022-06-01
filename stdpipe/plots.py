@@ -127,6 +127,22 @@ def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], show_colo
         ax.plot(x, y, 'b.', alpha=0.3)
 
 def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, mark_x=None, mark_y=None, mark_r=5.0, title=None, additional_title=None, **kwargs):
+    """Routine for displaying various image planes from the cutout structure returned by :func:`stdpipe.cutouts.get_cutout`.
+
+    The cutout planes are displayed in a single row, in the order defined by `planes` paremeters. Optionally, circular mark may be overlayed over the planes at the specified pixel position inside the cutout.
+
+    :param cutout: Cutout structure as returned by :func:`stdpipe.cutouts.get_cutout`
+    :param planes: List of names of cutout planes to show
+    :param fig: Matplotlib figure where to plot, optional
+    :param mark_x: `x` coordinate of the overlay mark in cutout coordinates, optional
+    :param mark_y: `y` coordinate of the overlay mark in cutout coordinates, optional
+    :param mark_r: Radius of the overlay mark in cutout coordinates in pixels, optional
+    :param title: The title to show above the cutouts, optional. If not provided, the title will be constructed from various pieces of cutout metadata, plus the contents of `additoonal_title` field, if provided
+    :param additional_title: Additional text to append to automatically generated title of the cutout figure.
+    :param \**kwargs: All additional parameters will be directly passed to :func:`stdpipe.plots.imshow` calls on individual images
+
+    """
+
     curplot = 1
 
     nplots = len(planes)
