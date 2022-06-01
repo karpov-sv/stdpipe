@@ -32,65 +32,8 @@ RUN  \
    && add-apt-repository ppa:deadsnakes/ppa -y \ 
    && apt-get update \
    && apt-get install -y --no-install-recommends wget curl vim build-essential ca-certificates libtool libatlas3-base libatlas-base-dev libplplot-dev libfftw3-dev libcurl4-openssl-dev autoconf automake git unzip gfortran python3.9 python3.9-dev python3-pip \
+   && apt-get install -y --no-install-recommends libcfitsio-dev sextractor scamp psfex swarp \
    && rm -rf /var/lib/apt/lists/* \
-   && curl -OL -m 3600 http://heasarc.gsfc.nasa.gov/FTP/software/fitsio/c/cfitsio_latest.tar.gz \
-   && tar zxf cfitsio_latest.tar.gz \
-   && rm -f cfitsio_latest.tar.gz \
-   && cd cfitsio-* \
-   && ./configure --build=x86_64-unknown-linux-gnu \
-   && make \
-   && make fpack \
-   && make funpack \
-   && make install \
-   && cp fpack funpack /usr/local/bin/ \
-   && cp fitsio*.h longnam.h /usr/local/include/ \
-   && cp libcfitsio.* /usr/lib/ \
-   && cd .. \
-   && curl -OL -m 3600 http://cdsarc.u-strasbg.fr/ftp/pub/sw/cdsclient.tar.gz \
-   && tar xfz cdsclient.tar.gz \
-   && rm -f cdsclient.tar.gz \
-   && cd cdsclient-* \
-   && ./configure --build=x86_64-unknown-linux-gnu \
-   && make \
-   && make install \
-   && cd .. \
-   && mkdir astromatic \
-   && curl -m 3600 -L -o astromatic/psfex_$PSFEX_version.zip https://github.com/astromatic/psfex/archive/$PSFEX_version.zip \
-   && cd astromatic \
-   && unzip psfex_$PSFEX_version.zip \
-   && rm -f psfex_$PSFEX_version.zip \
-   && cd psfex-* \
-   && sh autogen.sh \
-   && ./configure \
-   && make \
-   && make install \
-   && cd ../.. \
-   && curl -m 7200 -L -o astromatic/scamp_$SCAMP_version.zip https://github.com/astromatic/scamp/archive/$SCAMP_version.zip \
-   && unzip -q astromatic/scamp_$SCAMP_version.zip -d astromatic/ \
-   && rm -f astromatic/scamp_$SCAMP_version.zip \
-   && cd astromatic/scamp-* \
-   && sh autogen.sh \
-   && ./configure --build=x86_64-unknown-linux-gnu \
-   && make \
-   && make install \
-   && cd ../.. \
-   && curl -m 3600 -L -o astromatic/sextractor_$Sextractor_version.zip https://github.com/astromatic/sextractor/archive/$Sextractor_version.zip \
-   && unzip -q astromatic/sextractor_$Sextractor_version.zip -d astromatic/ \
-   && rm -f astromatic/sextractor_$Sextractor_version.zip \
-   && cd astromatic/sextractor-* \
-   && sh autogen.sh \
-   && ./configure --build=x86_64-unknown-linux-gnu \
-   && make \
-   && make install \
-   && cd ../.. \
-   && curl -m 7200 -L -o astromatic/swarp_$SWARP_version.zip https://github.com/astromatic/swarp/archive/$SWARP_version.zip \
-   && unzip -q astromatic/swarp_$SWARP_version.zip -d astromatic/ \
-   && rm -f astromatic/swarp_$SWARP_version.zip \ 
-   && cd astromatic/swarp-* \
-   && ./configure --build=x86_64-unknown-linux-gnu \
-   && make \
-   && make install \
-   && cd ../.. \
    && git clone https://github.com/acbecker/hotpants.git \
    && cd hotpants \
    && make \
@@ -100,7 +43,7 @@ RUN  \
    && python3.9 -m pip install --upgrade pip \
    && python3.9 -m pip install setuptools cmake \
    && python3.9 -m pip install scikit-build  \
-   && python3.9 -m pip install numpy scipy matplotlib astropy pandas shapely requests h5py scikit-image lacosmic hjson voevent-parse xmltodict astroML photutils keras keras-vis cython regions  opencv-python-headless astroscrappy astroquery 
+   && python3.9 -m pip install numpy scipy matplotlib astropy pandas shapely requests h5py scikit-image lacosmic hjson voevent-parse xmltodict astroML photutils keras keras-vis cython regions  opencv-python-headless astroscrappy astroquery tqdm 
 RUN  \
    git clone https://github.com/karpov-sv/stdpipe.git \
    && cd stdpipe \
