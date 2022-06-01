@@ -64,6 +64,9 @@ Design principles:
   - everything operates on temporary files, nothing is kept after the run unless explicitly asked for
   - temporary files are created in unique temporary directories for each run, so several instances of routines may be safely run in parallel
 
+- All image (pixel) coordinates have origin at `(0, 0)` - the ones returned from and passed to e.g. *SExtractor*, *SCAMP* and likes (that are based on `(1, 1)` origin) are transparently converted
+
+
 Common conventions for routine arguments:
 
 - Most of functions accept `verbose` argument that controls the amount of informational outputs the function produces. You may use `verbose=True` to see the details of what exactly the function is doing. Also, you may pass any `print`-like function to this argument to receive the messages instead of printing - so e.g. they may be logged.

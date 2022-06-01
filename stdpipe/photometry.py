@@ -205,7 +205,7 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
     :param mask: Image mask as a boolean array (True values will be masked), optional
     :param err: Image noise map as a NumPy array, optional
     :param thresh: Detection threshold, in sigmas above local background, to be used for `DETECT_THRESH` parameter of SExtractor call
-    :param aper: Circular aperture radius in pixels, to be used for flux measurement
+    :param aper: Circular aperture radius in pixels, to be used for flux measurement. May also be list - then flux will be measured for all apertures from that list.
     :param r0: Smoothing kernel size (sigma) to be used for improving object detection
     :param gain: Image gain, e/ADU
     :param edge: Reject all detected objects closer to image edge than this parameter
@@ -415,6 +415,10 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
         # SExtractor uses 1-based pixel coordinates
         obj['x'] -= 1
         obj['y'] -= 1
+
+        if 'x_psf' in obj:
+            obj['x_psf'] -= 1
+            obj['y_psf'] -= 1
 
         obj.meta['aper'] = aper
 

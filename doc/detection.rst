@@ -22,6 +22,10 @@ Both routines return the results as a standard Astropy Table, ordered by the obj
 
 For :func:`~stdpipe.photometry.get_objects_sextractor`, the output may also contain columns related to PSF photometry (`x_psf`, `y_psf`, `flux_psf`, `fluxerr_psf`, `mag_psf`, `magerr_psf`, `chi2_psf`, `spread_model`, `spreaderr_model`), as well as any additional measuremet parameter requested through `extra_params` argument.
 
+.. attention::
+
+   *STDPipe* (as well as SEP library) uses pixel coordinate convention with `(0, 0)` as the origin - that differs from *SExtractor* that uses `(1, 1)` as origin of coordinates! So the routine transparently converts `x` and `y` (as well as `x_psf` and `y_psf`) in the output from *SExtractor* to proper origin, so that the coordinates of objects detected by both routines are in the same system. However, if you manually add some pixel coordinate parameter to the output through `extra_params` argument, they will not be appropriately adjusted!
+
 Below are some examples of object detection.
 
 .. code-block:: python
@@ -72,9 +76,9 @@ Finally, using SExtractor star/galaxy separators - `CLASS_STAR` and `SPREAD_MODE
        print('SPREAD_MODEL = %.3f +/- %.3f, CLASS_STAR = %.2f' %
                 (cand['spread_model'], cand['spreaderr_model'], cand['CLASS_STAR']))
 
-.. attention::
-   The most important problem with object detection using these routines is handling of blended objects, as the codes we are using can't properly deblend close groups, except for simplest cases.
+.. note::
 
+   The most important problem with object detection using these routines is handling of blended objects, as the codes we are using can't properly deblend close groups, except for simplest cases.
 
 .. autofunction:: stdpipe.photometry.get_objects_sextractor
    :noindex:
