@@ -16,7 +16,6 @@ requirements = [
     'sep',
     'photutils',
     'statsmodels',
-    'esutil',
     'tqdm',
     'regions'
 ]

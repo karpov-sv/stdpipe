@@ -15,8 +15,6 @@ from astropy.coordinates import SkyCoord
 from astropy.time import Time
 from astropy.table import Table
 
-from esutil import htm
-
 from . import photometry
 from . import astrometry
 from . import catalogs
@@ -165,8 +163,6 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
         # So let's create a copy of objects list where we may freely add extra columns without touching the original
         obj_in = obj_in.copy()
 
-    h = htm.HTM(10)
-
     log('Candidate filtering routine started with %d initial candidates and %.1f arcsec matching radius' % (len(obj), sr*3600))
     cand_idx = np.ones(len(obj), dtype=np.bool)
 
@@ -184,7 +180,7 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
     if cat is not None and remove == False:
         obj_in['candidate_refcat'] = False
     if cat is not None and np.any(cand_idx):
-        m = h.match(obj['ra'], obj['dec'], cat[cat_col_ra], cat[cat_col_dec], sr)
+        m = astrometry.spherical_match(obj['ra'], obj['dec'], cat[cat_col_ra], cat[cat_col_dec], sr)
         cand_idx[m[0]] = False
 
         if remove == False:

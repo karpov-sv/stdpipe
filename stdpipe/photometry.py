@@ -22,9 +22,9 @@ import photutils
 from photutils.utils import calc_total_error
 
 import statsmodels.api as sm
-from esutil import htm
-
 from scipy.optimize import minimize
+
+from . import astrometry
 
 try:
     import cv2
@@ -544,9 +544,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
-    h = htm.HTM(10)
-
-    oidx,cidx,dist = h.match(obj_ra, obj_dec, cat_ra, cat_dec, sr, maxmatch=0)
+    oidx,cidx,dist = astrometry.spherical_match(obj_ra, obj_dec, cat_ra, cat_dec, sr)
 
     log(len(dist), 'initial matches between', len(obj_ra), 'objects and', len(cat_ra), 'catalogue stars, sr =', sr*3600, 'arcsec')
     log('Median separation is %.2f arcsec' % (np.median(dist)*3600))

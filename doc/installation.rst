@@ -51,7 +51,7 @@ Install conda-forge dependencies
 
 .. prompt:: bash
 
-   conda install -c conda-forge esutil astroscrappy
+   conda install -c conda-forge astroscrappy
 
 Install conda astropy dependencies
 
