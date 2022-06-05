@@ -16,8 +16,6 @@ from astropy.io import fits
 from astropy.stats import mad_std
 from astropy.table import Table
 
-from esutil import htm
-
 # from scipy.ndimage import binary_dilation
 from astropy.convolution import Tophat2DKernel, convolve, convolve_fft
 
@@ -296,8 +294,7 @@ def find_ps1_skycells(ra, dec, sr, band='r', ext='image', cell_radius=0.3, fullp
         __skycells = Table.read(utils.get_data_path('ps1skycells.txt'), format='ascii')
 
     # FIXME: here we may select the cells that are too far from actual footprint
-    h = htm.HTM(10)
-    _,idx,_ = h.match(ra, dec, __skycells['ra0'], __skycells['dec0'], sr + cell_radius, maxmatch=0)
+    _,idx,_ = astrometry.spherical_match(ra, dec, __skycells['ra0'], __skycells['dec0'], sr + cell_radius)
 
     if fullpath:
         # Get full path on the server

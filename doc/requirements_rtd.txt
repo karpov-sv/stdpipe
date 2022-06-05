@@ -4,6 +4,7 @@ sphinx_math_dollar
 numpydoc
 myst_parser
 sphinxcontrib-apidoc
+sphinx-prompt
 
 extension-helpers
 numpy
@@ -15,7 +16,6 @@ astroquery>0.4.1
 sep
 photutils
 statsmodels
-esutil==0.6.0
 tqdm
 psycopg2
 regions

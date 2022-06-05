@@ -3,13 +3,12 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 import os, tempfile, shutil, shlex, re, warnings
 import numpy as np
 
-from esutil import coords, htm
-
 from astropy.wcs import WCS
 from astropy.io import fits
 from astropy.wcs.utils import fit_wcs_from_points
-from astropy.coordinates import SkyCoord
+from astropy.coordinates import SkyCoord, search_around_sky
 from astropy.table import Table
+from astropy import units as u
 
 from scipy.stats import chi2
 
@@ -34,10 +33,10 @@ def get_frame_center(filename=None, header=None, wcs=None, width=None, height=No
         elif shape is not None:
             height,width = shape
 
-    [ra1],[dec1] = wcs.all_pix2world([0], [0], 1)
-    [ra0],[dec0] = wcs.all_pix2world([width/2], [height/2], 1)
+    ra1,dec1 = wcs.all_pix2world(0, 0, 0)
+    ra0,dec0 = wcs.all_pix2world(width/2, height/2, 0)
 
-    sr = coords.sphdist(ra0, dec0, ra1, dec1)[0]
+    sr = spherical_distance(ra0, dec0, ra1, dec1)
 
     return ra0, dec0, sr
 
@@ -71,6 +70,47 @@ def xyztoradec(xyz):
 
     return (np.rad2deg(ra), np.rad2deg(dec))
 
+def spherical_distance(ra1, dec1, ra2, dec2):
+    """Spherical distance.
+
+    :param ra1: First point or set of points RA
+    :param dec1: First point or set of points Dec
+    :param ra2: Second point or set of points RA
+    :param dec2: Second point or set of points Dec
+    :returns: Spherical distance in degrees
+
+    """
+
+    x = np.sin(np.deg2rad((ra1 - ra2)/2))
+    x *= x;
+    y = np.sin(np.deg2rad((dec1 - dec2)/2))
+    y *= y;
+
+    z = np.cos(np.deg2rad((dec1 + dec2)/2))
+    z *= z;
+
+    return np.rad2deg(2*np.arcsin(np.sqrt(x*(z - y) + y)))
+
+def spherical_match(ra1, dec1, ra2, dec2, sr=1/3600):
+    """Positional match on the sphere for two lists of coordinates.
+
+    Aimed to be a direct replacement for :func:`esutil.htm.HTM.match` method with :code:`maxmatch=0`.
+
+    :param ra1: First set of points RA
+    :param dec1: First set of points Dec
+    :param ra2: Second set of points RA
+    :param dec2: Second set of points Dec
+    :param sr: Maximal acceptable pair distance to be considered a match, in degrees
+    :returns: Two parallel sets of indices corresponding to matches from first and second lists, along with the pairwise distances in degrees
+
+    """
+
+    idx1,idx2,dist,_ = search_around_sky(SkyCoord(ra1, dec1, unit='deg'), SkyCoord(ra2, dec2, unit='deg'), sr*u.deg)
+
+    dist = dist.deg # convert to degrees
+
+    return idx1, idx2, dist
+
 def get_objects_center(obj, col_ra='ra', col_dec='dec'):
     """
     Returns the center RA, Dec, and radius in degrees for a cloud of objects on the sky.
@@ -79,7 +119,7 @@ def get_objects_center(obj, col_ra='ra', col_dec='dec'):
     xyz0 = np.mean(xyz, axis=1)
     ra0,dec0 = xyztoradec(xyz0)
 
-    sr0 = np.max(coords.sphdist(ra0, dec0, obj[col_ra], obj[col_dec]))
+    sr0 = np.max(spherical_distance(ra0, dec0, obj[col_ra], obj[col_dec]))
 
     return ra0, dec0, sr0
 
@@ -337,8 +377,7 @@ def refine_wcs(obj, cat, order=2, match=True, sr=3/3600, update=False,
 
     if match:
         # Perform simple nearest-neighbor matching within given radius
-        h = htm.HTM(10)
-        oidx,cidx,dist = h.match(obj['ra'], obj['dec'], cat[cat_col_ra], cat[cat_col_dec], sr, maxmatch=0)
+        oidx,cidx,dist = spherical_match(obj['ra'], obj['dec'], cat[cat_col_ra], cat[cat_col_dec], sr)
         _obj = obj[oidx]
         _cat = cat[cidx]
     else:

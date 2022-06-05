@@ -22,9 +22,9 @@ import photutils
 from photutils.utils import calc_total_error
 
 import statsmodels.api as sm
-from esutil import htm
-
 from scipy.optimize import minimize
+
+from . import astrometry
 
 try:
     import cv2
@@ -205,7 +205,7 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
     :param mask: Image mask as a boolean array (True values will be masked), optional
     :param err: Image noise map as a NumPy array, optional
     :param thresh: Detection threshold, in sigmas above local background, to be used for `DETECT_THRESH` parameter of SExtractor call
-    :param aper: Circular aperture radius in pixels, to be used for flux measurement
+    :param aper: Circular aperture radius in pixels, to be used for flux measurement. May also be list - then flux will be measured for all apertures from that list.
     :param r0: Smoothing kernel size (sigma) to be used for improving object detection
     :param gain: Image gain, e/ADU
     :param edge: Reject all detected objects closer to image edge than this parameter
@@ -416,6 +416,10 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
         obj['x'] -= 1
         obj['y'] -= 1
 
+        if 'x_psf' in obj:
+            obj['x_psf'] -= 1
+            obj['y_psf'] -= 1
+
         obj.meta['aper'] = aper
 
         if sort:
@@ -540,9 +544,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
-    h = htm.HTM(10)
-
-    oidx,cidx,dist = h.match(obj_ra, obj_dec, cat_ra, cat_dec, sr, maxmatch=0)
+    oidx,cidx,dist = astrometry.spherical_match(obj_ra, obj_dec, cat_ra, cat_dec, sr)
 
     log(len(dist), 'initial matches between', len(obj_ra), 'objects and', len(cat_ra), 'catalogue stars, sr =', sr*3600, 'arcsec')
     log('Median separation is %.2f arcsec' % (np.median(dist)*3600))

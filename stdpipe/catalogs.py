@@ -16,8 +16,6 @@ from astropy.coordinates import SkyCoord
 from astropy import units as u
 from astropy.time import Time
 
-from esutil import htm
-
 from . import astrometry
 
 catalogs = {
@@ -199,8 +197,7 @@ def xmatch_skybot(obj, sr=10/3600, time=None, col_ra='ra', col_dec='dec', col_id
         return None
 
     # Cross-match objects
-    h = htm.HTM(10)
-    oidx,cidx,dist = h.match(obj[col_ra], obj[col_dec], xcat['RA'], xcat['DEC'], 10/3600)
+    oidx,cidx,dist = astrometry.spherical_match(obj[col_ra], obj[col_dec], xcat['RA'], xcat['DEC'], 10/3600)
 
     # Annotate the table with id from objects so that it is possible to identify the matches
     xcat[col_id] = MaskedColumn(len(xcat), dtype=np.dtype(obj[col_id][0]))

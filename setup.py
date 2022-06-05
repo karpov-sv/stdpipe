@@ -16,9 +16,10 @@ requirements = [
     'sep',
     'photutils',
     'statsmodels',
-    'esutil',
     'tqdm',
-    'regions'
+    'regions',
+    'python-dateutil',
+    'requests',
 ]
 
 setup(

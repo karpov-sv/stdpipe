@@ -34,6 +34,7 @@ Next, you will need to import the modules from *STDPipe* itself:
 
 Now you have everything imported, and may start actual data analysis!
 
+
 Data processing
 ---------------
 
@@ -48,6 +49,9 @@ Data processing
    subtraction
    transients
    cutouts
+   psf
+   utils
+
 
 Common principles
 -----------------
@@ -63,6 +67,9 @@ Design principles:
   - no configuration files are necessary or being used by default, but you may of course let the underlying executable to use a config file by passing corresponding options to it
   - everything operates on temporary files, nothing is kept after the run unless explicitly asked for
   - temporary files are created in unique temporary directories for each run, so several instances of routines may be safely run in parallel
+
+- All image (pixel) coordinates have origin at `(0, 0)` - the ones returned from and passed to e.g. *SExtractor*, *SCAMP* and likes (that are based on `(1, 1)` origin) are transparently converted
+
 
 Common conventions for routine arguments:
 
@@ -92,3 +99,12 @@ Common conventions for routine arguments:
 - Functions that operate on temporary files in temporary folders may be supplied with `_workdir` argument - then they will store all temporary files related to their work in this specific folder, and will not remove them afterwards. So e.g. you will be able to directly see e.g what configuration files were created, manually re-run the failed command to experiment with its options (with `verbose=True` function call typically prints the complete command line of all calls to external programs, so you may just directly copy and paste it to terminal to repeat its invocation), etc.
 
 - Functions that run external programs (e.g. SExtractor, HOTPANTS, or Astrometry.Net) usually accept `_exe` argument to directly specify the path to corresponding executable. If not specified, the code will try to automatically find it for you, so normally you do not need to worry about it.
+
+Examples
+--------
+
+For some examples of actual usage of *STDPipe* routines we encourage you to check the `example notebooks <https://github.com/karpov-sv/stdpipe/blob/master/notebooks>`__, especially the `STDPipe tutorial <https://github.com/karpov-sv/stdpipe/blob/master/notebooks/stdpipe_tutorial.ipynb>`__ that demonstrates all basic steps of a typical image processing.
+
+We also have the `tutorial on injection of simulated stars <https://github.com/karpov-sv/stdpipe/blob/master/notebooks/simulated_stars.ipynb>`__ into the image and simple analysis of object detection efficiency.
+
+`One more tutorial <https://github.com/karpov-sv/stdpipe/blob/master/notebooks/image_stacking.ipynb>`__ shows how to do a simple image co-addition (stacking) with astrometric alignment.

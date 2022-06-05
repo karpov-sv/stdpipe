@@ -15,8 +15,6 @@ from astropy.coordinates import SkyCoord
 from astropy.time import Time
 from astropy.table import Table
 
-from esutil import htm
-
 from . import photometry
 from . import astrometry
 from . import catalogs
@@ -165,8 +163,6 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
         # So let's create a copy of objects list where we may freely add extra columns without touching the original
         obj_in = obj_in.copy()
 
-    h = htm.HTM(10)
-
     log('Candidate filtering routine started with %d initial candidates and %.1f arcsec matching radius' % (len(obj), sr*3600))
     cand_idx = np.ones(len(obj), dtype=np.bool)
 
@@ -184,7 +180,7 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
     if cat is not None and remove == False:
         obj_in['candidate_refcat'] = False
     if cat is not None and np.any(cand_idx):
-        m = h.match(obj['ra'], obj['dec'], cat[cat_col_ra], cat[cat_col_dec], sr)
+        m = astrometry.spherical_match(obj['ra'], obj['dec'], cat[cat_col_ra], cat[cat_col_dec], sr)
         cand_idx[m[0]] = False
 
         if remove == False:
@@ -350,14 +346,28 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, bg_order=Non
 
     return m
 
-def make_random_stars(width=None, height=None, shape=None, nstars=100, minflux=1, maxflux=100000, gain=1, edge=0, wcs=None, verbose=False):
-    """
-    Generate a table of random stars.
+def make_random_stars(width=None, height=None, shape=None, nstars=100, minflux=1, maxflux=100000, edge=0, wcs=None, verbose=False):
+    """Generate a table of random stars.
 
-    Coordinates are distributed uniformly.
+    Coordinates are distributed uniformly with :code:`edge <= x < width-edge` and :code:`edge <= y < height-edge`.
+
     Fluxes are log-uniform between user-provided min and max values.
 
-    Returns: the catalogue of generated stars, with x, y and flux fields set.
+    Returns the catalogue of generated stars, with at least `x`, `y` and `flux` fields set.
+    If `wcs` is set, the returned catalogue will also contain `ra` and `dec` fields with
+    sky coordinates of the stars.
+
+    :param width: Width of the image containing generated stars
+    :param height: Height of the image containing generated stars
+    :param shape: Shape  of the image containing generated stars, to be used instead of `width` and `height` if set
+    :param nstars: Number of artificial stars to inject into the image
+    :param minflux: Minimal flux of arttificial stars, in ADU units
+    :param maxflux: Maximal flux of arttificial stars, in ADU units
+    :param edge: Minimal distance to image edges for artificial stars to be placed. Optional
+    :param wcs: WCS as :class:`astropy.wcs.WCS` to be used to derive sky coordinates of injected stars. Optional
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :returns: The catalogue of injected stars, containing the fluxes, image coordinates and (if `wcs` is set) sky coordinates of injected stars.
+
     """
 
     # Simple wrapper around print for logging in verbose mode only
@@ -382,20 +392,41 @@ def make_random_stars(width=None, height=None, shape=None, nstars=100, minflux=1
 
     return cat
 
-def place_random_stars(image, psf_model, nstars=100, minflux=1, maxflux=100000, gain=1, saturation=65535, edge=0, wcs=None, verbose=False):
-    """
-    Randomly place artificial stars into the image.
-    Coordinates are distributed uniformly.
-    Fluxes are log-uniform between user-provided min and max values.
+def place_random_stars(image, psf_model, nstars=100, minflux=1, maxflux=100000, gain=None, saturation=65535, edge=0, wcs=None, verbose=False):
+    """Randomly place artificial stars into the image.
 
-    Returns: the catalogue of generated stars, with x, y and flux fields set.
+    The stars will be placed on top of the existing content of the image, and the Poissonian
+    noise will be applied to these stars according to the specified `gain` value. Also, the saturation
+    level will be applied to the resulting image according to the `saturation` value.
+
+    Coordinates of the injected stars are distributed uniformly.
+    Fluxes are log-uniform between user-provided `minflux` and `maxflux` values in ADU units.
+
+    Returns the catalogue of generated stars, with at least `x`, `y` and `flux` fields set,
+    as returned by :func:`stdpipe.pipeline.make_random_stars`
+
+    If `wcs` is set, the returned catalogue will also contain `ra` and `dec` fields with
+    sky coordinates of the stars
+
+    :param image: Image where artificial stars will be injected
+    :param psf_model: PSF model structure as returned by :func:`stdpipe.psf.run_psfex`
+    :param nstars: Number of artificial stars to inject into the image
+    :param minflux: Minimal flux of arttificial stars, in ADU units
+    :param maxflux: Maximal flux of arttificial stars, in ADU units
+    :param gain: Image gain value. If set, will be used to apply Poissonian noise to the source
+    :param saturation: Saturation level in ADU units to be applied to the image
+    :param edge: Minimal distance to image edges for artificial stars to be placed
+    :param wcs: WCS as :class:`astropy.wcs.WCS` to be used to derive sky coordinates of injected stars
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
+    :returns: The catalogue of injected stars, containing the fluxes, image coordinates and (if `wcs` is set) sky coordinates of injected stars.
+
     """
 
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     cat = make_random_stars(shape=image.shape, nstars=nstars, minflux=minflux, maxflux=maxflux,
-                            gain=gain, edge=edge, wcs=wcs, verbose=verbose)
+                            edge=edge, wcs=wcs, verbose=verbose)
 
     for _ in cat:
         psf.place_psf_stamp(image, psf_model, _['x'], _['y'], flux=_['flux'], gain=gain)
@@ -405,12 +436,40 @@ def place_random_stars(image, psf_model, nstars=100, minflux=1, maxflux=100000, 
 
     return cat
 
-def split_image(image, nx=1, ny=None, mask=None, bg=None, err=None, header=None, wcs=None, obj=None, cat=None, overlap=0, get_origin=False, verbose=False):
+def split_image(image, nx=1, ny=None, mask=None, bg=None, err=None, header=None, wcs=None, obj=None, cat=None, overlap=0, get_index=False, get_origin=False, verbose=False):
     """
-    Generator to split the image into several (nx x ny) blocks, while also optionally providing the mask, header, wcs and object list for the sub-blocks.
-    The blocks may optionally be extended by 'overlap' pixels in all directions.
+    Generator function to split the image into several (`nx` x `ny`) blocks, while also optionally providing the mask, header, wcs, object list etc for the sub-blocks.
+    The blocks may optionally be extended by 'overlap' pixels in all directions, so that at least in some sub-images every part of original image is far from the edge. This parameter may be used e.g. in conjunction with `edge` parameter of :func:`stdpipe.photometry.get_objects_sextractor` to avoid detecting the same object twice.
 
-    Returns the list consisting of origin x,y coordinates (if get_origin is True), the cropped image, and cropped mask, header, wcs, object list, and catalogie, if they are provided.
+    :param image: Image to split
+    :param nx: Number of sub-images in `x` direction
+    :param ny: Number of sub-images in `y` direction
+    :param mask: Mask image to split, optional
+    :param bg: Background map to split, optional
+    :param err: Noise model image to split, optional
+    :param header: Image header, optional. If set, the header corresponding to splitted sub-image will be returned, with correctly adjusted WCS information
+    :param wcs: WCS solution for the image, optional. If set, the solution for sub-image will be returned
+    :param obj: Object list, optional. If provided, the list of objects contained in the sub-image, with accordingly adjusted pixel coordinates, will be returned
+    :param cat: Reference catalogue, optional. If provided, the catalogue for the stars on the sub-image will be returned
+    :param overlap: If set, defines how much sub-images will overlap, in pixels.
+    :param get_index: If set, also returns the number of current sub-image, starting from zero
+    :param get_origin: If set, also return the sub-image origin pixel coordinates
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
+    :returns: Every concecutive call to the generator will return the list of cropped objects corresponding to the next sub-image, as well as some sub-image metadata.
+
+    The returned list is constructed from the following elements:
+
+    - Index of current sub-image, if :code:`get_index=True`
+    - `x` and `y` coordinates of current sub-image origin inside the original image
+    - Current sub-image
+    - Cropped mask corresponding to current sub-image, if `mask` is provided
+    - Cropped background map, if `bg` is provided
+    - Cropped noise model, if `err` is provided
+    - FITS header corresponding to the sub-image with correct astrometric solution for it, if `header` is provided
+    - WCS astrometric solution for the sub-image, if `wcs` is provided
+    - Object list containing only objects that are inside the sub-image with their pixel coordinates adjusted correspondingly, if `obj` is set
+    - Reference catalogue containing only stars overlaying the sub-image, if `cat` is provided and `wcs` is set
+
     """
 
     # Simple wrapper around print for logging in verbose mode only
@@ -436,7 +495,14 @@ def split_image(image, nx=1, ny=None, mask=None, bg=None, err=None, header=None,
         else:
             image1,header1 = _,None
 
-        result = [x1, y1] if get_origin else []
+        result = []
+
+        if get_index:
+            result += [i]
+
+        if get_origin:
+            result += [x1, y1]
+
         result += [image1]
 
         if mask is not None:

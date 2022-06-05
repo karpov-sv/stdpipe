@@ -1,5 +1,6 @@
+=============================================
 STDPipe - Simple Transient Detection Pipeline
----------------------------------------------
+=============================================
 
 *AKA: random codes noone else will ever use*
 
@@ -26,10 +27,11 @@ User Guide
 .. toctree::
    :maxdepth: 3
 
+   About <self>
    installation
    usage
-   todo
    contributing
+   todo
    API documentation <api/modules>
 
 Contributing
