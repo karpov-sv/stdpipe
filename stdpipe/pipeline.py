@@ -346,14 +346,28 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, bg_order=Non
 
     return m
 
-def make_random_stars(width=None, height=None, shape=None, nstars=100, minflux=1, maxflux=100000, gain=1, edge=0, wcs=None, verbose=False):
-    """
-    Generate a table of random stars.
+def make_random_stars(width=None, height=None, shape=None, nstars=100, minflux=1, maxflux=100000, edge=0, wcs=None, verbose=False):
+    """Generate a table of random stars.
 
-    Coordinates are distributed uniformly.
+    Coordinates are distributed uniformly with :code:`edge <= x < width-edge` and :code:`edge <= y < height-edge`.
+
     Fluxes are log-uniform between user-provided min and max values.
 
-    Returns: the catalogue of generated stars, with x, y and flux fields set.
+    Returns the catalogue of generated stars, with at least `x`, `y` and `flux` fields set.
+    If `wcs` is set, the returned catalogue will also contain `ra` and `dec` fields with
+    sky coordinates of the stars.
+
+    :param width: Width of the image containing generated stars
+    :param height: Height of the image containing generated stars
+    :param shape: Shape  of the image containing generated stars, to be used instead of `width` and `height` if set
+    :param nstars: Number of artificial stars to inject into the image
+    :param minflux: Minimal flux of arttificial stars, in ADU units
+    :param maxflux: Maximal flux of arttificial stars, in ADU units
+    :param edge: Minimal distance to image edges for artificial stars to be placed. Optional
+    :param wcs: WCS as :class:`astropy.wcs.WCS` to be used to derive sky coordinates of injected stars. Optional
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :returns: The catalogue of injected stars, containing the fluxes, image coordinates and (if `wcs` is set) sky coordinates of injected stars.
+
     """
 
     # Simple wrapper around print for logging in verbose mode only
@@ -378,20 +392,41 @@ def make_random_stars(width=None, height=None, shape=None, nstars=100, minflux=1
 
     return cat
 
-def place_random_stars(image, psf_model, nstars=100, minflux=1, maxflux=100000, gain=1, saturation=65535, edge=0, wcs=None, verbose=False):
-    """
-    Randomly place artificial stars into the image.
-    Coordinates are distributed uniformly.
-    Fluxes are log-uniform between user-provided min and max values.
+def place_random_stars(image, psf_model, nstars=100, minflux=1, maxflux=100000, gain=None, saturation=65535, edge=0, wcs=None, verbose=False):
+    """Randomly place artificial stars into the image.
 
-    Returns: the catalogue of generated stars, with x, y and flux fields set.
+    The stars will be placed on top of the existing content of the image, and the Poissonian
+    noise will be applied to these stars according to the specified `gain` value. Also, the saturation
+    level will be applied to the resulting image according to the `saturation` value.
+
+    Coordinates of the injected stars are distributed uniformly.
+    Fluxes are log-uniform between user-provided `minflux` and `maxflux` values in ADU units.
+
+    Returns the catalogue of generated stars, with at least `x`, `y` and `flux` fields set,
+    as returned by :func:`stdpipe.pipeline.make_random_stars`
+
+    If `wcs` is set, the returned catalogue will also contain `ra` and `dec` fields with
+    sky coordinates of the stars
+
+    :param image: Image where artificial stars will be injected
+    :param psf_model: PSF model structure as returned by :func:`stdpipe.psf.run_psfex`
+    :param nstars: Number of artificial stars to inject into the image
+    :param minflux: Minimal flux of arttificial stars, in ADU units
+    :param maxflux: Maximal flux of arttificial stars, in ADU units
+    :param gain: Image gain value. If set, will be used to apply Poissonian noise to the source
+    :param saturation: Saturation level in ADU units to be applied to the image
+    :param edge: Minimal distance to image edges for artificial stars to be placed
+    :param wcs: WCS as :class:`astropy.wcs.WCS` to be used to derive sky coordinates of injected stars
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
+    :returns: The catalogue of injected stars, containing the fluxes, image coordinates and (if `wcs` is set) sky coordinates of injected stars.
+
     """
 
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     cat = make_random_stars(shape=image.shape, nstars=nstars, minflux=minflux, maxflux=maxflux,
-                            gain=gain, edge=edge, wcs=wcs, verbose=verbose)
+                            edge=edge, wcs=wcs, verbose=verbose)
 
     for _ in cat:
         psf.place_psf_stamp(image, psf_model, _['x'], _['y'], flux=_['flux'], gain=gain)

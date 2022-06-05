@@ -48,6 +48,7 @@ Data processing
    subtraction
    transients
    cutouts
+   psf
 
 Common principles
 -----------------

@@ -1,3 +1,7 @@
+"""
+Module for working with point-spread function (PSF) models
+"""
+
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 import os, shutil, tempfile, shlex
@@ -9,12 +13,47 @@ from astropy.table import Table
 from . import photometry
 from . import utils
 
-def run_psfex(image, mask=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, minarea=5, vignet_size=None, order=0, sex_opts={}, checkimages=[], extra={}, psffile=None, _workdir=None, _tmpdir=None, _exe=None, verbose=False):
-    """
-    Wrapper around PSFEx
+def run_psfex(image, mask=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, minarea=5, vignet_size=None, order=0, sex_extra={}, checkimages=[], extra={}, psffile=None, _workdir=None, _tmpdir=None, _exe=None, _sex_exe=None, verbose=False):
+    """Wrapper around PSFEx to help extracting PSF models from images.
+
+    For the details of PSFEx operation we suggest to consult its documentation at https://psfex.readthedocs.io
+
+    :param image: Input image as a NumPy array
+    :param mask: Image mask as a boolean array (True values will be masked), optional
+    :param thresh: Detection threshold in sigmas above local background, for running initial SExtractor object detection
+    :param aper: Circular aperture radius in pixels, to be used for initial SExtractor object detection
+    :param r0: Smoothing kernel size (sigma) to be used for improving object detection in initial SExtractor call
+    :param gain: Image gain
+    :param minarea: Minimal number of pixels in the object to be considered a detection (`DETECT_MINAREA` parameter of SExtractor)
+    :param vignet_size: The size of *postage stamps* to be used for PSF model creation
+    :param order: Spatial order of PSF model variance
+    :param sex_extra: Dictionary of additional options to be passed to SExtractor for initial object detection (`extra` parameter of :func:`stdpipe.photometry.get_objects_sextractor`). Optional
+    :param checkimages: List of PSFEx checkimages to return along with PSF model. Optional.
+    :param extra: Dictionary of extra configuration parameters to be passed to PSFEx call, with keys as parameter names. See :code:`psfex -dd` for the full list.
+    :param psffile: If specified, PSF model file will also be stored under this file name, so that it may e.g. be re-used by SExtractor later. Optional
+    :param _workdir: If specified, all temporary files will be created in this directory, and will be kept intact after running SExtractor and PSFEx. May be used for debugging exact inputs and outputs of the executable. Optional
+    :param _tmpdir: If specified, all temporary files will be created in a dedicated directory (that will be deleted after running the executable) inside this path.
+    :param _exe: Full path to PSFEx executable. If not provided, the code tries to locate it automatically in your :envvar:`PATH`.
+    :param _sex_exe: Full path to SExtractor executable. If not provided, the code tries to locate it automatically in your :envvar:`PATH`.
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :returns: PSF structure corresponding to the built PSFEx model.
+
+    The structure has at least the following fields:
+
+    - `width`, `height` - dimesnions of supersampled PSF stamp
+    - `fwhm` - mean full width at half maximum (FWHM) of the images used for building the PSF model
+    - `sampling` - conversion factor between PSF stamp (supersampled) pixel size, and original image one (less than unity when supersampled resolution is finer than original image one)
+    - `ncoeffs` - number of coefficients pixel polynomials have
+    - `degree` - polynomial degree of a spatial variance of PSF model
+    - `data` - the data containing per-pixel polynomial coefficients for PSF model
+    - `header` - original FITS header of PSF model file, if :code:`get_header=True` parameter was set
+
+    This structure corresponds to the contents of original PSFEx generated output file that
+    is documented at https://psfex.readthedocs.io/en/latest/Appendices.html#psf-file-format-description
+
     """
 
-    # Simple wrapper around print for logging in verbose mode only
+     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     # Find the binary
@@ -45,7 +84,7 @@ def run_psfex(image, mask=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, minarea=5,
         log('Extracting PSF using vignette size %d x %d pixels' % (vignet_size, vignet_size))
 
     # Run SExtractor on input image in current workdir so that the LDAC catalogue will be in out.cat there
-    obj = photometry.get_objects_sextractor(image, mask=mask, thresh=thresh, aper=aper, r0=r0, gain=gain, minarea=minarea, _workdir=workdir, _tmpdir=_tmpdir, verbose=verbose, extra_params=['SNR_WIN', 'ELONGATION', 'VIGNET(%d,%d)' % (vignet_size,vignet_size)], extra=sex_opts)
+    obj = photometry.get_objects_sextractor(image, mask=mask, thresh=thresh, aper=aper, r0=r0, gain=gain, minarea=minarea, _workdir=workdir, _tmpdir=_tmpdir, _exe=_sex_exe, verbose=verbose, extra_params=['SNR_WIN', 'ELONGATION', 'VIGNET(%d,%d)' % (vignet_size,vignet_size)], extra=sex_extra)
 
     catname = os.path.join(workdir, 'out.cat')
     psfname = os.path.join(workdir, 'out.psf')
@@ -108,11 +147,18 @@ def run_psfex(image, mask=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, minarea=5,
     return result
 
 def load_psf(filename, get_header=False, verbose=False):
-    """
-    Load PSF model from PSFEx file
+    """Load PSF model from PSFEx file
+
+    The structure may be useful for inspection of PSF model with :func:`stdpipe.psf.get_supersampled_psf_stamp` and :func:`stdpipe.psf.get_psf_stamp`, as well as for injection of PSF instances (fake objects) into the image with :func:`stdpipe.psf.place_psf_stamp`.
+
+    :param filename: Name of a file containing PSF model built by PSFEx
+    :param get_header: Whether to return the original FITS header of PSF model file or not. If set, the header will be stored in `header` field of the returned structire
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :returns: PSF structure in the same format as returned from :func:`stdpipe.psf.run_psfex`.
+
     """
 
-    # Simple wrapper around print for logging in verbose mode only
+     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
     log('Loading PSF model from %s' % filename)
@@ -175,8 +221,18 @@ def bilinear_interpolate(im, x, y):
     return wa*Ia + wb*Ib + wc*Ic + wd*Id
 
 def get_supersampled_psf_stamp(psf, x=0, y=0, normalize=True):
-    """
-    Returns supersampled PSF model for a given image position
+    """Returns supersampled PSF model for a given position inside the image.
+
+    The returned stamp corresponds to PSF model evaluated at a given position inside the image,
+    with its center always in the center of central stamp pixel.
+    Every *supersampled* pixel of the stamp corresponds to :code:`psf['sampling']` pixels of the original image.
+
+    :param psf: Input PSF structure as returned by :func:`stdpipe.psf.run_psfex` or :func:`stdpipe.psf.load_psf`
+    :param x: `x` coordinate of the position inside the original image to evaluate the PSF model
+    :param y: `y` coordinate of the position inside the original image to evaluate the PSF model
+    :param normalize: Whether to normalize the stamp to have flux exactly equal to unity or not
+    :returns: stamp of the PSF model evaluated at the given position inside the image
+
     """
 
     dx = 1.0*(x - psf['x0'])/psf['sx']
@@ -196,17 +252,33 @@ def get_supersampled_psf_stamp(psf, x=0, y=0, normalize=True):
     return stamp
 
 def get_psf_stamp(psf, x=0, y=0, dx=None, dy=None, normalize=True):
-    """
-    Returns PSF stamp in image space with sub-pixel shift applied.
-    Stamp is odd-sized, with center at
+    """Returns PSF stamp in original image pixel space with sub-pixel shift applied.
+
+    The PSF model is evaluated at the requested position inside the original image,
+    and then downscaled from supersampled pixels of the PSF model to original image pixels,
+    and then adjusted to accommodate for requested :code:`(dx, dy)` sub-pixel shift.
+
+    Stamp is odd-sized, with PSF center at::
 
         x0 = floor(width/2) + dx
         y0 = floor(height/2) + dy
 
-    If dx or dy is None, they are computed as
+    If :code:`dx=None` or :code:`dy=None`, they are computed directly from the
+    floating point parts of the position `x` and `y` arguments::
 
         dx = x - round(x)
         dy = y - round(y)
+
+    The stamp should directly represent stellar shape at a given position (including sub-pixel
+    center shift) inside the image.
+
+    :param psf: Input PSF structure as returned by :func:`stdpipe.psf.run_psfex` or :func:`stdpipe.psf.load_psf`
+    :param x: `x` coordinate of the position inside the original image to evaluate the PSF model
+    :param y: `y` coordinate of the position inside the original image to evaluate the PSF model
+    :param dx: Sub-pixel adjustment of PSF position in image space, `x` direction
+    :param dy: Sub-pixel adjustment of PSF position in image space, `y` direction
+    :param normalize: Whether to normalize the stamp to have flux exactly equal to unity or not
+    :returns: Stamp of the PSF model evaluated at the given position inside the image, in original image pixels.
 
     """
 
@@ -247,10 +319,24 @@ def get_psf_stamp(psf, x=0, y=0, dx=None, dy=None, normalize=True):
     return stamp
 
 def place_psf_stamp(image, psf, x0, y0, flux=1, gain=None):
-    """
-    Places PSF stamp, scaled to a given flux, at a given position inside the image.
-    The stamp values are added to current content of the image.
-    If gain value is set, the Poissonian noise is applied to the stamp.
+    """Places PSF stamp, scaled to a given flux, at a given position inside the image.
+
+    PSF stamp is evaluated at a given position, then adjusted to accommodate for
+    required sub-pixel shift, and finally scaled to requested flux value. Thus,
+    the routine corresponds to injection of an artificial point source into the image.
+
+    The stamp values are added on top of current content of the image.
+    If `gain` value is set, the Poissonian noise is applied to the stamp.
+
+    The image is modified in-place.
+
+    :param image: The image where artifi
+    :param psf: Input PSF structure as returned by :func:`stdpipe.psf.run_psfex` or :func:`stdpipe.psf.load_psf`
+    :param x0: `x` coordinate of the position to inject the source
+    :param y0: `y` coordinate of the position to inject the source
+    :param flux: The source flux in ADU units
+    :param gain: Image gain value. If set, used to apply Poissonian noise to the source.
+
     """
 
     stamp = get_psf_stamp(psf, x0, y0, normalize=True)
