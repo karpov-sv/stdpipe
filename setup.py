@@ -18,7 +18,7 @@ requirements = [
     'statsmodels',
     'tqdm',
     'regions',
-    'dateutil',
+    'python-dateutil',
     'requests',
 ]
 
