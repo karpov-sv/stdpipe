@@ -89,8 +89,17 @@ def download(url, filename=None, overwrite=False, verbose=False):
 
 def get_obs_time(header=None, filename=None, string=None, get_datetime=False, verbose=False):
     """
-    Extract date and time of observations from FITS headers of common formats.
-    Returns astropy Time object.
+    Extract date and time of observations from FITS headers of common formats, or from a string.
+
+    Will try various FITS keywords that may contain the time information - `DATE_OBS`, `DATE`, `TIME_OBS`, `UT`, 'MJD', 'JD'.
+
+    :param header: FITS header containing the information on time of observations
+    :param filename: If `header` is not set, the FITS header will be loaded from the file with this name
+    :param string: If provided, the time will be parsed from the string instead of FITS header
+    :param get_datetime: Whether to return the time as a standard Python :class:`datetime.datetime` object instead of Astropy Time
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :returns: :class:`astropy.time.Time` object corresponding to the time of observations, or a :class:`datetime.datetime` object if :code:`get_datetime=True`
+
     """
 
     # Simple wrapper around print for logging in verbose mode only
@@ -98,7 +107,22 @@ def get_obs_time(header=None, filename=None, string=None, get_datetime=False, ve
 
     # Simple wrapper to display parsed value and convert it as necessary
     def convert_time(time):
-        time = Time(time)
+        if isinstance(time, float):
+            # Try to parse floating-point value as MJD or JD, depending on the value
+            if time > 0 and time < 100000:
+                log('Assuming it is MJD')
+                time = Time(time, format='mjd')
+            elif time > 2400000 and time < 2500000:
+                log('Assuming it is JD')
+                time = Time(time, format='jd')
+            else:
+                # Then it is probably an Unix time?..
+                log('Assuming it is Unix time')
+                time = Time(time, format='unix')
+
+        else:
+            time = Time(time)
+
         log('Time parsed as:', time)
         if get_datetime:
             return time.datetime
@@ -117,7 +141,7 @@ def get_obs_time(header=None, filename=None, string=None, get_datetime=False, ve
         log('Loading FITS header from', filename)
         header = fits.getheader(filename)
 
-    for dkey in ['DATE-OBS']:
+    for dkey in ['DATE-OBS', 'DATE', 'TIME-OBS', 'UT', 'MJD', 'JD']:
         if dkey in header:
             log('Found ' + dkey + ':', header[dkey])
             # First try to parse standard ISO time

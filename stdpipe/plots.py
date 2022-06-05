@@ -30,7 +30,7 @@ def colorbar(obj=None, ax=None, size="5%", pad=0.1):
     ax.get_figure().sca(ax)
 
 def imshow(image, qq=None, show_colorbar=True, show_axis=True, stretch='linear', ax=None, **kwargs):
-    """Simple wrapper around pyplot.imshow with histogram-based intensity scaling, optional colorbar, etc.
+    """Simple wrapper around pyplot.imshow with percentile-based intensity scaling, optional colorbar, etc.
 
     :param image: Numpy 2d array to display
     :param qq: two-element tuple (or list) with quantiles that define lower and upper limits for image intensity normalization. Default is `[0.5, 99.5]`. Will be superseded by manually provided `vmin` and `vmax` arguments.
@@ -82,7 +82,7 @@ def imshow(image, qq=None, show_colorbar=True, show_axis=True, stretch='linear',
 
     return img
 
-def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], show_colorbar=True, show_axis=True, show_dots=False, ax=None, **kwargs):
+def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], color=None, show_colorbar=True, show_axis=True, show_dots=False, ax=None, **kwargs):
     """Plots various statistical estimators binned onto regular grid from the set of irregular data points (`x`, `y`, `value`).
 
     :param x: Abscissae of the data points
@@ -91,6 +91,7 @@ def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], show_colo
     :param bins: Number of bins per axis
     :param statistic: Statistical estimator to plot, may be `mean`, `median`, or a function
     :param qq: two-element tuple (or list) with quantiles that define lower and upper limits for image intensity normalization. Default is `[0.5, 97.5]`. Will be superseded by manually provided `vmin` and `vmax` arguments.
+    :param color: Color to use for plotting the positions of data points, optional
     :param show_colorbar: Whether to show a colorbar alongside the image
     :param show_axis: Whether to show the axes around the image
     :param show_dots: Whether to overlay the positions of data points onto the plot
@@ -124,7 +125,7 @@ def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], show_colo
 
     if show_dots:
         ax.set_autoscale_on(False)
-        ax.plot(x, y, 'b.', alpha=0.3)
+        ax.plot(x, y, '.', color=color, alpha=0.3)
 
 def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, mark_x=None, mark_y=None, mark_r=5.0, title=None, additional_title=None, **kwargs):
     """Routine for displaying various image planes from the cutout structure returned by :func:`stdpipe.cutouts.get_cutout`.

@@ -436,12 +436,40 @@ def place_random_stars(image, psf_model, nstars=100, minflux=1, maxflux=100000, 
 
     return cat
 
-def split_image(image, nx=1, ny=None, mask=None, bg=None, err=None, header=None, wcs=None, obj=None, cat=None, overlap=0, get_origin=False, verbose=False):
+def split_image(image, nx=1, ny=None, mask=None, bg=None, err=None, header=None, wcs=None, obj=None, cat=None, overlap=0, get_index=False, get_origin=False, verbose=False):
     """
-    Generator to split the image into several (nx x ny) blocks, while also optionally providing the mask, header, wcs and object list for the sub-blocks.
-    The blocks may optionally be extended by 'overlap' pixels in all directions.
+    Generator function to split the image into several (`nx` x `ny`) blocks, while also optionally providing the mask, header, wcs, object list etc for the sub-blocks.
+    The blocks may optionally be extended by 'overlap' pixels in all directions, so that at least in some sub-images every part of original image is far from the edge. This parameter may be used e.g. in conjunction with `edge` parameter of :func:`stdpipe.photometry.get_objects_sextractor` to avoid detecting the same object twice.
 
-    Returns the list consisting of origin x,y coordinates (if get_origin is True), the cropped image, and cropped mask, header, wcs, object list, and catalogie, if they are provided.
+    :param image: Image to split
+    :param nx: Number of sub-images in `x` direction
+    :param ny: Number of sub-images in `y` direction
+    :param mask: Mask image to split, optional
+    :param bg: Background map to split, optional
+    :param err: Noise model image to split, optional
+    :param header: Image header, optional. If set, the header corresponding to splitted sub-image will be returned, with correctly adjusted WCS information
+    :param wcs: WCS solution for the image, optional. If set, the solution for sub-image will be returned
+    :param obj: Object list, optional. If provided, the list of objects contained in the sub-image, with accordingly adjusted pixel coordinates, will be returned
+    :param cat: Reference catalogue, optional. If provided, the catalogue for the stars on the sub-image will be returned
+    :param overlap: If set, defines how much sub-images will overlap, in pixels.
+    :param get_index: If set, also returns the number of current sub-image, starting from zero
+    :param get_origin: If set, also return the sub-image origin pixel coordinates
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
+    :returns: Every concecutive call to the generator will return the list of cropped objects corresponding to the next sub-image, as well as some sub-image metadata.
+
+    The returned list is constructed from the following elements:
+
+    - Index of current sub-image, if :code:`get_index=True`
+    - `x` and `y` coordinates of current sub-image origin inside the original image
+    - Current sub-image
+    - Cropped mask corresponding to current sub-image, if `mask` is provided
+    - Cropped background map, if `bg` is provided
+    - Cropped noise model, if `err` is provided
+    - FITS header corresponding to the sub-image with correct astrometric solution for it, if `header` is provided
+    - WCS astrometric solution for the sub-image, if `wcs` is provided
+    - Object list containing only objects that are inside the sub-image with their pixel coordinates adjusted correspondingly, if `obj` is set
+    - Reference catalogue containing only stars overlaying the sub-image, if `cat` is provided and `wcs` is set
+
     """
 
     # Simple wrapper around print for logging in verbose mode only
@@ -467,7 +495,14 @@ def split_image(image, nx=1, ny=None, mask=None, bg=None, err=None, header=None,
         else:
             image1,header1 = _,None
 
-        result = [x1, y1] if get_origin else []
+        result = []
+
+        if get_index:
+            result += [i]
+
+        if get_origin:
+            result += [x1, y1]
+
         result += [image1]
 
         if mask is not None:
