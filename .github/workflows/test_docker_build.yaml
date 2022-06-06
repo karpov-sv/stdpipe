@@ -27,6 +27,6 @@ jobs:
         run: |
           docker build -t stdpipe/stdpipe . && docker push stdpipe/stdpipe
 
-      - name: Start containers
-        run: |
-          docker-compose up -d
+      # - name: Start containers
+      #   run: |
+      #     docker-compose up -d

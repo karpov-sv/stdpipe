@@ -4,5 +4,4 @@ services:
   stdpipe:
     image: stdpipe/stdpipe
     ports:
-      - "9000:5000"
-      - "9001:5001"
+      - "9000:8888"
