@@ -1,0 +1,7 @@
+version: "3.7"
+
+services:
+  stdpipe:
+    image: stdpipe/stdpipe
+    ports:
+      - "9000:8888"
