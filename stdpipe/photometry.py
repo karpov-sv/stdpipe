@@ -288,7 +288,7 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
         err[err==0] = 1e30
 
         errname = os.path.join(workdir, 'errors.fits')
-        fits.writeto(errname, err)
+        fits.writeto(errname, err, overwrite=True)
         opts['WEIGHT_IMAGE'] = errname
         opts['WEIGHT_TYPE'] = 'MAP_RMS'
 
