@@ -105,6 +105,12 @@ def spherical_match(ra1, dec1, ra2, dec2, sr=1/3600):
 
     """
 
+    # Ensure that inputs are arrays
+    ra1 = np.atleast_1d(ra1)
+    dec1 = np.atleast_1d(dec1)
+    ra2 = np.atleast_1d(ra2)
+    dec2 = np.atleast_1d(dec2)
+
     idx1,idx2,dist,_ = search_around_sky(SkyCoord(ra1, dec1, unit='deg'), SkyCoord(ra2, dec2, unit='deg'), sr*u.deg)
 
     dist = dist.deg # convert to degrees
