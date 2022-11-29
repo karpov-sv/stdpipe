@@ -180,7 +180,7 @@ def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, 
 
         if 'mag_filter_name' in cutout['meta']:
                 title += ' : ' + cutout['meta']['mag_filter_name']
-                if 'mag_color_name' in cutout['meta'] and 'mag_color_term':
+                if 'mag_color_name' in cutout['meta'] and 'mag_color_term' in cutout['meta'] and cutout['meta']['mag_color_term'] is not None:
                     sign = '-' if cutout['meta']['mag_color_term'] > 0 else '+'
                     title += ' %s %.2f (%s)' % (sign, np.abs(cutout['meta']['mag_color_term']), cutout['meta']['mag_color_name'])
 
@@ -201,6 +201,7 @@ def plot_photometric_match(m, ax=None, mode='mag', show_masked=True, show_final=
     It plots various representations of the photometric match results returned by :func:`stdpipe.photometry.match` or :func:`stdpipe.pipeline.calibrate_photometry`, depending on the `mode` parameter:
 
     -  `mag` - displays photometric residuals as a function of catalogue magnitude
+    -  `normed` - displays normalized (i.e. divided by errors) photometric residuals as a function of catalogue magnitude
     -  `color` - displays photometric residuals as a function of catalogue color
     -  `zero` - displays the map of empirical zero point, i.e. difference of catalogue and instrumental magnitudes for all matched objects
     -  `model` - displays the map of zero point model
@@ -224,7 +225,7 @@ def plot_photometric_match(m, ax=None, mode='mag', show_masked=True, show_final=
     # Textual representation of the photometric model
     model_str = 'Instr = %s' % m.get('cat_col_mag', 'Cat')
 
-    if 'cat_col_mag1' in m.keys() and 'cat_col_mag2' in m.keys() and 'color_term' in m.keys():
+    if 'cat_col_mag1' in m.keys() and 'cat_col_mag2' in m.keys() and 'color_term' in m.keys() and m['color_term'] is not None:
         sign = '-' if m['color_term'] > 0 else '+'
         model_str += ' %s %.2f (%s - %s)' % (sign, np.abs(m['color_term']), m['cat_col_mag1'], m['cat_col_mag2'])
 
@@ -242,6 +243,25 @@ def plot_photometric_match(m, ax=None, mode='mag', show_masked=True, show_final=
 
         ax.set_xlabel('Catalogue %s magnitude' % (m['cat_col_mag'] if 'cat_col_mag' in m.keys() else ''))
         ax.set_ylabel('Instrumental - Model')
+
+        ax.set_title('%d of %d unmasked stars used in final fit' % (np.sum(m['idx']), np.sum(m['idx0'])))
+
+        ax.text(0.02, 0.05, model_str, transform=ax.transAxes)
+
+    elif mode == 'normed':
+        ax.plot(m['cmag'][m['idx0']], ((m['zero_model']-m['zero'])/m['zero_err'])[m['idx0']], '.', alpha=0.3)
+        if show_final:
+            ax.plot(m['cmag'][m['idx']], ((m['zero_model']-m['zero'])/m['zero_err'])[m['idx']], '.', alpha=1.0, color='red', label='Final fit')
+        if show_masked:
+            ax.plot(m['cmag'][~m['idx0']], ((m['zero_model']-m['zero'])/m['zero_err'])[~m['idx0']], 'x', alpha=1.0, color='orange', label='Masked')
+
+        ax.axhline(0, ls='--', color='black', alpha=0.3)
+        ax.axhline(-3, ls=':', color='black', alpha=0.3)
+        ax.axhline(3, ls=':', color='black', alpha=0.3)
+        ax.legend()
+
+        ax.set_xlabel('Catalogue %s magnitude' % (m['cat_col_mag'] if 'cat_col_mag' in m.keys() else ''))
+        ax.set_ylabel('(Instrumental - Model) / Error')
 
         ax.set_title('%d of %d unmasked stars used in final fit' % (np.sum(m['idx']), np.sum(m['idx0'])))
 
