@@ -416,7 +416,7 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
         obj['x'] -= 1
         obj['y'] -= 1
 
-        if 'x_psf' in obj:
+        if 'x_psf' in obj.keys():
             obj['x_psf'] -= 1
             obj['y_psf'] -= 1
 
