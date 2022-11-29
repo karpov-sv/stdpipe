@@ -484,7 +484,7 @@ def get_intrinsic_scatter(y, yerr, min=0, max=None):
 
     return C.x[2]
 
-def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_mag, cat_magerr=None, cat_color=None, sr=3/3600, obj_x=None, obj_y=None, spatial_order=0, bg_order=None, threshold=5.0, niter=10, accept_flags=0, cat_saturation=None, max_intrinsic_rms=0, sn=None, verbose=False, robust=True, scale_noise=False):
+def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_mag, cat_magerr=None, cat_color=None, sr=3/3600, obj_x=None, obj_y=None, spatial_order=0, bg_order=None, threshold=5.0, niter=10, accept_flags=0, cat_saturation=None, max_intrinsic_rms=0, sn=None, verbose=False, robust=True, scale_noise=False, use_color=True):
     """Low-level photometric matching routine.
 
     It tries to build the photometric model for objects detected on the image that includes catalogue magnitude, positionally-dependent zero point, linear color term, optional additive flux term, and also takes into account possible intrinsic magnitude scatter on top of measurement errors.
@@ -513,6 +513,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
     :param robust: Whether to use robust least squares fitting routine instead of weighted least squares
     :param scale_noise: Whether to re-scale the noise model (object and catalogue magnitude errors) to match actual scatter of the data points or not. Intrinsic scatter term is not being scaled this way.
+    :param use_color: Whether to use catalogue color for deriving the color term.
     :returns: The dictionary with photometric results, as described below.
 
     The results of photometric matching are returned in a dictionary with the following fields:
@@ -580,8 +581,9 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
 
     if cat_color is not None:
         ccolor = np.ma.filled(cat_color[cidx], fill_value=np.nan)
-        X += make_series(ccolor, x, y, order=0)
-        log('Using color term')
+        if use_color:
+            X += make_series(ccolor, x, y, order=0)
+            log('Using color term')
     else:
         ccolor = np.zeros_like(cmag)
 
@@ -591,7 +593,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
     # weights = 1.0/zero_err**2
 
     idx0 = np.isfinite(omag) & np.isfinite(omag_err) & np.isfinite(cmag) & np.isfinite(cmag_err) & ((oflags & ~accept_flags) == 0) # initial mask
-    if cat_color is not None:
+    if cat_color is not None and use_color:
         idx0 &= np.isfinite(ccolor)
     if cat_saturation is not None:
         idx0 &= cmag >= cat_saturation
@@ -658,14 +660,16 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
 
         if get_err:
             # It follows the implementation from https://github.com/statsmodels/statsmodels/blob/081fc6e85868308aa7489ae1b23f6e72f5662799/statsmodels/base/model.py#L1383
-            err = np.sqrt(np.dot(X, np.dot(C.cov_params()[0:X.shape[1], 0:X.shape[1]], np.transpose(X))).diagonal())
+            # FIXME: crashes on large numbers of stars?..
+            # err = np.sqrt(np.dot(X, np.dot(C.cov_params()[0:X.shape[1], 0:X.shape[1]], np.transpose(X))).diagonal())
+            err = np.zeros_like(x)
             if add_intrinsic_rms:
                 err = np.hypot(err, intrinsic_rms)
             return err
         else:
             return np.sum(X*C.params[0:X.shape[1]], axis=1)
 
-    if cat_color is not None:
+    if cat_color is not None and use_color:
         X = make_series(order=spatial_order)
         if bg_order is not None:
             X += make_series(order=bg_order)
