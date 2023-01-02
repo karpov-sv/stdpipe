@@ -796,7 +796,7 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
             bkgann = [_*fwhm for _ in bkgann]
         log('Using local background annulus between %.1f and %.1f pixels' % (bkgann[0], bkgann[1]))
 
-        bg_apertures = photutils.CircularAnnulus(positions, r_in=10, r_out=15)
+        bg_apertures = photutils.CircularAnnulus(positions, r_in=bkgann[0], r_out=bkgann[1])
         image_ones = np.ones_like(image1)
         res_area = photutils.aperture_photometry(image_ones, apertures, mask=mask0)
 
