@@ -321,7 +321,8 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, bg_order=Non
     else:
         cat_magerr = None
 
-    m = photometry.match(obj['ra'], obj['dec'], obj[obj_col_mag], obj[obj_col_mag_err], obj['flags'],
+    m = photometry.match(obj['ra'], obj['dec'], obj[obj_col_mag],
+                         obj[obj_col_mag_err], obj['flags'],
                          cat[cat_col_ra], cat[cat_col_dec], cat[cat_col_mag],
                          cat_magerr=cat_magerr,
                          sr=sr, cat_color=color,

@@ -671,7 +671,7 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
                 'MAG': utils.table_get(cat, cat_col_mag, 0),
                 'MAGERR': utils.table_get(cat, cat_col_mag_err, 0.01),
                 'OBSDATE': np.ones_like(cat[cat_col_ra])*2000.0,
-                'FLAGS': np.zeros_like(cat[cat_col_ra], dtype=np.int),
+                'FLAGS': np.zeros_like(cat[cat_col_ra], dtype=int),
             })
 
             # Remove masked values

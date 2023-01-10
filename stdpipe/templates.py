@@ -231,15 +231,15 @@ def mask_template(tmpl, cat=None, cat_saturation_mag=None,
         tmask = ~np.isfinite(tmpl)
         log(np.sum(tmask), 'template pixels masked after NaN checking')
     else:
-        tmask = np.zeros_like(tmpl, dtype=np.bool)
+        tmask = np.zeros_like(tmpl, dtype=bool)
 
     if cat is not None and wcs is not None:
         # Mask the central pixels of saturated stars
         cx, cy = wcs.all_world2pix(cat[cat_col_ra], cat[cat_col_dec], 0)
-        cx = np.round(cx).astype(np.int)
-        cy = np.round(cy).astype(np.int)
+        cx = np.round(cx).astype(int)
+        cy = np.round(cy).astype(int)
 
-        tidx = np.zeros(len(cat), dtype=np.bool)
+        tidx = np.zeros(len(cat), dtype=bool)
 
         # First, we select all catalogue objects with masked measurements
         if mask_masked:
@@ -619,11 +619,11 @@ def reproject_swarp(input=[], wcs=None, shape=None, width=None, height=None, hea
 
         # it seems SWarp adds BZERO to the output if inputs had them (e.g. unsigned ints do)
         # FIXME: this point needs further investigation!
-        if np.issubdtype(coadd.dtype.type, np.integer):
+        if np.issubdtype(coadd.dtype.type, int):
             coadd -= bzero
 
         if use_nans:
-            if np.issubdtype(coadd.dtype.type, np.floating):
+            if np.issubdtype(coadd.dtype.type, float):
                 coadd[weights == 0] = np.nan
             else:
                 coadd[weights == 0] = 0xffff

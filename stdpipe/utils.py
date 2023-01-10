@@ -176,7 +176,7 @@ def table_get(table, colname, default=0):
         return default
     else:
         # Broadcast scalar to proper length
-        return default*np.ones(len(table), dtype=np.int)
+        return default*np.ones(len(table), dtype=int)
 
 def format_astromatic_opts(opts):
     """
@@ -304,3 +304,21 @@ def file_write(filename, contents=None, append=False):
     with open(filename, 'a' if append else 'w') as f:
         if contents is not None:
             f.write(contents)
+            
+def float2int_array(x):
+    """
+    Simple function to convert array of float into array of int
+
+    Parameters
+    ----------
+    x : np.array
+        Array of float elements.
+
+    Returns
+    -------
+    TYPE
+        Array of int elements.
+
+    """
+    res = np.vectorize(int)(x)
+    return res
