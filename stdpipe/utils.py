@@ -176,7 +176,7 @@ def table_get(table, colname, default=0):
         return default
     else:
         # Broadcast scalar to proper length
-        return default*np.ones(len(table), dtype=np.int)
+        return default*np.ones(len(table), dtype=int)
 
 def format_astromatic_opts(opts):
     """

@@ -198,9 +198,9 @@ def bilinear_interpolate(im, x, y):
     x = np.asarray(x)
     y = np.asarray(y)
 
-    x0 = np.floor(x).astype(np.int)
+    x0 = np.floor(x).astype(int)
     x1 = x0 + 1
-    y0 = np.floor(y).astype(np.int)
+    y0 = np.floor(y).astype(int)
     y1 = y0 + 1
 
     x0 = np.clip(x0, 0, im.shape[1] - 1);
@@ -352,8 +352,8 @@ def place_psf_stamp(image, psf, x0, y0, flux=1, gain=None):
 
     # Corresponding image pixels
     y1,x1 = np.mgrid[0:stamp.shape[0], 0:stamp.shape[1]]
-    x1 += np.int(np.round(x0) - np.floor(stamp.shape[1]/2))
-    y1 += np.int(np.round(y0) - np.floor(stamp.shape[0]/2))
+    x1 += int(np.round(x0) - np.floor(stamp.shape[1]/2))
+    y1 += int(np.round(y0) - np.floor(stamp.shape[0]/2))
 
     # Crop the coordinates outside target image
     idx = np.isfinite(stamp)
