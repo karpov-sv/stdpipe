@@ -352,8 +352,8 @@ def place_psf_stamp(image, psf, x0, y0, flux=1, gain=None):
 
     # Corresponding image pixels
     y1,x1 = np.mgrid[0:stamp.shape[0], 0:stamp.shape[1]]
-    x1 += utils.float2int_array((np.round(x0) - np.floor(stamp.shape[1]/2)))
-    y1 += utils.float2int_array((np.round(y0) - np.floor(stamp.shape[0]/2)))
+    x1 += int(np.round(x0) - np.floor(stamp.shape[1]/2))
+    y1 += int(np.round(y0) - np.floor(stamp.shape[0]/2))
 
     # Crop the coordinates outside target image
     idx = np.isfinite(stamp)
