@@ -164,7 +164,7 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
         obj_in = obj_in.copy()
 
     log('Candidate filtering routine started with %d initial candidates and %.1f arcsec matching radius' % (len(obj), sr*3600))
-    cand_idx = np.ones(len(obj), dtype=np.bool)
+    cand_idx = np.ones(len(obj), dtype=bool)
 
     # Object flags
     if flagged:
