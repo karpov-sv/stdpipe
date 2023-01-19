@@ -38,7 +38,7 @@ def get_frame_center(filename=None, header=None, wcs=None, width=None, height=No
 
     sr = spherical_distance(ra0, dec0, ra1, dec1)
 
-    return ra0, dec0, sr
+    return ra0.item(), dec0.item(), sr.item()
 
 def get_pixscale(wcs=None, filename=None, header=None):
     '''
