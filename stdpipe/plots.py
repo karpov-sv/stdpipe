@@ -127,7 +127,7 @@ def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], color=Non
         ax.set_autoscale_on(False)
         ax.plot(x, y, '.', color=color, alpha=0.3)
 
-def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, mark_x=None, mark_y=None, mark_r=5.0, title=None, additional_title=None, **kwargs):
+def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, axs=None, mark_x=None, mark_y=None, mark_r=5.0, title=None, additional_title=None, **kwargs):
     """Routine for displaying various image planes from the cutout structure returned by :func:`stdpipe.cutouts.get_cutout`.
 
     The cutout planes are displayed in a single row, in the order defined by `planes` paremeters. Optionally, circular mark may be overlayed over the planes at the specified pixel position inside the cutout.
@@ -135,6 +135,7 @@ def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, 
     :param cutout: Cutout structure as returned by :func:`stdpipe.cutouts.get_cutout`
     :param planes: List of names of cutout planes to show
     :param fig: Matplotlib figure where to plot, optional
+    :param axs: Matplotlib axes same length as planes, optional
     :param mark_x: `x` coordinate of the overlay mark in cutout coordinates, optional
     :param mark_y: `y` coordinate of the overlay mark in cutout coordinates, optional
     :param mark_r: Radius of the overlay mark in cutout coordinates in pixels, optional
@@ -151,9 +152,16 @@ def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, 
     if fig is None:
         fig = plt.figure(figsize=[nplots*4, 4+1.0], dpi=75, tight_layout=True)
 
-    for name in planes:
+    if axs is not None:
+        if not len(axs) == len(planes):
+            raise ValueError('Number of axes must be same as number of cutouts')
+
+    for ii, name in enumerate(planes):
         if name in cutout and cutout[name] is not None:
-            ax = fig.add_subplot(1, nplots, curplot)
+            if axs is not None:
+                ax = axs[ii]
+            else:
+                ax = fig.add_subplot(1, nplots, curplot)
             curplot += 1
 
             params = {'stretch': 'asinh' if name in ['image', 'template', 'convolved'] else 'linear',
