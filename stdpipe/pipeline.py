@@ -73,7 +73,7 @@ def refine_astrometry(obj, cat, sr=10/3600, wcs=None, order=0,
         if use_photometry:
             # Matching involving photometric information
             cat_magerr = cat[cat_col_mag_err] if cat_col_mag_err is not None else None
-            m = photometry.match(obj['ra'], obj['dec'], obj['mag'], obj['magerr'], obj['flags'], cat[cat_col_ra], cat[cat_col_dec], cat[cat_col_mag], cat_magerr=cat_magerr, sr=sr)
+            m = photometry.match(obj['ra'], obj['dec'], obj['mag'], obj['magerr'], obj['flags'], cat[cat_col_ra], cat[cat_col_dec], cat[cat_col_mag], cat_magerr=cat_magerr, sr=sr, verbose=verbose)
             if m is None or not m:
                 log('Photometric match failed, cannot refine WCS')
                 return None
@@ -84,10 +84,10 @@ def refine_astrometry(obj, cat, sr=10/3600, wcs=None, order=0,
                 log('Iteration %d: %d matches, %.1f arcsec rms' %
                     (iter, np.sum(m['idx']), np.std(3600*m['dist'][m['idx']])))
 
-            wcs = astrometry.refine_wcs(obj[m['oidx']][m['idx']], cat[m['cidx']][m['idx']], order=order, match=False, method=method)
+            wcs = astrometry.refine_wcs(obj[m['oidx']][m['idx']], cat[m['cidx']][m['idx']], order=order, match=False, method=method, verbose=verbose)
         else:
             # Simple positional matching
-            wcs = astrometry.refine_wcs(obj, cat, order=order, sr=sr, match=True, method=method, **kwargs)
+            wcs = astrometry.refine_wcs(obj, cat, order=order, sr=sr, match=True, method=method, verbose=verbose, **kwargs)
 
         if update:
             obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
