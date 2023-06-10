@@ -159,8 +159,11 @@ def get_hips_image(hips, ra=None, dec=None, width=None, height=None, fov=None,
     if normalize:
         # Normalize the image to have median=100 and std=10, corresponding to GAIN=1 assuming Poissonian background
         image -= np.nanmedian(image)
-        image *= 10/mad_std(image, ignore_nan=True)
-        image += 100
+        mad = mad_std(image, ignore_nan=True)
+        if mad > 0:
+            # We have non-zero background noise, let's normalize it to quasi-Poissonian level
+            image *= 10/mad
+            image += 100
 
     if get_header:
         return image, header
