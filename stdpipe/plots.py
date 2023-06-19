@@ -127,7 +127,7 @@ def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], color=Non
         ax.set_autoscale_on(False)
         ax.plot(x, y, '.', color=color, alpha=0.3)
 
-def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, axs=None, mark_x=None, mark_y=None, mark_r=5.0, show_title=True, title=None, additional_title=None, **kwargs):
+def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, axs=None, mark_x=None, mark_y=None, mark_r=5.0, mark_color='red', mark_lw=2, show_title=True, title=None, additional_title=None, **kwargs):
     """Routine for displaying various image planes from the cutout structure returned by :func:`stdpipe.cutouts.get_cutout`.
 
     The cutout planes are displayed in a single row, in the order defined by `planes` paremeters. Optionally, circular mark may be overlayed over the planes at the specified pixel position inside the cutout.
@@ -139,6 +139,8 @@ def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, 
     :param mark_x: `x` coordinate of the overlay mark in cutout coordinates, optional
     :param mark_y: `y` coordinate of the overlay mark in cutout coordinates, optional
     :param mark_r: Radius of the overlay mark in cutout coordinates in pixels, optional
+    :param mark_color: Color of the overlay mark, optional
+    :param mark_lw: Line width of the overlay mark, optional
     :param show_title: Show title over cutout. Defaults to True.
     :param title: The title to show above the cutouts, optional. If not provided, the title will be constructed from various pieces of cutout metadata, plus the contents of `additoonal_title` field, if provided
     :param additional_title: Additional text to append to automatically generated title of the cutout figure.
@@ -177,7 +179,7 @@ def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, 
             ax.set_title(name.upper())
 
             if mark_x is not None and mark_y is not None:
-                ax.add_artist(Circle((mark_x, mark_y), mark_r, edgecolor='red', facecolor='none', ls='-', lw=2))
+                ax.add_artist(Circle((mark_x, mark_y), mark_r, edgecolor=mark_color, facecolor='none', ls='-', lw=mark_lw))
 
             if curplot > nplots:
                 break
@@ -187,22 +189,22 @@ def plot_cutout(cutout, planes=['image', 'template', 'diff', 'mask'], fig=None, 
             title = cutout['meta'].get('name', 'unnamed')
             if 'time' in cutout['meta']:
                 title += ' at %s' % cutout['meta']['time'].to_value('iso')
-    
+
             if 'mag_filter_name' in cutout['meta']:
                     title += ' : ' + cutout['meta']['mag_filter_name']
                     if 'mag_color_name' in cutout['meta'] and 'mag_color_term' in cutout['meta'] and cutout['meta']['mag_color_term'] is not None:
                         sign = '-' if cutout['meta']['mag_color_term'] > 0 else '+'
                         title += ' %s %.2f (%s)' % (sign, np.abs(cutout['meta']['mag_color_term']), cutout['meta']['mag_color_name'])
-    
+
             if 'mag_limit' in cutout['meta']:
                 title += ' : limit %.2f' % cutout['meta']['mag_limit']
-    
+
             if 'mag_calib' in cutout['meta']:
                 title += ' : mag = %.2f $\pm$ %.2f' % (cutout['meta'].get('mag_calib', np.nan), cutout['meta'].get('mag_calib_err', cutout['meta'].get('magerr', np.nan)))
-    
+
             if additional_title:
                 title += ' : ' + additional_title
-    
+
         fig.suptitle(title)
 
 def plot_photometric_match(m, ax=None, mode='mag', show_masked=True, show_final=True, **kwargs):
