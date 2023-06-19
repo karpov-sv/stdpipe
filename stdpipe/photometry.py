@@ -745,6 +745,10 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
     mask0 = ~np.isfinite(image1) # Minimal mask
     # image1[mask0] = np.median(image1[~mask0])
 
+    # Ensure that the mask is defined
+    if mask is None:
+        mask = mask0
+
     if bg is None or err is None or get_bg:
         log('Estimating global background with %dx%d mesh' % (bg_size, bg_size))
         try:
@@ -783,15 +787,15 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
     obj['flux'] = res['aperture_sum']
     obj['fluxerr'] = res['aperture_sum_err']
 
+    if 'flags' not in obj.keys():
+        obj['flags'] = 0
+
     # Check whether some aperture pixels are masked, and set the flags for that
-    if mask is not None:
-        if 'flags' not in obj.keys():
-            obj['flags'] = 0
-        for i,a in enumerate(apertures):
-            am = a.to_mask(method='center')
-            vals = am.multiply(mask|mask0)
-            if np.any(vals):
-                obj['flags'][i] |= 0x200
+    for i,a in enumerate(apertures):
+        am = a.to_mask(method='center')
+        vals = am.multiply(mask|mask0)
+        if vals is None or np.any(vals):
+            obj['flags'][i] |= 0x200
 
     # Local background
     if bkgann is not None and len(bkgann) == 2:
@@ -806,8 +810,15 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
         obj['bg_local'] = 0.0 # Dedicated column for local background on top of global estimation
 
         for row,area,bg_mask in zip(obj, res_area, bg_apertures.to_mask(method='center')):
-            bg_vals = bg_mask.multiply(image1)[bg_mask.data > 0]
-            mask_vals = bg_mask.multiply(mask|mask0)[bg_mask.data > 0]
+            bg_overlap = bg_mask.multiply(image1)
+            mask_overlap = bg_mask.multiply(mask|mask0)
+
+            if bg_overlap is None or mask_overlap is None:
+                row['flags'] |= 0x400 # Flag the values where the annulus is completely outside the image
+                continue
+
+            bg_vals = bg_overlap[bg_mask.data > 0]
+            mask_vals = mask_overlap[bg_mask.data > 0]
 
             if np.sum(mask_vals == 0) > 0:
                 # Mean, Median and Std, all sigma-clipped
@@ -833,11 +844,12 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
     obj['magerr'][idx] = 2.5/np.log(10)*obj['fluxerr'][idx]/obj['flux'][idx]
     obj['magerr'][~idx] = np.nan
 
+    # Final filtering of properly measured objects
+    idx = np.isfinite(obj['magerr'])
     if sn is not None and sn > 0:
         log('Filtering out measurements with S/N < %.1f' % sn)
-        idx = np.isfinite(obj['magerr'])
         idx[idx] &= (obj['magerr'][idx] < 1/sn)
-        obj = obj[idx]
+    obj = obj[idx]
 
     if get_bg:
         return obj, bg_est.background, err
