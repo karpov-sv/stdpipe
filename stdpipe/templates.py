@@ -142,7 +142,8 @@ def get_hips_image(hips, ra=None, dec=None, width=None, height=None, fov=None,
     hdu.close()
 
     if asinh is None:
-        if 'PanSTARRS' in hips:
+        # All PanSTARRS bands except g are stored in asinh scaling, as of May 2023
+        if 'PanSTARRS' in hips and hips != 'PanSTARRS/DR1/g':
             asinh = True
 
     if asinh:
