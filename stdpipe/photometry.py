@@ -349,6 +349,7 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
     if res == 0 and os.path.exists(catname):
         log('SExtractor run succeeded')
         obj = Table.read(catname, hdu=2)
+        obj.meta.clear() # Remove unnecessary entries from the metadata
 
         idx = (obj['X_IMAGE'] > edge) & (obj['X_IMAGE'] < image.shape[1] - edge)
         idx &= (obj['Y_IMAGE'] > edge) & (obj['Y_IMAGE'] < image.shape[0] - edge)
@@ -587,6 +588,8 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
     else:
         ccolor = np.zeros_like(cmag)
 
+    Nparams = len(X) # Number of parameters to be fitted
+
     X = np.vstack(X).T
     zero = cmag - omag # We will build a model for this definition of zero point
     zero_err = np.hypot(omag_err, cmag_err)
@@ -609,8 +612,8 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
     total_err = zero_err
 
     for iter in range(niter):
-        if np.sum(idx) < 3:
-            log("Fit failed - %d objects remaining" % np.sum(idx))
+        if np.sum(idx) < Nparams + 1:
+            log("Fit failed - %d objects remaining for fitting %d parameters" % (np.sum(idx), Nparams))
             return None
 
         if robust:
