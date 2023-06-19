@@ -404,7 +404,7 @@ def normalize_ps1_skycell(filename, outname=None, verbose=False):
 # PS1 higher level retrieval
 def get_ps1_image(band='r', ext='image', wcs=None, shape=None,
                   width=None, height=None, header=None, extra={},
-                  _cachedir=None, _tmpdir=None, _workdir=None, verbose=False):
+                  _cachedir=None, _tmpdir=None, _workdir=None, verbose=False, **kwargs):
 
     """Downloads the images of specified type (image or mask) from PanSTARRS and mosaics / re-projects
     them to requested WCS pixel grid.
@@ -421,6 +421,7 @@ def get_ps1_image(band='r', ext='image', wcs=None, shape=None,
     :param _tmpdir: If specified, all temporary files will be created in a dedicated directory (that will be deleted after running the executable) inside this path.
     :param _workdir: If specified, all temporary files will be created in this directory, and will be kept intact after running SWarp. May be used for debugging exact inputs and outputs of the executable. Optional
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :param \**kwargs: The rest of parameters will be directly passed to :func:`stdpipe.templates.reproject_swarp`
     :returns: Returns the image re-projected onto requested pixel grid
 
     """
@@ -443,7 +444,7 @@ def get_ps1_image(band='r', ext='image', wcs=None, shape=None,
 
     coadd = reproject_swarp(cellnames, wcs=wcs, width=width, height=height,
                             is_flags=(ext == 'mask'), extra=extra,
-                            _tmpdir=_tmpdir, _workdir=_workdir, verbose=verbose)
+                            _tmpdir=_tmpdir, _workdir=_workdir, verbose=verbose, **kwargs)
 
     return coadd
 
