@@ -708,7 +708,7 @@ def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kw
     else:
         return back
 
-def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=None, err=None, gain=None, bg_size=64, sn=None, get_bg=False, verbose=False):
+def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=None, err=None, gain=None, bg_size=64, sn=None, keep_negative=True, get_bg=False, verbose=False):
     """Aperture photometry at the positions of already detected objects.
 
     It will estimate and subtract the background unless external background estimation (`bg`) is provided, and use user-provided noise map (`err`) if requested.
@@ -729,6 +729,7 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
     :param gain: Image gain, e/ADU, used to build image noise model
     :param bg_size: Background grid size in pixels
     :param sn: Minimal S/N ratio for the object to be considered good. If set, all measurements with magnitude errors exceeding 1/SN will be discarded
+    :param keep_negative: If not set, measurements with negative fluxes will be discarded
     :param get_bg: If True, the routine will also return estimated background and background noise images
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
     :returns: The copy of original table with `flux`, `fluxerr`, `mag` and `magerr` columns replaced with the values measured in the routine. If :code:`get_bg=True`, also returns the background and background error images.
@@ -845,11 +846,16 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
     obj['magerr'][~idx] = np.nan
 
     # Final filtering of properly measured objects
-    idx = np.isfinite(obj['magerr'])
     if sn is not None and sn > 0:
         log('Filtering out measurements with S/N < %.1f' % sn)
+        idx = np.isfinite(obj['magerr'])
         idx[idx] &= (obj['magerr'][idx] < 1/sn)
-    obj = obj[idx]
+        obj = obj[idx]
+
+    if not keep_negative:
+        log('Filtering out measurements with negative fluxes')
+        idx = obj['flux'] > 0
+        obj = obj[idx]
 
     if get_bg:
         return obj, bg_est.background, err
