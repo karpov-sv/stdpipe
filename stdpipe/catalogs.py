@@ -20,16 +20,32 @@ from . import astrometry
 
 catalogs = {
     'ps1': {'vizier': 'II/349/ps1', 'name': 'PanSTARRS DR1'},
-    'gaiadr2': {'vizier': 'I/345/gaia2', 'name': 'Gaia DR2', 'extra': ['E(BR/RP)']},
+
+    'gaiadr2': {'vizier': 'I/345/gaia2', 'name': 'Gaia DR2',
+                'extra': ['E(BR/RP)']},
+
     'gaiaedr3': {'vizier': 'I/350/gaiaedr3', 'name': 'Gaia EDR3'},
-    'gaiadr3syn': {'vizier': 'I/360/syntphot', 'name': 'Gaia EDR3', 'extra': ['**', '_RAJ2000', '_DEJ2000']},
+
+    'gaiadr3syn': {'vizier': 'I/360/syntphot', 'name': 'Gaia EDR3',
+                   'extra': ['**', '_RAJ2000', '_DEJ2000']},
+
     'usnob1': {'vizier': 'I/284/out', 'name': 'USNO-B1'},
+
     'gsc': {'vizier': 'I/271/out', 'name': 'GSC 2.2'},
-    'skymapper': {'vizier': 'II/358/smss', 'name': 'SkyMapper DR1.1'},
+
+    'skymapper': {'vizier': 'II/358/smss', 'name': 'SkyMapper DR1.1',
+                  'extra': ['_RAJ2000', '_DEJ2000', 'e_uPSF', 'e_vPSF', 'e_gPSF', 'e_rPSF', 'e_iPSF', 'e_zPSF']},
+
     'vsx': {'vizier': 'B/vsx/vsx', 'name': 'AAVSO VSX'},
+
     'apass': {'vizier': 'II/336/apass9', 'name': 'APASS DR9'},
-    'sdss': {'vizier': 'V/147/sdss12', 'name': 'SDSS DR12', 'extra': ['_RAJ2000', '_DEJ2000']},
-    'atlas': {'vizier': 'J/ApJ/867/105/refcat2', 'name': 'ATLAS-REFCAT2', 'extra': ['_RAJ2000', '_DEJ2000', 'e_Gmag', 'e_gmag', 'e_rmag', 'e_imag', 'e_zmag', 'e_Jmag', 'e_Kmag']},
+
+    'sdss': {'vizier': 'V/147/sdss12', 'name': 'SDSS DR12',
+             'extra': ['_RAJ2000', '_DEJ2000']},
+
+    'atlas': {'vizier': 'J/ApJ/867/105/refcat2', 'name': 'ATLAS-REFCAT2',
+              'extra': ['_RAJ2000', '_DEJ2000', 'e_Gmag', 'e_gmag', 'e_rmag',
+                        'e_imag', 'e_zmag', 'e_Jmag', 'e_Kmag']},
 }
 
 def get_cat_vizier(ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}, extra=[], verbose=False):
@@ -115,10 +131,19 @@ def get_cat_vizier(ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}, extra=[]
         pR1,pR2 = [0.004905242602502597, -0.046545625824660514, 0.07830702317352654, -0.08438139204305026], [-0.07782426914647306, 0.14090289318728444, -0.3634922073369279, -0.08438139204305031]
         pI1,pI2 = [-0.02274814414922734, 0.048462952908062046, -0.046965058282604985, -0.19478935830847588], [0.025124060889537177, -0.048672562735374666, -1.199591061144479, -0.1947893583084762]
 
-        cat['B'] = cat['gmag'] + np.polyval(pB1, cat['gmag']-cat['rmag']) + np.polyval(pB2, cat['rmag']-cat['imag'])
-        cat['V'] = cat['gmag'] + np.polyval(pV1, cat['gmag']-cat['rmag']) + np.polyval(pV2, cat['rmag']-cat['imag'])
-        cat['R'] = cat['rmag'] + np.polyval(pR1, cat['gmag']-cat['rmag']) + np.polyval(pR2, cat['rmag']-cat['imag'])
-        cat['I'] = cat['imag'] + np.polyval(pI1, cat['gmag']-cat['rmag']) + np.polyval(pI2, cat['imag']-cat['zmag'])
+        cat['Bmag'] = cat['gmag'] + np.polyval(pB1, cat['gmag']-cat['rmag']) + np.polyval(pB2, cat['rmag']-cat['imag'])
+        cat['Vmag'] = cat['gmag'] + np.polyval(pV1, cat['gmag']-cat['rmag']) + np.polyval(pV2, cat['rmag']-cat['imag'])
+        cat['Rmag'] = cat['rmag'] + np.polyval(pR1, cat['gmag']-cat['rmag']) + np.polyval(pR2, cat['rmag']-cat['imag'])
+        cat['Imag'] = cat['imag'] + np.polyval(pI1, cat['gmag']-cat['rmag']) + np.polyval(pI2, cat['imag']-cat['zmag'])
+
+        cat['e_Bmag'] = cat['e_gmag']
+        cat['e_Vmag'] = cat['e_gmag']
+        cat['e_Rmag'] = cat['e_rmag']
+        cat['e_Imag'] = cat['e_imag']
+
+        # Copies of columns for convenience
+        for _ in ['B', 'V', 'R', 'I']:
+            cat[_] = cat[_ + 'mag']
 
         cat['good'] = (cat['gmag'] - cat['rmag'] > -0.5) & (cat['gmag'] - cat['rmag'] < 2.5)
         cat['good'] &= (cat['rmag'] - cat['imag'] > -0.5) & (cat['rmag'] - cat['imag'] < 2.0)
@@ -155,14 +180,22 @@ def get_cat_vizier(ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}, extra=[]
         gcorr[g>16] = g[g>16] - 0.032
         g = gcorr
 
-        cat['B'] = g + np.polyval(pB, bp_rp) + np.polyval(pCB, Cstar)
-        cat['V'] = g + np.polyval(pV, bp_rp) + np.polyval(pCV, Cstar)
-        cat['R'] = g + np.polyval(pR, bp_rp) + np.polyval(pCR, Cstar)
-        cat['I'] = g + np.polyval(pI, bp_rp) + np.polyval(pCI, Cstar)
+        cat['Bmag'] = g + np.polyval(pB, bp_rp) + np.polyval(pCB, Cstar)
+        cat['Vmag'] = g + np.polyval(pV, bp_rp) + np.polyval(pCV, Cstar)
+        cat['Rmag'] = g + np.polyval(pR, bp_rp) + np.polyval(pCR, Cstar)
+        cat['Imag'] = g + np.polyval(pI, bp_rp) + np.polyval(pCI, Cstar)
+
+        # Rough estimation of magnitude error, just from G band
+        for _ in ['B', 'V', 'R', 'I', 'g', 'r']:
+            cat['e_' + _ + 'mag'] = cat['e_Gmag']
+
+        # Copies of columns for convenience
+        for _ in ['B', 'V', 'R', 'I']:
+            cat[_] = cat[_ + 'mag']
 
         # to PS1 - FIXME: there are some uncorrected color and magnitude trends!
-        cat['gmag'] = cat['B'] - 0.108 - 0.485*(cat['B'] - cat['V']) - 0.032*(cat['B'] - cat['V'])**2
-        cat['rmag'] = cat['V'] + 0.082 - 0.462*(cat['B'] - cat['V']) + 0.041*(cat['B'] - cat['V'])**2
+        cat['gmag'] = cat['Bmag'] - 0.108 - 0.485*(cat['Bmag'] - cat['Vmag']) - 0.032*(cat['Bmag'] - cat['Vmag'])**2
+        cat['rmag'] = cat['Vmag'] + 0.082 - 0.462*(cat['Bmag'] - cat['Vmag']) + 0.041*(cat['Bmag'] - cat['Vmag'])**2
 
         # to SDSS, from https://gea.esac.esa.int/archive/documentation/GDR2/Data_processing/chap_cu5pho/sec_cu5pho_calibr/ssec_cu5pho_PhotTransf.html
         cat['g_SDSS'] = g - (0.13518 - 0.46245*bp_rp - 0.25171*bp_rp**2 + 0.021349*bp_rp**3)
@@ -170,11 +203,30 @@ def get_cat_vizier(ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}, extra=[]
         cat['i_SDSS'] = g - (-0.29676 + 0.64728*bp_rp - 0.10141*bp_rp**2)
 
     elif catalog == 'skymapper':
-        # to SDSS
+        # to PS1
         for _ in ['u', 'g', 'r', 'i', 'z']:
-            cat[_ + '_PS1'] = cat[_ + 'PSF']
+            cat[_ + 'mag'] = cat[_ + 'PSF']
+            cat['e_' + _ + 'mag'] = cat['e_' + _ + 'PSF']
 
-        pass
+        # Johnson-Cousins, copy from PS1 above
+        pB1,pB2 = [0.10339527794499666, -0.492149523946056, 1.2093816061394638, 0.061925048331498395], [-0.2571974580267897, 0.9211495207523038, -0.8243222108864755, 0.0619250483314976]
+        pV1,pV2 = [-0.011452922062676726, -9.949308251868327e-05, -0.4650511584366353, -0.007076854914511554], [0.012749150754020416, 0.057554580469724864, -0.09019328095355343, -0.007076854914511329]
+        pR1,pR2 = [0.004905242602502597, -0.046545625824660514, 0.07830702317352654, -0.08438139204305026], [-0.07782426914647306, 0.14090289318728444, -0.3634922073369279, -0.08438139204305031]
+        pI1,pI2 = [-0.02274814414922734, 0.048462952908062046, -0.046965058282604985, -0.19478935830847588], [0.025124060889537177, -0.048672562735374666, -1.199591061144479, -0.1947893583084762]
+
+        cat['Bmag'] = cat['gmag'] + np.polyval(pB1, cat['gmag']-cat['rmag']) + np.polyval(pB2, cat['rmag']-cat['imag'])
+        cat['Vmag'] = cat['gmag'] + np.polyval(pV1, cat['gmag']-cat['rmag']) + np.polyval(pV2, cat['rmag']-cat['imag'])
+        cat['Rmag'] = cat['rmag'] + np.polyval(pR1, cat['gmag']-cat['rmag']) + np.polyval(pR2, cat['rmag']-cat['imag'])
+        cat['Imag'] = cat['imag'] + np.polyval(pI1, cat['gmag']-cat['rmag']) + np.polyval(pI2, cat['imag']-cat['zmag'])
+
+        cat['e_Bmag'] = cat['e_gmag']
+        cat['e_Vmag'] = cat['e_gmag']
+        cat['e_Rmag'] = cat['e_rmag']
+        cat['e_Imag'] = cat['e_imag']
+
+        # Copies of columns for convenience
+        for _ in ['B', 'V', 'R', 'I']:
+            cat[_] = cat[_ + 'mag']
 
     elif catalog == 'apass':
         # My own fit based on Landolt standards
