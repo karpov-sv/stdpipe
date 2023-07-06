@@ -29,7 +29,7 @@ from . import astrometry
 try:
     import cv2
     # Much faster dilation
-    dilate = lambda image,mask: cv2.dilate(image.astype(np.uint8), mask).astype(np.bool)
+    dilate = lambda image,mask: cv2.dilate(image.astype(np.uint8), mask).astype(bool)
 except:
     from scipy.signal import fftconvolve
     dilate = lambda image,mask: fftconvolve(image, mask, mode='same') > 0.9
@@ -84,7 +84,7 @@ def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.
     log("Preparing background mask")
 
     if mask is None:
-        mask = np.zeros_like(image, dtype=np.bool)
+        mask = np.zeros_like(image, dtype=bool)
 
     mask_bg = np.zeros_like(mask)
     mask_segm = np.zeros_like(mask)
@@ -279,7 +279,7 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
         opts['BACK_SIZE'] = bg_size
 
     if mask is None:
-        mask = np.zeros_like(image, dtype=np.bool)
+        mask = np.zeros_like(image, dtype=bool)
 
     if err is not None:
         # User-provided noise model

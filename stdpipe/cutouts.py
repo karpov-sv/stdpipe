@@ -219,7 +219,7 @@ def write_cutout(cutout, filename):
         if _ in cutout:
             data = cutout[_]
 
-            if data.dtype == np.bool:
+            if data.dtype == bool:
                 data = data.astype(np.uint16)
 
             hdu = fits.ImageHDU(data, header=cutout.get('header'), name=_)
