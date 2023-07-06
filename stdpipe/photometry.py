@@ -548,7 +548,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
 
     oidx,cidx,dist = astrometry.spherical_match(obj_ra, obj_dec, cat_ra, cat_dec, sr)
 
-    log(len(dist), 'initial matches between', len(obj_ra), 'objects and', len(cat_ra), 'catalogue stars, sr =', sr*3600, 'arcsec')
+    log(len(dist), 'initial matches between', len(obj_ra), 'objects and', len(cat_ra), 'catalogue stars, sr = %.2f arcsec' % (sr*3600))
     log('Median separation is %.2f arcsec' % (np.median(dist)*3600))
 
     omag = np.ma.filled(obj_mag[oidx], fill_value=np.nan)
