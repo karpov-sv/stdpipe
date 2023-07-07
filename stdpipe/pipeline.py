@@ -568,7 +568,7 @@ def get_detection_limit(obj, sn=5, method='sn', verbose=True):
         raise RuntimeError('Not implemented')
 
     if mag0 is not None:
-        log('Detection limit is %.2f at S/N=%g level')
+        log('Detection limit is %.2f at S/N=%g level' % (mag0, sn))
     else:
         log('Error estimating the detection limit!')
 
