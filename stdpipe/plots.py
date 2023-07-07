@@ -10,6 +10,8 @@ from astropy.visualization import simple_norm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.stats import binned_statistic_2d
 
+from . import photometry
+
 def colorbar(obj=None, ax=None, size="5%", pad=0.1):
     should_restore = False
 
@@ -316,6 +318,95 @@ def plot_photometric_match(m, ax=None, mode='mag', show_masked=True, show_final=
         ax.set_title('%d stars: mean displacement %.1f arcsec, median %.1f arcsec' % (np.sum(m['idx']), np.mean(m['dist'][m['idx']]*3600), np.median(m['dist'][m['idx']]*3600)))
 
     return ax
+
+def plot_detection_limit(obj, sn=5, mag_name=None, ax=None):
+    """
+    Plot the details of detection limit estimation
+
+    :param obj: astropy.table.Table with calibrated object detections.
+    :param sn: S/N value corresponding to the detection limit.
+    :param mag_name: User-readable name for the magnitude.
+    :param ax: Matplotlib Axes object to be used for plotting, optional.
+    :returns: None
+    """
+    if ax is None:
+        ax = plt.gca()
+
+    mag = obj['mag_calib']
+    mag_sn = 1/obj['mag_calib_err']
+
+    ax.plot(mag, mag_sn, '.', alpha=(0.2 if len(mag_sn) > 1000 else 0.4), label='Objects')
+
+    ax.axhline(sn, color='black', ls='--', label=f"S/N={sn}")
+
+    mag0,sn_model = photometry.get_detection_limit_sn(mag, mag_sn, sn=sn, get_model=True)
+    if mag0 is not None:
+        x0 = np.linspace(np.nanmin(mag) - 1, max(np.nanmax(mag), mag0 + 1))
+        ax.plot(x0, sn_model(x0), '-', color='red', label='Model')
+        ax.axvline(mag0, ls=':', color='red', alpha=0.3, label=f"S/N={sn}")
+        ax.set_title(f"S/N={sn} limit is {mag0:.2f}")
+    else:
+        ax.set_title("Cannot estimate detection limit")
+
+    ax.set_yscale('log')
+
+    ax.grid(alpha=0.2)
+    ax.legend()
+    ax.set_xlabel(mag_name)
+    ax.set_ylabel('Signal / Noise')
+
+def plot_mag_histogram(obj, cat=None, cat_col_mag=None, sn=None, ax=None):
+    """
+    Plot the histogram of calibrated magnitudes for detected objects,
+    and optionally the catalogue.
+
+    :param obj: astropy.table.Table with calibrated object detections
+    :param cat: astropy.table.Table with catalogue stars
+    :param cat_col_mag: Column name of a magnitude inside `cat`
+    :param sn: If set - S/N value corresponding to the detection limit to overplot
+    :param ax: Matplotlib Axes object to be used for plotting, optional
+    :returns: None
+    """
+    if ax is None:
+        ax = plt.gca()
+
+    mag = obj['mag_calib']
+    magerr = obj['mag_calib_err']
+
+    vmin = np.nanmin(mag)
+    vmax = np.nanmax(mag)
+
+    if cat and cat_col_mag in cat.colnames:
+        cmag = cat[cat_col_mag]
+        cmag = cmag[(cmag > -10) & (cmag < 30)] # To exclude common filler values
+        vmin = min(vmin, np.nanmin(cmag))
+        vmax = max(vmax, np.nanmax(cmag))
+    else:
+        cmag = None
+
+    vmin = np.floor(vmin)
+    vmax = np.ceil(vmax)
+
+    ax.hist(mag, bins=np.linspace(vmin, vmax, 50), alpha=0.4, color='C0', label="Objects");
+    ax.hist(mag, bins=np.linspace(vmin, vmax, 50), alpha=0.8, histtype='step', color='C0');
+
+    if cmag is not None:
+        ax.hist(cmag, bins=np.linspace(vmin, vmax, 50), alpha=0.3, color='C1', label="Catalogue");
+        ax.hist(cmag, bins=np.linspace(vmin, vmax, 50), alpha=0.8, histtype='step', color='C1');
+        ax.set_xlabel(cat_col_mag)
+    else:
+        ax.set_xlabel('Magnitude')
+
+    if sn:
+        mag = obj['mag_calib']
+        mag_sn = 1/obj['mag_calib_err']
+
+        mag0 = photometry.get_detection_limit_sn(mag, mag_sn, sn=sn)
+        if mag0 is not None:
+            ax.axvline(mag0, ls=':', color='red', alpha=0.3, label=f"S/N={sn}")
+
+    ax.grid(alpha=0.2)
+    ax.legend()
 
 from contextlib import contextmanager
 

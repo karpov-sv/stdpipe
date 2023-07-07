@@ -22,7 +22,7 @@ import photutils
 from photutils.utils import calc_total_error
 
 import statsmodels.api as sm
-from scipy.optimize import minimize
+from scipy.optimize import minimize, least_squares, root_scalar
 
 from . import astrometry
 
@@ -68,7 +68,6 @@ def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.
     :param npix_large: Threshold for rejecting large objects (if `use_mask_large` is set)
     :param subtract_bg: Whether to subtract the background (default) or not
     :param sn: Minimal S/N ratio for the object to be considered a detection
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
     :returns: astropy.table.Table object with detected objects
     """
@@ -861,3 +860,61 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
         return obj, bg_est.background, err
     else:
         return obj
+
+def make_sn_model(mag, sn):
+    """
+    Build a model for signal to noise (S/N) ratio versus magnitude.
+    Assumes the noise comes from constant background noise plus Poissonian noise with constant gain.
+
+    :param mag: Array of calibrated magnitudes
+    :param sn: Array of S/N values corresponding to them
+    :returns: The function that accepts the array of magnitudes and returns the S/N model values for them
+    """
+    idx = np.isfinite(mag) & np.isfinite(sn)
+    mag = mag[idx]
+    sn = sn[idx]
+
+    def sn_fn(p, mag):
+        return 1/np.sqrt(p[0]*10**(0.8*mag) + p[1]*10**(0.4*mag))
+
+    def lstsq_fn(p, x, y):
+        # Minimize residuals in logarithms, for better stability
+        return np.log10(y) - np.log10(sn_fn(p, x))
+
+    aidx = np.argsort(sn)
+
+    # Initial params from two limiting cases, one on average and one on brightest point
+    x = [np.median(10**(-0.8*mag)/sn**2), 10**(-0.4*mag[aidx][-1])/sn[aidx][-1]**2]
+
+    res = least_squares(lstsq_fn, x, args=(mag, sn))
+
+    return lambda mag: sn_fn(res.x, mag)
+
+def get_detection_limit_sn(mag, mag_sn, sn=5, get_model=False, verbose=True):
+    """
+    Estimate the detection limit using S/N vs magnitude method.
+
+    :param mag: Array of calibrated magnitudes
+    :param mag_sn: Array of S/N values corresponding to these magnitudes
+    :param sn: S/N level for the detection limit
+    :param get_model: If True, also returns the S/N model function
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
+    :returns: The magnitude corresponding to the detection limit on a given S/N level. If :code:`get_model=True`, also returns the function for S/N vs magnitude model
+    """
+
+    # Simple wrapper around print for logging in verbose mode only
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+
+    mag0 = None
+
+    sn_model = make_sn_model(mag, mag_sn)
+    res = root_scalar(lambda x: sn_model(x) - sn, x0=np.nanmax(mag), x1=np.nanmax(mag)+1)
+    if res.converged:
+        mag0 = res.root
+    else:
+        log('Cannot determine the root of S/N model function')
+
+    if get_model:
+        return mag0, sn_model
+    else:
+        return mag0

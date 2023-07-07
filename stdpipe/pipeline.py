@@ -543,3 +543,33 @@ def split_image(image, nx=1, ny=None, mask=None, bg=None, err=None, header=None,
         log('Block %d: %d %d - %d %d' % (i, x1, y1, x1+dx1, y1+dy1))
 
         yield result if len(result) > 1 else result[0]
+
+def get_detection_limit(obj, sn=5, method='sn', verbose=True):
+    """
+    Estimate the detection limit using one of several methods.
+    The objects table should contain calibrated magnitudes and their errors
+    in `mag_calib` and `'mag_calib_err` columns.
+
+    :param obj: astropy.table.Table with calibrated objects
+    :param sn: S/N value corresponding to the detection limit
+    :param method: Method to use. One of 'sn' (extrapolation S/N vs magnitude) or 'bg' (not yet implemented)
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
+    :returns: The magnitude corresponding to the detection limit on a given S/N level.
+    """
+
+    # Simple wrapper around print for logging in verbose mode only
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+
+    if method == 'sn':
+        log('Estimating detection limit using S/N vs magnitude method')
+        mag0 = photometry.get_detection_limit_sn(obj['mag_calib'], 1/obj['mag_calib_err'], sn=sn, verbose=verbose)
+    elif method == 'bg':
+        log('Estimating detection limit using background noise method')
+        raise RuntimeError('Not implemented')
+
+    if mag0 is not None:
+        log('Detection limit is %.2f at S/N=%g level')
+    else:
+        log('Error estimating the detection limit!')
+
+    return mag0
