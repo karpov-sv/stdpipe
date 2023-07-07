@@ -886,7 +886,7 @@ def make_sn_model(mag, sn):
     # Initial params from two limiting cases, one on average and one on brightest point
     x = [np.median(10**(-0.8*mag)/sn**2), 10**(-0.4*mag[aidx][-1])/sn[aidx][-1]**2]
 
-    res = least_squares(lstsq_fn, x, args=(mag, sn))
+    res = least_squares(lstsq_fn, x, args=(mag, sn), method='lm')
 
     return lambda mag: sn_fn(res.x, mag)
 
