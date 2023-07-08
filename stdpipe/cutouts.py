@@ -53,7 +53,9 @@ def crop_image(data, x1, y1, width, height, header=None):
     dst = [src[0] - y1, src[1] - y1, src[2] - x1, src[3] - x1]
 
     sub = np.zeros((y2-y1, x2-x1), data.dtype)
-    sub.fill(np.nan)
+    if isinstance(data[0][0], np.floating):
+        # For floating-point we may use NaN as a filler value
+        sub.fill(np.nan)
     sub[dst[0]:dst[1], dst[2]:dst[3]] = data[src[0]:src[1], src[2]:src[3]]
 
     if header is not None:
