@@ -84,7 +84,7 @@ def imshow(image, qq=None, show_colorbar=True, show_axis=True, stretch='linear',
 
     return img
 
-def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], color=None, show_colorbar=True, show_axis=True, show_dots=False, ax=None, **kwargs):
+def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], color=None, show_colorbar=True, show_axis=True, show_dots=False, ax=None, range=None, **kwargs):
     """Plots various statistical estimators binned onto regular grid from the set of irregular data points (`x`, `y`, `value`).
 
     :param x: Abscissae of the data points
@@ -97,12 +97,13 @@ def binned_map(x, y, value, bins=16, statistic='mean', qq=[0.5, 97.5], color=Non
     :param show_colorbar: Whether to show a colorbar alongside the image
     :param show_axis: Whether to show the axes around the image
     :param show_dots: Whether to overlay the positions of data points onto the plot
+    :param range: Data range as [[xmin, xmax], [ymin, ymax]]
     :param ax: Matplotlib Axes object to be used for plotting, optional
     :param \**kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.imshow`
     :returns: None
 
     """
-    gmag0, xe, ye, binnumbers = binned_statistic_2d(x, y, value, bins=bins, statistic=statistic)
+    gmag0, xe, ye, binnumbers = binned_statistic_2d(x, y, value, bins=bins, statistic=statistic, range=range)
 
     vmin1,vmax1 = np.percentile(gmag0[np.isfinite(gmag0)], qq)
     if not 'vmin' in kwargs:
@@ -254,6 +255,7 @@ def plot_photometric_match(m, ax=None, mode='mag', show_masked=True, show_final=
 
         ax.axhline(0, ls='--', color='black', alpha=0.3)
         ax.legend()
+        ax.grid(alpha=0.2)
 
         ax.set_xlabel('Catalogue %s magnitude' % (m['cat_col_mag'] if 'cat_col_mag' in m.keys() else ''))
         ax.set_ylabel('Instrumental - Model')
@@ -273,6 +275,7 @@ def plot_photometric_match(m, ax=None, mode='mag', show_masked=True, show_final=
         ax.axhline(-3, ls=':', color='black', alpha=0.3)
         ax.axhline(3, ls=':', color='black', alpha=0.3)
         ax.legend()
+        ax.grid(alpha=0.2)
 
         ax.set_xlabel('Catalogue %s magnitude' % (m['cat_col_mag'] if 'cat_col_mag' in m.keys() else ''))
         ax.set_ylabel('(Instrumental - Model) / Error')
@@ -290,6 +293,7 @@ def plot_photometric_match(m, ax=None, mode='mag', show_masked=True, show_final=
 
         ax.axhline(0, ls='--', color='black', alpha=0.3)
         ax.legend()
+        ax.grid(alpha=0.2)
 
         ax.set_xlabel('Catalogue %s color' % (m['cat_col_mag1'] + '-' + m['cat_col_mag2'] if 'cat_col_mag1' in m.keys() else ''))
         ax.set_ylabel('Instrumental - Model')
@@ -372,6 +376,7 @@ def plot_mag_histogram(obj, cat=None, cat_col_mag=None, sn=None, ax=None):
 
     mag = obj['mag_calib']
     magerr = obj['mag_calib_err']
+    idx = obj['flags'] == 0
 
     vmin = np.nanmin(mag)
     vmax = np.nanmax(mag)
@@ -389,6 +394,9 @@ def plot_mag_histogram(obj, cat=None, cat_col_mag=None, sn=None, ax=None):
 
     ax.hist(mag, bins=np.linspace(vmin, vmax, 50), alpha=0.4, color='C0', label="Objects");
     ax.hist(mag, bins=np.linspace(vmin, vmax, 50), alpha=0.8, histtype='step', color='C0');
+
+    ax.hist(mag[idx], bins=np.linspace(vmin, vmax, 50), alpha=0.2, color='C2', label="Unflagged objects");
+    ax.hist(mag[idx], bins=np.linspace(vmin, vmax, 50), alpha=0.6, histtype='step', color='C2');
 
     if cmag is not None:
         ax.hist(cmag, bins=np.linspace(vmin, vmax, 50), alpha=0.3, color='C1', label="Catalogue");

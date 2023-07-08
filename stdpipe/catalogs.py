@@ -93,7 +93,7 @@ def get_cat_vizier(ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}, extra=[]
         columns = ['*', 'RAJ2000', 'DEJ2000', 'e_RAJ2000', 'e_DEJ2000'] + extra
 
     log('Requesting from VizieR:', vizier_id, 'columns:', columns)
-    log('Center:', ra0, dec0, 'radius:', sr0)
+    log('Center: %.3f %.3f' % (ra0, dec0), 'radius: %.3f' % sr0)
     log('Filters:', filters)
 
     vizier = Vizier(row_limit=limit, columns=columns, column_filters=filters)
