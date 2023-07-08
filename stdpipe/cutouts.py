@@ -196,7 +196,9 @@ def write_cutout(cutout, filename):
     for _ in cutout['meta']:
         data = cutout['meta'][_]
         # Special handling for unsupported FITS types
-        if type(data)  == Time or type(data) == datetime.datetime:
+        if data is None:
+            data = None
+        elif type(data) == Time or type(data) == datetime.datetime:
             data = Time(data).to_value('fits')
         elif np.isreal(data) and np.isnan(data):
             data = 'NaN'
