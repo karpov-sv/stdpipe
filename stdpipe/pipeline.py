@@ -437,6 +437,58 @@ def place_random_stars(image, psf_model, nstars=100, minflux=1, maxflux=100000, 
 
     return cat
 
+def split_sub_fn(image, x1, y1, dx1, dy1, nx=1, ny=None, mask=None, bg=None, err=None, header=None, wcs=None, obj=None, cat=None, get_origin=False):
+    """
+    """
+    _ = cutouts.crop_image(image.astype(np.double), x1, y1, dx1, dy1, header=header)
+    if header:
+        image1,header1 = _
+    else:
+        image1,header1 = _,None
+
+    result = []
+
+    if get_origin:
+        result += [x1, y1]
+
+    result += [image1]
+
+    if mask is not None:
+        result += [cutouts.crop_image(mask, x1, y1, dx1, dy1)]
+
+    if bg is not None:
+        result += [cutouts.crop_image(bg, x1, y1, dx1, dy1)]
+
+    if err is not None:
+        result += [cutouts.crop_image(err, x1, y1, dx1, dy1)]
+
+    if header1 is not None:
+        result += [header1]
+
+    if wcs is not None:
+        wcs1 = wcs.deepcopy()
+        # FIXME: is there any more 'official' way of shifting the WCS?
+        wcs1.wcs.crpix[0] -= x1
+        wcs1.wcs.crpix[1] -= y1
+
+        wcs1 = WCS(wcs1.to_header(relax=True))
+
+        result += [wcs1]
+
+    if obj is not None:
+        oidx = (obj['x'] > x1) & (obj['x'] < x1 + dx1) & (obj['y'] > y1) & (obj['y'] < y1 + dy1)
+        obj1 = obj[oidx].copy()
+        obj1['x'] -= x1
+        obj1['y'] -= y1
+        result += [obj1]
+
+    if cat is not None and wcs is not None:
+        cx,cy = wcs.all_world2pix(cat['RAJ2000'], cat['DEJ2000'], 0)
+        cidx = (cx >= x1) & (cx < x1 + dx1) & (cy >= y1) & (cy < y1 + dy1)
+        result += [cat[cidx].copy()]
+
+    return result
+
 def split_image(image, nx=1, ny=None, mask=None, bg=None, err=None, header=None, wcs=None, obj=None, cat=None, overlap=0, get_index=False, get_origin=False, verbose=False):
     """
     Generator function to split the image into several (`nx` x `ny`) blocks, while also optionally providing the mask, header, wcs, object list etc for the sub-blocks.
@@ -456,7 +508,7 @@ def split_image(image, nx=1, ny=None, mask=None, bg=None, err=None, header=None,
     :param get_index: If set, also returns the number of current sub-image, starting from zero
     :param get_origin: If set, also return the sub-image origin pixel coordinates
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
-    :returns: Every concecutive call to the generator will return the list of cropped objects corresponding to the next sub-image, as well as some sub-image metadata.
+    :returns: Every concesutive call to the generator will return the list of cropped objects corresponding to the next sub-image, as well as some sub-image metadata.
 
     The returned list is constructed from the following elements:
 
@@ -490,59 +542,73 @@ def split_image(image, nx=1, ny=None, mask=None, bg=None, err=None, header=None,
         dx1 = min(x0 - x1 + dx + overlap, image.shape[1] - x1)
         dy1 = min(y0 - y1 + dy + overlap, image.shape[0] - y1)
 
-        _ = cutouts.crop_image(image.astype(np.double), x1, y1, dx1, dy1, header=header)
-        if header:
-            image1,header1 = _
-        else:
-            image1,header1 = _,None
-
-        result = []
+        result = split_sub_fn(image, x1, y1, dx1, dy1, mask=mask, bg=bg, err=err, header=header, wcs=wcs, obj=obj, cat=cat, get_origin=get_origin)
 
         if get_index:
-            result += [i]
-
-        if get_origin:
-            result += [x1, y1]
-
-        result += [image1]
-
-        if mask is not None:
-            result += [cutouts.crop_image(mask, x1, y1, dx1, dy1)]
-
-        if bg is not None:
-            result += [cutouts.crop_image(bg, x1, y1, dx1, dy1)]
-
-        if err is not None:
-            result += [cutouts.crop_image(err, x1, y1, dx1, dy1)]
-
-        if header1 is not None:
-            result += [header1]
-
-        if wcs is not None:
-            wcs1 = wcs.deepcopy()
-            # FIXME: is there any more 'official' way of shifting the WCS?
-            wcs1.wcs.crpix[0] -= x1
-            wcs1.wcs.crpix[1] -= y1
-
-            wcs1 = WCS(wcs1.to_header(relax=True))
-
-            result += [wcs1]
-
-        if obj is not None:
-            oidx = (obj['x'] > x1) & (obj['x'] < x1 + dx1) & (obj['y'] > y1) & (obj['y'] < y1 + dy1)
-            obj1 = obj[oidx].copy()
-            obj1['x'] -= x1
-            obj1['y'] -= y1
-            result += [obj1]
-
-        if cat is not None and wcs is not None:
-            cx,cy = wcs.all_world2pix(cat['RAJ2000'], cat['DEJ2000'], 0)
-            cidx = (cx >= x1) & (cx < x1 + dx1) & (cy >= y1) & (cy < y1 + dy1)
-            result += [cat[cidx].copy()]
+            result = [i] + result
 
         log('Block %d: %d %d - %d %d' % (i, x1, y1, x1+dx1, y1+dy1))
 
         yield result if len(result) > 1 else result[0]
+
+def get_subimage_centered(image, x0, y0, width, height=None, mask=None, bg=None, err=None, header=None, wcs=None, obj=None, cat=None, get_origin=False, verbose=False):
+    """
+    Convenience function for getting the cropped sub-image centered at a given pixel position,
+    while also optionally providing the mask, header, wcs, object list etc for it.
+    Its behaviour and arguments are mostly identical to the ones of :func:`stdpipe.pipeline.split_image`.
+
+    In contrast to :func:`stdpipe.utils.crop_image_centered` it accepts output width and height as parameters. These will correspond to the size of the output if it is completely inside the original image; if not - they will be correspondingly smaller (i.e. it does not pad the data to keep requested position exactly at the center).
+
+    :param image: Image to crop
+    :param x0: Pixel `x` coordinate of the cropped image center in the original image
+    :param y0: Pixel `y` coordinate of the cropped image center in the original image
+    :param width: Pixel width of the sub-image
+    :param height: Pixel height of the sub-image, optional. If not provided, assumed to be equal to `width`
+    :param mask: Mask image to crop, optional
+    :param bg: Background map to crop, optional
+    :param err: Noise model image to crop, optional
+    :param header: Image header, optional. If set, the header corresponding to cropped sub-image will be returned, with correctly adjusted WCS information
+    :param wcs: WCS solution for the image, optional. If set, the solution for sub-image will be returned
+    :param obj: Object list, optional. If provided, the list of objects contained in the sub-image, with accordingly adjusted pixel coordinates, will be returned
+    :param cat: Reference catalogue, optional. If provided, the catalogue for the stars on the sub-image will be returned
+    :param get_origin: If set, also return the sub-image origin pixel coordinates
+    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
+    :returns: list of cropped objects corresponding to the sub-image, as well as some sub-image metadata.
+
+    The returned list is constructed from the following elements:
+
+    - `x` and `y` coordinates of the sub-image origin inside the original image
+    -sub-image
+    - Cropped mask corresponding to the sub-image, if `mask` is provided
+    - Cropped background map, if `bg` is provided
+    - Cropped noise model, if `err` is provided
+    - FITS header corresponding to the sub-image with correct astrometric solution for it, if `header` is provided
+    - WCS astrometric solution for the sub-image, if `wcs` is provided
+    - Object list containing only objects that are inside the sub-image with their pixel coordinates adjusted correspondingly, if `obj` is set
+    - Reference catalogue containing only stars overlaying the sub-image, if `cat` is provided and `wcs` is set
+
+    """
+
+    # Simple wrapper around print for logging in verbose mode only
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+
+    if not height:
+        height = width
+
+    x1 = int(np.floor(x0 - 0.5*width))
+    y1 = int(np.floor(y0 - 0.5*height))
+
+    x2 = x1 + width - 1
+    y2 = y1 + height - 1
+
+    x1,x2 = max(0, x1), min(x2, image.shape[1] - 1)
+    y1,y2 = max(0, y1), min(y2, image.shape[0] - 1)
+
+    log('Will crop the %d %d - %d %d sub-image from original (%dx%d) image centered at %d %d' % (x1, y1, x2, y2, image.shape[1], image.shape[0], x0, y0))
+
+    result = split_sub_fn(image, x1, y1, x2 - x1 + 1, y2 - y1 + 1, mask=mask, bg=bg, err=err, header=header, wcs=wcs, obj=obj, cat=cat, get_origin=get_origin)
+
+    return result
 
 def get_detection_limit(obj, sn=5, method='sn', verbose=True):
     """
