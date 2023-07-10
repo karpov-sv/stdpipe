@@ -323,7 +323,7 @@ def get_ps1_skycells(ra0, dec0, sr0, band='r', ext='image', normalize=True, over
     # Normalize _cachedir
     if _cachedir is not None:
         _cachedir = os.path.expanduser(_cachedir)
-        log('Cache location is %s', _cachedir)
+        log('Cache location is', _cachedir)
     else:
         if _tmpdir is None:
             _tmpdir = tempfile.gettempdir()
