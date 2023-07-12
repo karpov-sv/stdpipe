@@ -628,7 +628,7 @@ def reproject_swarp(input=[], wcs=None, shape=None, width=None, height=None, hea
             coadd -= bzero
 
         if use_nans:
-            if np.issubdtype(coadd.dtype.type, float):
+            if isinstance(coadd[0][0], np.floating):
                 coadd[weights == 0] = np.nan
             else:
                 coadd[weights == 0] = 0xffff
