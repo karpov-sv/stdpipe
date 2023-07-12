@@ -808,6 +808,7 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
         res_area = photutils.aperture_photometry(image_ones, apertures, mask=mask0)
 
         obj['bg_local'] = 0.0 # Dedicated column for local background on top of global estimation
+        obj['bg_fluxerr'] = 0.0 # Local background flux error inside the aperture
 
         for row,area,bg_mask in zip(obj, res_area, bg_apertures.to_mask(method='center')):
             bg_overlap = bg_mask.multiply(image1)
@@ -828,8 +829,9 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
 
                 row['flux'] -= local_bg_est * area['aperture_sum']
                 # Rough estimation of bg_est error as rms/sqrt(N)
-                row['fluxerr'] = np.hypot(row['fluxerr'], bg_stats[2] / np.sqrt(np.sum(mask_vals == 0)) * area['aperture_sum'] )
+                row['fluxerr'] = np.hypot(row['fluxerr'], bg_stats[2] / np.sqrt(np.sum(mask_vals == 0)) * area['aperture_sum'])
                 row['bg_local'] = local_bg_est
+                row['bg_fluxerr'] = bg_stats[2] * np.sqrt(area['aperture_sum'])
             else:
                 row['flags'] |= 0x400 # Flag the values where local bg estimation failed
 

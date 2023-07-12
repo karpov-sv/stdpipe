@@ -352,6 +352,15 @@ def plot_detection_limit(obj, sn=5, mag_name=None, ax=None):
     else:
         ax.set_title("Cannot estimate detection limit")
 
+    # Local bg rms detection limit
+    if 'bg_fluxerr' in obj.colnames:
+        fluxerr = obj['bg_fluxerr']
+        zero = obj['mag_calib'] - obj['mag']
+        maglim = -2.5*np.log10(sn*fluxerr) + zero
+
+        ax.plot(maglim, np.ones_like(maglim)*sn, 'o', color='orange', label='Local RMS', alpha=0.2)
+        # ax.violinplot(maglim, [sn], vert=False, showmedians=True, color='orange')
+
     ax.set_yscale('log')
 
     ax.grid(alpha=0.2)
