@@ -737,6 +737,10 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
+    if not len(obj):
+        log('No objects to measure')
+        return obj
+
     # Operate on the copy of the list
     obj = obj.copy()
 
