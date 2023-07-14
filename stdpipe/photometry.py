@@ -191,7 +191,7 @@ def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.
 
     return obj
 
-def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, bg_size=None, sort=True, reject_negative=True, checkimages=[], extra_params=[], extra={}, psf=None, catfile=None, _workdir=None, _tmpdir=None, _exe=None, verbose=False):
+def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, bg_size=None, sort=True, reject_negative=True, mask_to_nans=False, checkimages=[], extra_params=[], extra={}, psf=None, catfile=None, _workdir=None, _tmpdir=None, _exe=None, verbose=False):
     """Thin wrapper around SExtractor binary.
 
     It processes the image taking into account optional mask and noise map, and returns the list of detected objects and optionally a set of SExtractor-produced checkimages.
@@ -214,6 +214,7 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
     :param bg_size: Background grid size in pixels (`BACK_SIZE` SExtractor parameter)
     :param sort: Whether to sort the detections in decreasing brightness or not
     :param reject_negative: Whether to reject the detections with negative fluxes
+    :param mask_to_nans: Whether to replace masked image pixels with NaNs prior to running SExtractor on it
     :param checkimages: List of SExtractor checkimages to return along with detected objects. Any SExtractor checkimage type may be used here (e.g. `BACKGROUND`, `BACKGROUND_RMS`, `MINIBACKGROUND`,  `MINIBACK_RMS`, `-BACKGROUND`, `FILTERED`, `OBJECTS`, `-OBJECTS`, `SEGMENTATION`, `APERTURES`). Optional.
     :param extra_params: List of extra object parameters to return for the detection. See :code:`sex -dp` for the full list.
     :param extra: Dictionary of extra configuration parameters to be passed to SExtractor call, with keys as parameter names. See :code:`sex -dd` for the full list.
@@ -252,8 +253,12 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
     workdir = _workdir if _workdir is not None else tempfile.mkdtemp(prefix='sex', dir=_tmpdir)
     obj = None
 
+    if mask_to_nans and mask is not None:
+        image[mask] = np.nan
+
     # Prepare
     if type(image) == str:
+        # FIXME: this mode of operation is currently broken!
         imagename = image
     else:
         imagename = os.path.join(workdir, 'image.fits')
