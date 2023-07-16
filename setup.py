@@ -18,6 +18,7 @@ requirements = [
     'regions',
     'python-dateutil',
     'requests',
+    'sip_tpv',
 ]
 
 setup(

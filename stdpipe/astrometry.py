@@ -10,6 +10,8 @@ from astropy.coordinates import SkyCoord, search_around_sky
 from astropy.table import Table
 from astropy import units as u
 
+import sip_tpv
+
 from scipy.stats import chi2
 
 from . import utils
@@ -504,11 +506,25 @@ def wcs_pv2sip(header, method='astrometrynet'):
     """
     pass
 
-def wcs_sip2pv(header, method='astrometrynet'):
+def wcs_sip2pv(header):
     """
-    TODO
+    Convert the WCS header from SIP to TPV representation
     """
-    pass
+
+    header = header.copy()
+
+    # sip_to_pv expects CD matrix to be present
+    if 'CD1_1' not in header and 'PC1_1' in header:
+        cdelt = [header.get('CDELT1'), header.get('CDELT2')]
+
+        header['CD1_1'] = header.pop('PC1_1')*cdelt[0]
+        header['CD2_1'] = header.pop('PC2_1')*cdelt[0]
+        header['CD1_2'] = header.pop('PC1_2')*cdelt[0]
+        header['CD2_2'] = header.pop('PC2_2')*cdelt[0]
+
+    sip_tpv.sip_to_pv(header)
+
+    return header
 
 def table_to_ldac(table, header=None, writeto=None):
 
@@ -600,6 +616,11 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
     if wcs is not None and wcs.is_celestial:
         # Add WCS information to the header
         header += wcs.to_header(relax=True)
+
+        # Ensure the header is in TPV convention, as SCAMP does not support SIP
+        if wcs.sip is not None:
+            log("Converting the header from SIP to TPV convention")
+            header = wcs_sip2pv(header)
     else:
         log("Can't operate without initial WCS")
         return None

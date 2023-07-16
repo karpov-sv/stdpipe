@@ -521,6 +521,9 @@ def reproject_swarp(input=[], wcs=None, shape=None, width=None, height=None, hea
         astrometry.clear_wcs(header)
         whdr = wcs.to_header(relax=True)
 
+        if wcs.sip is not None:
+            whdr = astrometry.wcs_sip2pv(whdr)
+
         # Here we will try to fix some common problems with WCS not supported by SWarp
         # FIXME: handle SIP distortions!
         if wcs.wcs.has_pc() and 'PC1_1' not in whdr:
@@ -595,6 +598,10 @@ def reproject_swarp(input=[], wcs=None, shape=None, width=None, height=None, hea
 
             if isinstance(header, WCS):
                 header = header.to_header(relax=True)
+
+            # Convert SIP headers to TPV
+            if WCS(header).sip is not None:
+                header = astrometry.wcs_sip2pv(header)
 
             filename = os.path.join(workdir, 'image_%04d.fits' % i)
             fits.writeto(filename, image, header, overwrite=True)
