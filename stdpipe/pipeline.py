@@ -57,6 +57,10 @@ def refine_astrometry(obj, cat, sr=10/3600, wcs=None, order=0,
 
     log('Astrometric refinement using %.1f arcsec radius, %s matching and %s WCS fitting' %
         (sr*3600, 'photometric' if use_photometry else 'simple positional', method))
+    if type(cat) == str:
+        log('Using %d objects and catalogue %s' % (len(obj), cat))
+    else:
+        log('Using %d objects and %d catalogue stars' % (len(obj), len(cat)))
 
     if wcs is not None:
         obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
