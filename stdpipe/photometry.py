@@ -919,7 +919,7 @@ def get_detection_limit_sn(mag, mag_sn, sn=5, get_model=False, verbose=True):
     mag0 = None
 
     sn_model = make_sn_model(mag, mag_sn)
-    res = root_scalar(lambda x: sn_model(x) - sn, x0=np.nanmax(mag), x1=np.nanmax(mag)+1)
+    res = root_scalar(lambda x: np.log10(sn_model(x)) - np.log10(sn), x0=np.nanmax(mag), x1=np.nanmax(mag)+1)
     if res.converged:
         mag0 = res.root
     else:
