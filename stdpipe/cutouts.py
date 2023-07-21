@@ -17,6 +17,7 @@ from scipy.optimize import minimize
 from scipy.ndimage.interpolation import shift
 
 from . import utils
+from . import astrometry
 
 def crop_image_centered(data, x0, y0, r0, header=None):
     """
@@ -382,3 +383,51 @@ def adjust_cutout(cutout, max_shift=2, max_scale=1.1, inner=None, normalize=Fals
 
     else:
         return False
+
+def downscale_image(image, scale=1, mode='sum', header=None):
+    """
+    Downscales the image by an integer factor.
+    Also adjusts the FITS header, if provided, so that WCS solution
+    is still valid for the result.
+
+    If image shape is not divisible by `scale`, it will be cropped.
+
+    :param image: Image to be rebinned
+    :param scale: integer downscaling coefficient
+    :param mode: Pixel value reduction mode, one of 'sum', 'mean', 'and' or 'or'. Default to 'sum'
+    :param header: If provided, WCS solution in the header will be adjusted, and new header will be returned
+
+    :returns: Rebinned image, and also corrected header if `header` was provided
+    """
+
+    # Crop the image if necessary
+    maxx = scale*(image.shape[1]//scale)
+    maxy = scale*(image.shape[0]//scale)
+    image = image[:maxy, :maxx]
+
+    shape = (image.shape[0]//scale, scale,
+             image.shape[1]//scale, scale)
+
+    image1 = image.reshape(shape)
+
+    if mode == 'mean':
+        image1 = image1.mean(-1).mean(1)
+    elif mode == 'and':
+        image1 = np.bitwise_and.reduce(image1, -1)
+        image1 = np.bitwise_and.reduce(image1, 1)
+    elif mode == 'or':
+        image1 = np.bitwise_or.reduce(image1, -1)
+        image1 = np.bitwise_or.reduce(image1, 1)
+    else:
+        # Fallback to mode='sum'
+        image1 = image1.sum(-1).sum(1)
+
+    if header is not None:
+        wcs = WCS(header)
+        wcs = wcs[::scale, ::scale]
+        header1 = astrometry.clear_wcs(header, copy=True)
+        header1 += wcs.to_header(relax=True)
+
+        return image1, header1
+    else:
+        return image1

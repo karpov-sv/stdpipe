@@ -23,6 +23,7 @@ from . import utils
 from . import photometry
 from . import pipeline
 from . import astrometry
+from . import cutouts
 
 # HiPS images
 
@@ -307,7 +308,29 @@ def find_ps1_skycells(ra, dec, sr, band='r', ext='image', cell_radius=0.3, fullp
         # Get just the file name
         return ['rings.v3.skycell.%04d.%03d.stk.%s.unconv%s.fits' % (_['projectionID'], _['skyCellID'], band, '.' + ext if ext != 'image' else '') for _ in __skycells[idx]]
 
-def get_ps1_skycells(ra0, dec0, sr0, band='r', ext='image', normalize=True, overwrite=False, _cachedir=None, _tmpdir=None, verbose=False):
+def fits_open_remote(url, **kwargs):
+    """
+    Simple wrapper around astropy.io.fits.open() that handles cache corrution errors
+    and downloads the image directly if necessary
+    """
+    try:
+        # First try opening using the cache
+        hdu = fits.open(url, **kwargs)
+    except OSError:
+        # If that fails, cache may be corrupted - let's skip it
+        kwargs.update({'cache':False})
+
+        try:
+            hdu = fits.open(url, **kwargs)
+        except:
+            import traceback
+            traceback.print_exc()
+
+            return None
+
+    return hdu
+
+def get_ps1_skycells(ra0, dec0, sr0, band='r', ext='image', normalize=True, overwrite=False, _cachedir=None, _cache_downscale=1, _tmpdir=None, verbose=False):
     """
     Get the list of filenames corresponding to skycells in the user-specified sky region.
     The cells are downloaded and stored to the specified cache location.
@@ -344,23 +367,46 @@ def get_ps1_skycells(ra0, dec0, sr0, band='r', ext='image', normalize=True, over
         cellname = os.path.basename(cell)
         filename = os.path.join(_cachedir, cellname)
 
+        if _cache_downscale > 1:
+            filename,fext = os.path.splitext(filename)
+            filename = filename + ('.x%d' % _cache_downscale) + fext
+
         if os.path.exists(filename) and not overwrite:
-            log('%s already downloaded' % cellname)
+            log('%s already downloaded' % os.path.split(filename)[-1])
         else:
             log('Downloading %s' % cellname)
 
             url = 'http://ps1images.stsci.edu/' + cell
 
-            if utils.download(url, filename, overwrite=overwrite, verbose=verbose):
+            hdu = fits_open_remote(url)
+            if hdu is not None:
+                image, header = hdu[1].data, hdu[1].header
+
                 if normalize:
-                    normalize_ps1_skycell(filename, verbose=verbose)
+                    image, header = normalize_ps1_skycell(image, header, verbose=False)
+
+                if _cache_downscale > 1:
+                    flxscale = header.get('FLXSCALE') # It will be removed inside downscale_image()
+                    image,header = cutouts.downscale_image(image, header=header,
+                                                           scale=_cache_downscale,
+                                                           mode='or' if ext == 'mask' else 'sum')
+                    if flxscale:
+                        header['FLXSCALE'] = flxscale
+
+                    log("Downscaling the image and storing it as", os.path.split(filename)[-1])
+
+                    print('median %.2f std %.2d' % (np.nanmedian(image), np.nanstd(image)))
+
+                fits.writeto(filename, image, header, overwrite=True)
+
+                hdu.close()
 
         if os.path.exists(filename):
             filenames.append(filename)
 
     return filenames
 
-def normalize_ps1_skycell(filename, outname=None, verbose=False):
+def normalize_ps1_skycell(image, header, verbose=False):
     """
     Normalize PanSTARRS skycell file according to its FITS header
     """
@@ -368,11 +414,11 @@ def normalize_ps1_skycell(filename, outname=None, verbose=False):
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
 
-    header = fits.getheader(filename, -1)
-
     if 'RADESYS' not in header and 'PC001001' in header:
         # Normalize WCS in the header
-        log('Normalizing WCS keywords in %s' % filename)
+        log('Normalizing WCS keywords')
+
+        header = header.copy()
 
         header['RADESYS'] = 'FK5'
         header.rename_keyword('PC001001', 'PC1_1')
@@ -380,34 +426,31 @@ def normalize_ps1_skycell(filename, outname=None, verbose=False):
         header.rename_keyword('PC002001', 'PC2_1')
         header.rename_keyword('PC002002', 'PC2_2')
 
-        data = fits.getdata(filename, -1)
-
         if 'BSOFTEN' in header and 'BOFFSET' in header:
             # Linearize ASINH scaling
-            log('Normalizing ASINH scaling in %s' % filename)
+            log('Normalizing ASINH scaling')
 
-            x = data * 0.4 * np.log(10)
-            data = header['BOFFSET'] + header['BSOFTEN'] * (np.exp(x) - np.exp(-x))
+            x = image * 0.4 * np.log(10)
+            image = header['BOFFSET'] + header['BSOFTEN'] * (np.exp(x) - np.exp(-x))
             header['FLXSCALE'] = 1/header['BSOFTEN'] # For proper co-adding in SWarp
 
             for _ in ['BSOFTEN', 'BOFFSET', 'BLANK']:
                 header.remove(_, ignore_missing=True)
 
-        if outname is None:
-            log('Writing normalized data back to %s' % filename)
-            outname = filename
-        else:
-            log('Writing normalized data to %s' % outname)
-
-        fits.writeto(outname, data, header, overwrite=True)
+    return image,header
 
 # PS1 higher level retrieval
 def get_ps1_image(band='r', ext='image', wcs=None, shape=None,
                   width=None, height=None, header=None, extra={},
-                  _cachedir=None, _tmpdir=None, _workdir=None, verbose=False, **kwargs):
+                  _cachedir=None, _cache_downscale=1, _tmpdir=None, _workdir=None,
+                  verbose=False, **kwargs):
 
     """Downloads the images of specified type (image or mask) from PanSTARRS and mosaics / re-projects
     them to requested WCS pixel grid.
+
+    The images are normalized from original ASINH scaling to common linear scale
+
+    The mask bits are documented at https://outerspace.stsci.edu/display/PANSTARRS/PS1+Pixel+flags+in+Image+Table+Data
 
     :param band: Pan-STARRS photometric band (one of `g`, `r`, `i`, `z`, or `y`)
     :param ext: Image type - either `image` or `mask`
@@ -418,6 +461,7 @@ def get_ps1_image(band='r', ext='image', wcs=None, shape=None,
     :param header: The header containing image dimensions and WCS, to be used instead of `wcs`, `width` and `height`
     :param extra: Dictionary of extra SWarp parameters to be passed to underlying call to :func:`stdpipe.templates.reproject_swarp`
     :param _cachedir: If specified, this directory will be used as a location to cache downloaded Pan-STARRS images so that they may be re-used between calls. If not specified, :file:`ps1` directory will be created for it in your system temporary directory (:file:`/tmp` on Linux)
+    :param _cache_downscale: Downscale integer factor for caching downloaded images in smaller resolution.
     :param _tmpdir: If specified, all temporary files will be created in a dedicated directory (that will be deleted after running the executable) inside this path.
     :param _workdir: If specified, all temporary files will be created in this directory, and will be kept intact after running SWarp. May be used for debugging exact inputs and outputs of the executable. Optional
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
@@ -431,7 +475,9 @@ def get_ps1_image(band='r', ext='image', wcs=None, shape=None,
 
     ra0,dec0,sr0 = astrometry.get_frame_center(header=header, wcs=wcs, shape=shape, width=width, height=height)
 
-    cellnames = get_ps1_skycells(ra0, dec0, sr0, band=band, ext=ext, _cachedir=_cachedir, _tmpdir=_tmpdir, verbose=verbose)
+    cellnames = get_ps1_skycells(ra0, dec0, sr0, band=band, ext=ext,
+                                 _cachedir=_cachedir, _cache_downscale=_cache_downscale,
+                                 _tmpdir=_tmpdir, verbose=verbose)
 
     if wcs is None:
         wcs = WCS(header)
@@ -445,6 +491,9 @@ def get_ps1_image(band='r', ext='image', wcs=None, shape=None,
     coadd = reproject_swarp(cellnames, wcs=wcs, width=width, height=height,
                             is_flags=(ext == 'mask'), extra=extra,
                             _tmpdir=_tmpdir, _workdir=_workdir, verbose=verbose, **kwargs)
+
+    if ext == 'mask':
+        coadd &= ~0x8000 # Remove undocumented 'temporary marked' mask bit that is masking seemingly good pixels
 
     return coadd
 
@@ -475,7 +524,7 @@ def reproject_swarp(input=[], wcs=None, shape=None, width=None, height=None, hea
     element is an image, and second one - either FITS header or WCS.
 
     If the input images are integer flags, set `is_flags=True` so that it will be handled
-    by passing `RESAMPLING_TYPE=FLAGS` and `COMBINE_TYPE=OR`.
+    by passing `RESAMPLING_TYPE=FLAGS` and `COMBINE_TYPE=AND`.
 
     If `use_nans=True`, the regions with zero weights will be filled with NaNs (or 0xFFFF).
 
@@ -577,7 +626,7 @@ def reproject_swarp(input=[], wcs=None, shape=None, width=None, height=None, hea
     if is_flags:
         log('The images will be handled as integer flags')
         opts['RESAMPLING_TYPE'] = 'FLAGS'
-        opts['COMBINE_TYPE'] = 'OR'
+        opts['COMBINE_TYPE'] = 'AND' # Use only common flags in overlapping masks
 
     opts.update(extra)
 
