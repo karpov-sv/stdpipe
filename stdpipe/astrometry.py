@@ -35,6 +35,9 @@ def get_frame_center(filename=None, header=None, wcs=None, width=None, height=No
         elif shape is not None:
             height,width = shape
 
+    if not wcs or not wcs.is_celestial:
+        return None, None, None
+
     ra1,dec1 = wcs.all_pix2world(0, 0, 0)
     ra0,dec0 = wcs.all_pix2world(width/2, height/2, 0)
 

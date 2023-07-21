@@ -287,26 +287,78 @@ def mask_template(tmpl, cat=None, cat_saturation_mag=None,
 
     return tmask
 
-# PanSTARRS images
+# Pan-STARRS images
+__ps1_skycells = None
 
-__skycells = None
+def point_in_ps1(ra, dec):
+    """
+    Whether the sky point is covered by Pan-STARRS, rough estimation
+    """
+    return dec > -30
 
-def find_ps1_skycells(ra, dec, sr, band='r', ext='image', cell_radius=0.3, fullpath=True):
-    global __skycells
+# Legacy Survey images
+__ls_skycells = None
 
-    if __skycells is None:
-        # Load skycells information and store to global variable
-        __skycells = Table.read(utils.get_data_path('ps1skycells.txt'), format='ascii')
+def point_in_ls(ra, dec):
+    """
+    Whether the sky point is covered by Legacy Survey, rough estimation
+    """
+    sc = SkyCoord(ra, dec, unit='deg')
+    res = np.abs(sc.galactic.b.deg) > 20
 
-    # FIXME: here we may select the cells that are too far from actual footprint
-    _,idx,_ = astrometry.spherical_match(ra, dec, __skycells['ra0'], __skycells['dec0'], sr + cell_radius)
+    return res
 
-    if fullpath:
-        # Get full path on the server
-        return ['rings.v3.skycell/%04d/%03d/rings.v3.skycell.%04d.%03d.stk.%s.unconv%s.fits' % (_['projectionID'], _['skyCellID'], _['projectionID'], _['skyCellID'], band, '.' + ext if ext != 'image' else '') for _ in __skycells[idx]]
+def find_skycells(ra, dec, sr, band='r', ext='image', survey='ps1'):
+    results = []
+
+    if survey == 'ps1':
+        global __ps1_skycells
+
+        if __ps1_skycells is None:
+            # Load skycells information and store to global variable
+            __ps1_skycells = Table.read(utils.get_data_path('ps1skycells.txt'), format='ascii')
+
+        cell_radius = 0.3
+
+        # FIXME: here we may select the cells that are too far from actual footprint
+        _,idx,_ = astrometry.spherical_match(ra, dec, __ps1_skycells['ra0'], __ps1_skycells['dec0'], sr + cell_radius)
+
+        for cell in __ps1_skycells[idx]:
+            url = 'http://ps1images.stsci.edu/'
+            url += 'rings.v3.skycell/%04d/%03d/' % (cell['projectionID'], cell['skyCellID'])
+            url += 'rings.v3.skycell.%04d.%03d' % (cell['projectionID'], cell['skyCellID'])
+            url += '.stk.%s.unconv%s.fits' % (band, '.' + ext if ext != 'image' else '')
+
+            results.append(url)
+
+    elif survey == 'ls':
+        global __ls_skycells
+
+        if __ls_skycells is None:
+            # Load skycells information and store to global variable
+            __ls_skycells = Table.read(utils.get_data_path('legacysurvey_bricks.fits.gz'), format='fits')
+
+        cell_radius = 0.186
+
+        # FIXME: here we may select the cells that are too far from actual footprint
+        _,idx,_ = astrometry.spherical_match(ra, dec, __ls_skycells['ra'], __ls_skycells['dec'], sr + cell_radius)
+
+        for cell in __ls_skycells[idx]:
+            url = 'https://portal.nersc.gov/cfs/cosmo/data/legacysurvey/'
+            url += 'dr10/south/' if (cell['survey'] == 'S') else 'dr9/north/'
+            url += 'coadd/%s/%s/' % (cell['brickname'][:3], cell['brickname'])
+            if ext == 'mask':
+                url += 'legacysurvey-%s-maskbits' % (cell['brickname']) # Legacy Survey uses single mask for all bands
+            else:
+                url += 'legacysurvey-%s-image-%s' % (cell['brickname'], band)
+            url += '.fits.fz'
+
+            results.append(url)
+
     else:
-        # Get just the file name
-        return ['rings.v3.skycell.%04d.%03d.stk.%s.unconv%s.fits' % (_['projectionID'], _['skyCellID'], band, '.' + ext if ext != 'image' else '') for _ in __skycells[idx]]
+        raise RuntimeError('Unsupported survey %s' % survey)
+
+    return results
 
 def fits_open_remote(url, **kwargs):
     """
@@ -330,7 +382,8 @@ def fits_open_remote(url, **kwargs):
 
     return hdu
 
-def get_ps1_skycells(ra0, dec0, sr0, band='r', ext='image', normalize=True, overwrite=False, _cachedir=None, _cache_downscale=1, _tmpdir=None, verbose=False):
+def get_skycells(ra0, dec0, sr0, band='r', ext='image', survey='ps1', normalize=True, overwrite=False,
+                 _cachedir=None, _cache_downscale=1, _tmpdir=None, verbose=False):
     """
     Get the list of filenames corresponding to skycells in the user-specified sky region.
     The cells are downloaded and stored to the specified cache location.
@@ -350,7 +403,7 @@ def get_ps1_skycells(ra0, dec0, sr0, band='r', ext='image', normalize=True, over
     else:
         if _tmpdir is None:
             _tmpdir = tempfile.gettempdir()
-        _cachedir = os.path.join(_tmpdir, 'ps1')
+        _cachedir = os.path.join(_tmpdir, survey)
         log('Cache location not specified, falling back to %s' % _cachedir)
 
     # Ensure the cache dir exists
@@ -361,11 +414,14 @@ def get_ps1_skycells(ra0, dec0, sr0, band='r', ext='image', normalize=True, over
 
     filenames = []
 
-    cells = find_ps1_skycells(ra0, dec0, sr0, band=band, ext=ext, fullpath=True)
+    cells = find_skycells(ra0, dec0, sr0, band=band, ext=ext, survey=survey)
 
     for cell in cells:
         cellname = os.path.basename(cell)
         filename = os.path.join(_cachedir, cellname)
+
+        if survey == 'ls' and filename.endswith('.fz'):
+            filename = os.path.splitext(filename)[0]
 
         if _cache_downscale > 1:
             filename,fext = os.path.splitext(filename)
@@ -376,14 +432,13 @@ def get_ps1_skycells(ra0, dec0, sr0, band='r', ext='image', normalize=True, over
         else:
             log('Downloading %s' % cellname)
 
-            url = 'http://ps1images.stsci.edu/' + cell
-
-            hdu = fits_open_remote(url)
+            hdu = fits_open_remote(cell)
             if hdu is not None:
                 image, header = hdu[1].data, hdu[1].header
 
                 if normalize:
-                    image, header = normalize_ps1_skycell(image, header, verbose=False)
+                    if survey == 'ps1':
+                        image, header = normalize_ps1_skycell(image, header)
 
                 if _cache_downscale > 1:
                     flxscale = header.get('FLXSCALE') # It will be removed inside downscale_image()
@@ -394,8 +449,6 @@ def get_ps1_skycells(ra0, dec0, sr0, band='r', ext='image', normalize=True, over
                         header['FLXSCALE'] = flxscale
 
                     log("Downscaling the image and storing it as", os.path.split(filename)[-1])
-
-                    print('median %.2f std %.2d' % (np.nanmedian(image), np.nanstd(image)))
 
                 fits.writeto(filename, image, header, overwrite=True)
 
@@ -439,28 +492,28 @@ def normalize_ps1_skycell(image, header, verbose=False):
 
     return image,header
 
-# PS1 higher level retrieval
-def get_ps1_image(band='r', ext='image', wcs=None, shape=None,
-                  width=None, height=None, header=None, extra={},
-                  _cachedir=None, _cache_downscale=1, _tmpdir=None, _workdir=None,
-                  verbose=False, **kwargs):
+# Higher level retrieval function
+def get_survey_image(band='r', ext='image', survey='ps1', wcs=None, shape=None,
+                     width=None, height=None, header=None, extra={},
+                     _cachedir=None, _cache_downscale=1, _tmpdir=None, _workdir=None,
+                     verbose=False, **kwargs):
 
-    """Downloads the images of specified type (image or mask) from PanSTARRS and mosaics / re-projects
-    them to requested WCS pixel grid.
+    """Downloads the images of specified type (image or mask) from PanSTARRS or Legacy Survey
+    and mosaics / re-projects them to requested WCS pixel grid.
 
-    The images are normalized from original ASINH scaling to common linear scale
+    Pan-STARRS images are normalized from original ASINH scaling to common linear scale
+    Pan-STARRS mask bits are documented at https://outerspace.stsci.edu/display/PANSTARRS/PS1+Pixel+flags+in+Image+Table+Data
 
-    The mask bits are documented at https://outerspace.stsci.edu/display/PANSTARRS/PS1+Pixel+flags+in+Image+Table+Data
-
-    :param band: Pan-STARRS photometric band (one of `g`, `r`, `i`, `z`, or `y`)
+    :param band: Photometric band (one of `g`, `r`, `i`, `z`, or `y`)
     :param ext: Image type - either `image` or `mask`
+    :param survey: Survey name, `ps1` for Pan-STARRS or `ls` for Legacy Survey
     :param wcs: Output WCS projection as :class:`astropy.wcs.WCS` object
     :param shape: Output image shape as (height, width) tuple, may be specified instead of `width` and `height`
     :param width: Output image width in pixels, optional
     :param height: Output image height in pixels, optional
     :param header: The header containing image dimensions and WCS, to be used instead of `wcs`, `width` and `height`
     :param extra: Dictionary of extra SWarp parameters to be passed to underlying call to :func:`stdpipe.templates.reproject_swarp`
-    :param _cachedir: If specified, this directory will be used as a location to cache downloaded Pan-STARRS images so that they may be re-used between calls. If not specified, :file:`ps1` directory will be created for it in your system temporary directory (:file:`/tmp` on Linux)
+    :param _cachedir: If specified, this directory will be used as a location to cache downloaded images so that they may be re-used between calls. If not specified, directory with survey name will be created for it in your system temporary directory (:file:`/tmp` on Linux)
     :param _cache_downscale: Downscale integer factor for caching downloaded images in smaller resolution.
     :param _tmpdir: If specified, all temporary files will be created in a dedicated directory (that will be deleted after running the executable) inside this path.
     :param _workdir: If specified, all temporary files will be created in this directory, and will be kept intact after running SWarp. May be used for debugging exact inputs and outputs of the executable. Optional
@@ -475,9 +528,9 @@ def get_ps1_image(band='r', ext='image', wcs=None, shape=None,
 
     ra0,dec0,sr0 = astrometry.get_frame_center(header=header, wcs=wcs, shape=shape, width=width, height=height)
 
-    cellnames = get_ps1_skycells(ra0, dec0, sr0, band=band, ext=ext,
-                                 _cachedir=_cachedir, _cache_downscale=_cache_downscale,
-                                 _tmpdir=_tmpdir, verbose=verbose)
+    cellnames = get_skycells(ra0, dec0, sr0, band=band, ext=ext, survey=survey,
+                             _cachedir=_cachedir, _cache_downscale=_cache_downscale,
+                             _tmpdir=_tmpdir, verbose=verbose)
 
     if wcs is None:
         wcs = WCS(header)
@@ -492,26 +545,38 @@ def get_ps1_image(band='r', ext='image', wcs=None, shape=None,
                             is_flags=(ext == 'mask'), extra=extra,
                             _tmpdir=_tmpdir, _workdir=_workdir, verbose=verbose, **kwargs)
 
-    if ext == 'mask':
-        coadd &= ~0x8000 # Remove undocumented 'temporary marked' mask bit that is masking seemingly good pixels
+    if ext == 'mask' and survey == 'ps1':
+        coadd &= ~0x8000 # Remove undocumented PS1 'temporary marked' mask bit that is masking seemingly good pixels
 
     return coadd
 
-def get_ps1_image_and_mask(band='r', **kwargs):
-    """Convenience wrapper for simultaneously requesting the image and corresponding mask from Pan-STARRS image archive.
+def get_survey_image_and_mask(band='r', **kwargs):
+    """Convenience wrapper for simultaneously requesting the image and corresponding mask from Pan-STARRS or Legacy Survey image archive.
 
     Uses :func:`stdpipe.templates.get_ps1_image` to do the job
 
-    :param band: Pan-STARRS photometric band (one of `g`, `r`, `i`, `z`, or `y`)
-    :param \**kwargs: The rest of parameters will be directly passed to :func:`stdpipe.templates.get_ps1_image`
+    :param band: Photometric band (one of `g`, `r`, `i`, `z`, or `y`)
+    :param \**kwargs: The rest of parameters will be directly passed to :func:`stdpipe.templates.get_survey_image`
     :returns: Image and mask
 
     """
 
-    image = get_ps1_image(band=band, ext='image', **kwargs)
-    mask = get_ps1_image(band=band, ext='mask', **kwargs)
+    image = get_survey_image(band=band, ext='image', **kwargs)
+    mask = get_survey_image(band=band, ext='mask', **kwargs)
 
     return image,mask
+
+def get_ps1_image(band='r', **kwargs):
+    return get_survey_image(band=band, survey='ps1', **kwargs)
+
+def get_ps1_image_and_mask(band='r', **kwargs):
+    return get_survey_image_and_mask(band=band, survey='ps1', **kwargs)
+
+def get_ls_image(band='r', **kwargs):
+    return get_survey_image(band=band, survey='ls', **kwargs)
+
+def get_ls_image_and_mask(band='r', **kwargs):
+    return get_survey_image_and_mask(band=band, survey='ls', **kwargs)
 
 # Image re-projection and mosaicking code
 def reproject_swarp(input=[], wcs=None, shape=None, width=None, height=None, header=None, extra={},

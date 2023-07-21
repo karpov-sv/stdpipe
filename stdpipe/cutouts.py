@@ -394,7 +394,7 @@ def downscale_image(image, scale=1, mode='sum', header=None):
 
     :param image: Image to be rebinned
     :param scale: integer downscaling coefficient
-    :param mode: Pixel value reduction mode, one of 'sum', 'mean', 'and' or 'or'. Default to 'sum'
+    :param mode: Pixel value reduction mode, one of `sum`, `mean`, `and` or `or`. Default to `sum`
     :param header: If provided, WCS solution in the header will be adjusted, and new header will be returned
 
     :returns: Rebinned image, and also corrected header if `header` was provided

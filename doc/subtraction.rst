@@ -43,10 +43,17 @@ We have a convenience function that may help masking the pixels that are most pr
    :noindex:
 
 
-Using original Pan-STARRS images
-^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+Using original Pan-STARRS or Legacy Survey images
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-*STDPipe* is also able to directly download the images from `Pan-STARRS image archive <https://outerspace.stsci.edu/display/PANSTARRS/Pan-STARRS1+data+archive+home+page>`_, mosaic them and project onto requested pixel grid in order to produce the template. It is also able to simultaneously acquite the `mask` image so that you may properly exclude unreliable template pixels from the analysis.
+*STDPipe* is also able to directly download the images from `Pan-STARRS <https://outerspace.stsci.edu/display/PANSTARRS/Pan-STARRS1+data+archive+home+page>`_
+or `Legacy Survey <https://www.legacysurvey.org>`_ image archives, mosaic them and project onto requested pixel grid in order to produce the template. It is also able to simultaneously acquite the `mask` image so that you may properly exclude unreliable template pixels from the analysis.
+
+.. autofunction:: stdpipe.templates.get_survey_image
+   :noindex:
+
+.. autofunction:: stdpipe.templates.get_survey_image_and_mask
+   :noindex:
 
 .. autofunction:: stdpipe.templates.get_ps1_image
    :noindex:
