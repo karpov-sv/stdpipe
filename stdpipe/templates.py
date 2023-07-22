@@ -15,6 +15,7 @@ from astropy.wcs import WCS
 from astropy.io import fits
 from astropy.stats import mad_std
 from astropy.table import Table
+from astropy.coordinates import SkyCoord
 
 # from scipy.ndimage import binary_dilation
 from astropy.convolution import Tophat2DKernel, convolve, convolve_fft
@@ -440,6 +441,17 @@ def get_skycells(ra0, dec0, sr0, band='r', ext='image', survey='ps1', normalize=
                     if survey == 'ps1':
                         image, header = normalize_ps1_skycell(image, header)
 
+                    if survey == 'ls' and ext == 'image':
+                        try:
+                            # Get invvar file to mask not covered regions
+                            ihdu = fits_open_remote(cell.replace('-image-', '-invvar-'))
+                            if ihdu is not None:
+                                invvar = ihdu[1].data
+                                image[invvar == 0] = np.nan
+                                ihdu.close()
+                        except:
+                            pass
+
                 if _cache_downscale > 1:
                     flxscale = header.get('FLXSCALE') # It will be removed inside downscale_image()
                     image,header = cutouts.downscale_image(image, header=header,
@@ -503,6 +515,8 @@ def get_survey_image(band='r', ext='image', survey='ps1', wcs=None, shape=None,
 
     Pan-STARRS images are normalized from original ASINH scaling to common linear scale
     Pan-STARRS mask bits are documented at https://outerspace.stsci.edu/display/PANSTARRS/PS1+Pixel+flags+in+Image+Table+Data
+
+    Legacy Survey mask bits are documented at https://www.legacysurvey.org/dr10/bitmasks
 
     :param band: Photometric band (one of `g`, `r`, `i`, `z`, or `y`)
     :param ext: Image type - either `image` or `mask`
