@@ -14,18 +14,25 @@ from astropy.coordinates import SkyCoord
 from astropy import units as u
 from astropy.time import Time
 
+
 def breakpoint():
     try:
         from IPython.core.debugger import Tracer
+
         Tracer()()
     except:
         import pdb
+
         pdb.set_trace()
+
 
 def make_jname(ra, dec):
     radec = SkyCoord(ra, dec, unit='deg')
-    return "J%s%s" % (radec.ra.to_string(unit=u.hourangle, sep='', precision=2, pad=True),
-                      radec.dec.to_string(sep='', precision=1, alwayssign=True, pad=True))
+    return "J%s%s" % (
+        radec.ra.to_string(unit=u.hourangle, sep='', precision=2, pad=True),
+        radec.dec.to_string(sep='', precision=1, alwayssign=True, pad=True),
+    )
+
 
 def get_data_path(dataname):
     """
@@ -33,9 +40,14 @@ def get_data_path(dataname):
     """
     return os.path.join(os.path.dirname(__file__), 'data', dataname)
 
+
 def download(url, filename=None, overwrite=False, verbose=False):
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
     if not overwrite and filename is not None and os.path.exists(filename):
         log(filename, 'already downloaded')
@@ -51,7 +63,9 @@ def download(url, filename=None, overwrite=False, verbose=False):
 
     if filename is None:
         # Some logic to guess filename from headers
-        tmp = re.findall("filename=(.+)", response.headers.get('Content-Disposition', ''))
+        tmp = re.findall(
+            "filename=(.+)", response.headers.get('Content-Disposition', '')
+        )
         if len(tmp):
             filename = tmp[1]
         else:
@@ -66,7 +80,9 @@ def download(url, filename=None, overwrite=False, verbose=False):
     length = 0
 
     if verbose:
-        progress = tqdm(desc=desc, total=size, unit='iB', unit_scale=True, unit_divisor=1024)
+        progress = tqdm(
+            desc=desc, total=size, unit='iB', unit_scale=True, unit_divisor=1024
+        )
     else:
         progress = None
 
@@ -75,7 +91,7 @@ def download(url, filename=None, overwrite=False, verbose=False):
             chunksize = file.write(chunk)
             if progress is not None:
                 progress.update(chunksize)
-            length += chunksize # len(chunk)
+            length += chunksize  # len(chunk)
 
     if progress is not None:
         progress.close()
@@ -87,7 +103,10 @@ def download(url, filename=None, overwrite=False, verbose=False):
         log('Successfully downloaded %d bytes' % length)
         return True
 
-def get_obs_time(header=None, filename=None, string=None, get_datetime=False, verbose=False):
+
+def get_obs_time(
+    header=None, filename=None, string=None, get_datetime=False, verbose=False
+):
     """
     Extract date and time of observations from FITS headers of common formats, or from a string.
 
@@ -103,7 +122,11 @@ def get_obs_time(header=None, filename=None, string=None, get_datetime=False, ve
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
     # Simple wrapper to display parsed value and convert it as necessary
     def convert_time(time):
@@ -154,13 +177,16 @@ def get_obs_time(header=None, filename=None, string=None, get_datetime=False, ve
                 if tkey in header:
                     log('Found ' + tkey + ':', header[tkey])
                     try:
-                        return convert_time(dateutil.parser.parse(header[dkey] + ' ' + header[tkey]))
+                        return convert_time(
+                            dateutil.parser.parse(header[dkey] + ' ' + header[tkey])
+                        )
                     except dateutil.parser.ParserError as err:
                         log('Could not parse ' + dkey + ' + ' + tkey + ':', err)
 
     log('Unsupported FITS header time format')
 
     return None
+
 
 def table_get(table, colname, default=0):
     """
@@ -176,7 +202,8 @@ def table_get(table, colname, default=0):
         return default
     else:
         # Broadcast scalar to proper length
-        return default*np.ones(len(table), dtype=int)
+        return default * np.ones(len(table), dtype=int)
+
 
 def format_astromatic_opts(opts):
     """
@@ -204,6 +231,7 @@ def format_astromatic_opts(opts):
 
     return result
 
+
 def format_long_opts(opts):
     """
     Auxiliary function to format dictionary of options into a command-line string.
@@ -229,15 +257,19 @@ def format_long_opts(opts):
 
     return result
 
+
 # Parsing of DATASEC-like keywords
 def parse_det(string):
     """
     Parse DATASEC-like keyword
     """
 
-    x0,x1,y0,y1 = [int(_)-1 for _ in sum([_.split(':') for _ in string[1:-1].split(',')], [])]
+    x0, x1, y0, y1 = [
+        int(_) - 1 for _ in sum([_.split(':') for _ in string[1:-1].split(',')], [])
+    ]
 
-    return x0,x1,y0,y1
+    return x0, x1, y0, y1
+
 
 # Cropping of overscans if any
 def crop_overscans(image, header, subtract_bias=True, verbose=False):
@@ -247,7 +279,11 @@ def crop_overscans(image, header, subtract_bias=True, verbose=False):
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
     if header is not None:
         header = header.copy()
@@ -256,21 +292,21 @@ def crop_overscans(image, header, subtract_bias=True, verbose=False):
 
     for kw in ['BIASSEC']:
         if kw in header:
-            x1,x2,y1,y2 = parse_det(header.get(kw))
-            biasimg = image[y1:y2+1, x1:x2+1]
+            x1, x2, y1, y2 = parse_det(header.get(kw))
+            biasimg = image[y1 : y2 + 1, x1 : x2 + 1]
 
             bias = np.mean(biasimg)
             log('Estimated bias level using %s: %s = %.2f' % (kw, header.get(kw), bias))
 
     for kw in ['TRIMSEC', 'DATASEC']:
         if kw in header:
-            x1,x2,y1,y2 = parse_det(header.get(kw))
+            x1, x2, y1, y2 = parse_det(header.get(kw))
 
             if header is not None and header.get('CRPIX1') is not None:
                 header['CRPIX1'] -= x1
                 header['CRPIX2'] -= y1
 
-            image = image[y1:y2+1, x1:x2+1]
+            image = image[y1 : y2 + 1, x1 : x2 + 1]
             log('Cropped image using %s: %s' % (kw, header.get(kw)))
 
             break
@@ -283,6 +319,7 @@ def crop_overscans(image, header, subtract_bias=True, verbose=False):
 
     return image, header
 
+
 # Simple 2D rebinning
 def rebin_image(image, nx=1, ny=None):
     """
@@ -291,9 +328,9 @@ def rebin_image(image, nx=1, ny=None):
     """
     if ny is None:
         ny = nx
-    shape = (image.shape[0]//ny, ny,
-             image.shape[1]//nx, nx)
+    shape = (image.shape[0] // ny, ny, image.shape[1] // nx, nx)
     return image.reshape(shape).mean(-1).mean(1)
+
 
 # Simple writing of some data to file
 def file_write(filename, contents=None, append=False):

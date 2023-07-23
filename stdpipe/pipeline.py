@@ -22,12 +22,27 @@ from . import psf
 from . import utils
 from . import cutouts
 
-def refine_astrometry(obj, cat, sr=10/3600, wcs=None, order=0,
-                      cat_col_mag='V', cat_col_mag_err=None,
-                      cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
-                      cat_col_ra_err='e_RAJ2000', cat_col_dec_err='e_DEJ2000',
-                      n_iter=3, use_photometry=True, min_matches=5, method='astropy',
-                      update=True, verbose=False, **kwargs):
+
+def refine_astrometry(
+    obj,
+    cat,
+    sr=10 / 3600,
+    wcs=None,
+    order=0,
+    cat_col_mag='V',
+    cat_col_mag_err=None,
+    cat_col_ra='RAJ2000',
+    cat_col_dec='DEJ2000',
+    cat_col_ra_err='e_RAJ2000',
+    cat_col_dec_err='e_DEJ2000',
+    n_iter=3,
+    use_photometry=True,
+    min_matches=5,
+    method='astropy',
+    update=True,
+    verbose=False,
+    **kwargs
+):
 
     """Higher-level astrometric refinement routine that may use either SCAMP or pure Python based methods.
 
@@ -53,58 +68,122 @@ def refine_astrometry(obj, cat, sr=10/3600, wcs=None, order=0,
 
     """
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
-    log('Astrometric refinement using %.1f arcsec radius, %s matching and %s WCS fitting' %
-        (sr*3600, 'photometric' if use_photometry else 'simple positional', method))
+    log(
+        'Astrometric refinement using %.1f arcsec radius, %s matching and %s WCS fitting'
+        % (sr * 3600, 'photometric' if use_photometry else 'simple positional', method)
+    )
     if type(cat) == str:
         log('Using %d objects and catalogue %s' % (len(obj), cat))
     else:
         log('Using %d objects and %d catalogue stars' % (len(obj), len(cat)))
 
     if wcs is not None:
-        obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
+        obj['ra'], obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
 
     if method == 'scamp':
         # Fall-through to SCAMP-specific variant
-        return astrometry.refine_wcs_scamp(obj, cat, sr=sr, wcs=wcs, order=order,
-                                           cat_col_mag=cat_col_mag, cat_col_mag_err=cat_col_mag_err,
-                                           cat_col_ra=cat_col_ra, cat_col_dec=cat_col_dec,
-                                           cat_col_ra_err=cat_col_ra_err, cat_col_dec_err=cat_col_dec_err,
-                                           update=update, verbose=verbose, **kwargs)
+        return astrometry.refine_wcs_scamp(
+            obj,
+            cat,
+            sr=sr,
+            wcs=wcs,
+            order=order,
+            cat_col_mag=cat_col_mag,
+            cat_col_mag_err=cat_col_mag_err,
+            cat_col_ra=cat_col_ra,
+            cat_col_dec=cat_col_dec,
+            cat_col_ra_err=cat_col_ra_err,
+            cat_col_dec_err=cat_col_dec_err,
+            update=update,
+            verbose=verbose,
+            **kwargs
+        )
 
     for iter in range(n_iter):
         if use_photometry:
             # Matching involving photometric information
             cat_magerr = cat[cat_col_mag_err] if cat_col_mag_err is not None else None
-            m = photometry.match(obj['ra'], obj['dec'], obj['mag'], obj['magerr'], obj['flags'], cat[cat_col_ra], cat[cat_col_dec], cat[cat_col_mag], cat_magerr=cat_magerr, sr=sr, verbose=verbose)
+            m = photometry.match(
+                obj['ra'],
+                obj['dec'],
+                obj['mag'],
+                obj['magerr'],
+                obj['flags'],
+                cat[cat_col_ra],
+                cat[cat_col_dec],
+                cat[cat_col_mag],
+                cat_magerr=cat_magerr,
+                sr=sr,
+                verbose=verbose,
+            )
             if m is None or not m:
                 log('Photometric match failed, cannot refine WCS')
                 return None
             elif np.sum(m['idx']) < min_matches:
-                log('Too few (%d) good photometric matches, cannot refine WCS' % np.sum(m['idx']))
+                log(
+                    'Too few (%d) good photometric matches, cannot refine WCS'
+                    % np.sum(m['idx'])
+                )
                 return None
             else:
-                log('Iteration %d: %d matches, %.1f arcsec rms' %
-                    (iter, np.sum(m['idx']), np.std(3600*m['dist'][m['idx']])))
+                log(
+                    'Iteration %d: %d matches, %.1f arcsec rms'
+                    % (iter, np.sum(m['idx']), np.std(3600 * m['dist'][m['idx']]))
+                )
 
-            wcs = astrometry.refine_wcs(obj[m['oidx']][m['idx']], cat[m['cidx']][m['idx']], order=order, match=False, method=method, verbose=verbose)
+            wcs = astrometry.refine_wcs(
+                obj[m['oidx']][m['idx']],
+                cat[m['cidx']][m['idx']],
+                order=order,
+                match=False,
+                method=method,
+                verbose=verbose,
+            )
         else:
             # Simple positional matching
-            wcs = astrometry.refine_wcs(obj, cat, order=order, sr=sr, match=True, method=method, verbose=verbose, **kwargs)
+            wcs = astrometry.refine_wcs(
+                obj,
+                cat,
+                order=order,
+                sr=sr,
+                match=True,
+                method=method,
+                verbose=verbose,
+                **kwargs
+            )
 
         if update:
-            obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
-
+            obj['ra'], obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
 
     return wcs
 
-def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
-                                obj_col_ra = 'ra', obj_col_dec = 'dec',
-                                cat=None, cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
-                                vizier=['ps1', 'usnob1', 'gsc'], skybot=True, ned=False,
-                                flagged=True, flagmask=0xff00,
-                                col_id=None, get_candidates=True, remove=True, verbose=False):
+
+def filter_transient_candidates(
+    obj,
+    sr=None,
+    pixscale=None,
+    time=None,
+    obj_col_ra='ra',
+    obj_col_dec='dec',
+    cat=None,
+    cat_col_ra='RAJ2000',
+    cat_col_dec='DEJ2000',
+    vizier=['ps1', 'usnob1', 'gsc'],
+    skybot=True,
+    ned=False,
+    flagged=True,
+    flagmask=0xFF00,
+    col_id=None,
+    get_candidates=True,
+    remove=True,
+    verbose=False,
+):
     """Higher-level transient candidate filtering routine.
 
     It optionally filters out the following classes of objects:
@@ -142,15 +221,19 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
     if sr is None:
         if pixscale is not None:
             # Matching radius of half FWHM
-            sr = np.median(obj['fwhm']*pixscale)/2
+            sr = np.median(obj['fwhm'] * pixscale) / 2
         else:
             # Fallback value of 1 arcsec, should be sensible for most catalogues
-            sr = 1/3600
+            sr = 1 / 3600
 
     if col_id is None:
         col_id = 'stdpipe_id'
@@ -167,7 +250,10 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
         # So let's create a copy of objects list where we may freely add extra columns without touching the original
         obj_in = obj_in.copy()
 
-    log('Candidate filtering routine started with %d initial candidates and %.1f arcsec matching radius' % (len(obj), sr*3600))
+    log(
+        'Candidate filtering routine started with %d initial candidates and %.1f arcsec matching radius'
+        % (len(obj), sr * 3600)
+    )
     cand_idx = np.ones(len(obj), dtype=bool)
 
     # Object flags
@@ -184,7 +270,9 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
     if cat is not None and remove == False:
         obj_in['candidate_refcat'] = False
     if cat is not None and np.any(cand_idx):
-        m = astrometry.spherical_match(obj['ra'], obj['dec'], cat[cat_col_ra], cat[cat_col_dec], sr)
+        m = astrometry.spherical_match(
+            obj['ra'], obj['dec'], cat[cat_col_ra], cat[cat_col_dec], sr
+        )
         cand_idx[m[0]] = False
 
         if remove == False:
@@ -194,10 +282,10 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
         log(np.sum(cand_idx), 'of them are not matched with reference catalogue')
 
     # Vizier catalogues
-    for catname in (vizier or []):
+    for catname in vizier or []:
         if remove == False:
-            if 'candidate_vizier_'+catname not in obj_in.keys():
-                obj_in['candidate_vizier_'+catname] = False
+            if 'candidate_vizier_' + catname not in obj_in.keys():
+                obj_in['candidate_vizier_' + catname] = False
 
         if not np.any(cand_idx):
             break
@@ -207,9 +295,15 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
             cand_idx &= ~np.in1d(obj[col_id], xcat[col_id])
 
             if remove == False:
-                obj_in['candidate_vizier_'+catname][np.in1d(obj[col_id], xcat[col_id])] = True
+                obj_in['candidate_vizier_' + catname][
+                    np.in1d(obj[col_id], xcat[col_id])
+                ] = True
 
-        log(np.sum(cand_idx), 'remains after matching with', catalogs.catalogs.get(catname, {'name':catname})['name'])
+        log(
+            np.sum(cand_idx),
+            'remains after matching with',
+            catalogs.catalogs.get(catname, {'name': catname})['name'],
+        )
 
     # SkyBoT
     if skybot and np.any(cand_idx):
@@ -226,7 +320,9 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
                 cand_idx &= ~np.in1d(obj[col_id], xcat[col_id])
 
                 if remove == False:
-                    obj_in['candidate_skybot'][np.in1d(obj[col_id], xcat[col_id])] = True
+                    obj_in['candidate_skybot'][
+                        np.in1d(obj[col_id], xcat[col_id])
+                    ] = True
 
             log(np.sum(cand_idx), 'remains after matching with SkyBot')
 
@@ -262,14 +358,30 @@ def filter_transient_candidates(obj, sr=None, pixscale=None, time=None,
         # Return just indices
         return cand_idx
 
-def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, bg_order=None,
-                         obj_col_mag='mag', obj_col_mag_err='magerr',
-                         obj_col_ra='ra', obj_col_dec='dec',
-                         obj_col_x='x', obj_col_y='y',
-                         cat_col_mag='R', cat_col_mag_err=None,
-                         cat_col_mag1=None, cat_col_mag2=None,
-                         cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
-                         update=True, verbose=False, **kwargs):
+
+def calibrate_photometry(
+    obj,
+    cat,
+    sr=None,
+    pixscale=None,
+    order=0,
+    bg_order=None,
+    obj_col_mag='mag',
+    obj_col_mag_err='magerr',
+    obj_col_ra='ra',
+    obj_col_dec='dec',
+    obj_col_x='x',
+    obj_col_y='y',
+    cat_col_mag='R',
+    cat_col_mag_err=None,
+    cat_col_mag1=None,
+    cat_col_mag2=None,
+    cat_col_ra='RAJ2000',
+    cat_col_dec='DEJ2000',
+    update=True,
+    verbose=False,
+    **kwargs
+):
 
     """Higher-level photometric calibration routine.
 
@@ -300,23 +412,33 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, bg_order=Non
 
     """
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
     if sr is None:
         if pixscale is not None:
             # Matching radius of half FWHM
-            sr = np.median(obj['fwhm']*pixscale)/2
+            sr = np.median(obj['fwhm'] * pixscale) / 2
         else:
             # Fallback value of 1 arcsec, should be sensible for most catalogues
-            sr = 1/3600
+            sr = 1 / 3600
 
-    log('Performing photometric calibration of %d objects vs %d catalogue stars' % (len(obj), len(cat)))
-    log('Using %.1f arcsec matching radius, %s magnitude and spatial order %d' % (sr*3600, cat_col_mag, order))
+    log(
+        'Performing photometric calibration of %d objects vs %d catalogue stars'
+        % (len(obj), len(cat))
+    )
+    log(
+        'Using %.1f arcsec matching radius, %s magnitude and spatial order %d'
+        % (sr * 3600, cat_col_mag, order)
+    )
     if cat_col_mag1 and cat_col_mag2:
         log('Using (%s - %s) color for color term' % (cat_col_mag1, cat_col_mag2))
 
     if cat_col_mag1 and cat_col_mag2:
-        color = cat[cat_col_mag1]-cat[cat_col_mag2]
+        color = cat[cat_col_mag1] - cat[cat_col_mag2]
     else:
         color = None
 
@@ -325,13 +447,25 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, bg_order=Non
     else:
         cat_magerr = None
 
-    m = photometry.match(obj['ra'], obj['dec'], obj[obj_col_mag],
-                         obj[obj_col_mag_err], obj['flags'],
-                         cat[cat_col_ra], cat[cat_col_dec], cat[cat_col_mag],
-                         cat_magerr=cat_magerr,
-                         sr=sr, cat_color=color,
-                         obj_x=obj['x'], obj_y=obj['y'], spatial_order=order, bg_order=bg_order,
-                         verbose=verbose, **kwargs)
+    m = photometry.match(
+        obj['ra'],
+        obj['dec'],
+        obj[obj_col_mag],
+        obj[obj_col_mag_err],
+        obj['flags'],
+        cat[cat_col_ra],
+        cat[cat_col_dec],
+        cat[cat_col_mag],
+        cat_magerr=cat_magerr,
+        sr=sr,
+        cat_color=color,
+        obj_x=obj['x'],
+        obj_y=obj['y'],
+        spatial_order=order,
+        bg_order=bg_order,
+        verbose=verbose,
+        **kwargs
+    )
 
     if m:
         log('Photometric calibration finished successfully.')
@@ -344,14 +478,30 @@ def calibrate_photometry(obj, cat, sr=None, pixscale=None, order=0, bg_order=Non
             m['cat_col_mag2'] = cat_col_mag2
 
         if update:
-            obj['mag_calib'] = obj[obj_col_mag] + m['zero_fn'](obj['x'], obj['y'], obj['mag'])
-            obj['mag_calib_err'] = np.hypot(obj[obj_col_mag_err], m['zero_fn'](obj['x'], obj['y'], obj['mag'], get_err=True))
+            obj['mag_calib'] = obj[obj_col_mag] + m['zero_fn'](
+                obj['x'], obj['y'], obj['mag']
+            )
+            obj['mag_calib_err'] = np.hypot(
+                obj[obj_col_mag_err],
+                m['zero_fn'](obj['x'], obj['y'], obj['mag'], get_err=True),
+            )
     else:
         log('Photometric calibration failed')
 
     return m
 
-def make_random_stars(width=None, height=None, shape=None, nstars=100, minflux=1, maxflux=100000, edge=0, wcs=None, verbose=False):
+
+def make_random_stars(
+    width=None,
+    height=None,
+    shape=None,
+    nstars=100,
+    minflux=1,
+    maxflux=100000,
+    edge=0,
+    wcs=None,
+    verbose=False,
+):
     """Generate a table of random stars.
 
     Coordinates are distributed uniformly with :code:`edge <= x < width-edge` and :code:`edge <= y < height-edge`.
@@ -376,15 +526,19 @@ def make_random_stars(width=None, height=None, shape=None, nstars=100, minflux=1
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
     if (width is None or height is None) and shape is not None:
-        height,width = shape
+        height, width = shape
 
     cat = {
         'x': np.random.uniform(edge, width - 1 - edge, nstars),
         'y': np.random.uniform(edge, height - edge, nstars),
-        'flux': 10**np.random.uniform(np.log10(minflux), np.log10(maxflux), nstars)
+        'flux': 10 ** np.random.uniform(np.log10(minflux), np.log10(maxflux), nstars),
     }
     cat = Table(cat)
 
@@ -393,11 +547,23 @@ def make_random_stars(width=None, height=None, shape=None, nstars=100, minflux=1
     else:
         cat['ra'], cat['dec'] = np.nan, np.nan
 
-    cat['mag'] = -2.5*np.log10(cat['flux'])
+    cat['mag'] = -2.5 * np.log10(cat['flux'])
 
     return cat
 
-def place_random_stars(image, psf_model, nstars=100, minflux=1, maxflux=100000, gain=None, saturation=65535, edge=0, wcs=None, verbose=False):
+
+def place_random_stars(
+    image,
+    psf_model,
+    nstars=100,
+    minflux=1,
+    maxflux=100000,
+    gain=None,
+    saturation=65535,
+    edge=0,
+    wcs=None,
+    verbose=False,
+):
     """Randomly place artificial stars into the image.
 
     The stars will be placed on top of the existing content of the image, and the Poissonian
@@ -428,10 +594,21 @@ def place_random_stars(image, psf_model, nstars=100, minflux=1, maxflux=100000, 
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
-    cat = make_random_stars(shape=image.shape, nstars=nstars, minflux=minflux, maxflux=maxflux,
-                            edge=edge, wcs=wcs, verbose=verbose)
+    cat = make_random_stars(
+        shape=image.shape,
+        nstars=nstars,
+        minflux=minflux,
+        maxflux=maxflux,
+        edge=edge,
+        wcs=wcs,
+        verbose=verbose,
+    )
 
     for _ in cat:
         psf.place_psf_stamp(image, psf_model, _['x'], _['y'], flux=_['flux'], gain=gain)
@@ -441,14 +618,31 @@ def place_random_stars(image, psf_model, nstars=100, minflux=1, maxflux=100000, 
 
     return cat
 
-def split_sub_fn(image, x1, y1, dx1, dy1, nx=1, ny=None, mask=None, bg=None, err=None, header=None, wcs=None, obj=None, cat=None, get_origin=False):
+
+def split_sub_fn(
+    image,
+    x1,
+    y1,
+    dx1,
+    dy1,
+    nx=1,
+    ny=None,
+    mask=None,
+    bg=None,
+    err=None,
+    header=None,
+    wcs=None,
+    obj=None,
+    cat=None,
+    get_origin=False,
+):
     """
     """
     _ = cutouts.crop_image(image.astype(np.double), x1, y1, dx1, dy1, header=header)
     if header:
-        image1,header1 = _
+        image1, header1 = _
     else:
-        image1,header1 = _,None
+        image1, header1 = _, None
 
     result = []
 
@@ -480,20 +674,41 @@ def split_sub_fn(image, x1, y1, dx1, dy1, nx=1, ny=None, mask=None, bg=None, err
         result += [wcs1]
 
     if obj is not None:
-        oidx = (obj['x'] > x1) & (obj['x'] < x1 + dx1) & (obj['y'] > y1) & (obj['y'] < y1 + dy1)
+        oidx = (
+            (obj['x'] > x1)
+            & (obj['x'] < x1 + dx1)
+            & (obj['y'] > y1)
+            & (obj['y'] < y1 + dy1)
+        )
         obj1 = obj[oidx].copy()
         obj1['x'] -= x1
         obj1['y'] -= y1
         result += [obj1]
 
     if cat is not None and wcs is not None:
-        cx,cy = wcs.all_world2pix(cat['RAJ2000'], cat['DEJ2000'], 0)
+        cx, cy = wcs.all_world2pix(cat['RAJ2000'], cat['DEJ2000'], 0)
         cidx = (cx >= x1) & (cx < x1 + dx1) & (cy >= y1) & (cy < y1 + dy1)
         result += [cat[cidx].copy()]
 
     return result
 
-def split_image(image, nx=1, ny=None, mask=None, bg=None, err=None, header=None, wcs=None, obj=None, cat=None, overlap=0, get_index=False, get_origin=False, verbose=False):
+
+def split_image(
+    image,
+    nx=1,
+    ny=None,
+    mask=None,
+    bg=None,
+    err=None,
+    header=None,
+    wcs=None,
+    obj=None,
+    cat=None,
+    overlap=0,
+    get_index=False,
+    get_origin=False,
+    verbose=False,
+):
     """
     Generator function to split the image into several (`nx` x `ny`) blocks, while also optionally providing the mask, header, wcs, object list etc for the sub-blocks.
     The blocks may optionally be extended by 'overlap' pixels in all directions, so that at least in some sub-images every part of original image is far from the edge. This parameter may be used e.g. in conjunction with `edge` parameter of :func:`stdpipe.photometry.get_objects_sextractor` to avoid detecting the same object twice.
@@ -530,32 +745,73 @@ def split_image(image, nx=1, ny=None, mask=None, bg=None, err=None, header=None,
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
     if not ny:
         ny = nx
 
-    dx,dy = int(np.floor(image.shape[1]/nx)), int(np.floor(image.shape[0]/ny))
+    dx, dy = int(np.floor(image.shape[1] / nx)), int(np.floor(image.shape[0] / ny))
 
-    log('Will split the image (%dx%d) into %dx%d pieces with %dx%d pixels size and %d pix overlap' % (image.shape[1], image.shape[0], nx, ny, dx, dy, overlap))
+    log(
+        'Will split the image (%dx%d) into %dx%d pieces with %dx%d pixels size and %d pix overlap'
+        % (image.shape[1], image.shape[0], nx, ny, dx, dy, overlap)
+    )
 
-    for i,(x0,y0) in enumerate(itertools.product(range(0, image.shape[1]-dx+1, dx), range(0, image.shape[0]-dy+1, dy))):
+    for i, (x0, y0) in enumerate(
+        itertools.product(
+            range(0, image.shape[1] - dx + 1, dx), range(0, image.shape[0] - dy + 1, dy)
+        )
+    ):
         # Make some overlap
         x1 = max(0, x0 - overlap)
         y1 = max(0, y0 - overlap)
         dx1 = min(x0 - x1 + dx + overlap, image.shape[1] - x1)
         dy1 = min(y0 - y1 + dy + overlap, image.shape[0] - y1)
 
-        result = split_sub_fn(image, x1, y1, dx1, dy1, mask=mask, bg=bg, err=err, header=header, wcs=wcs, obj=obj, cat=cat, get_origin=get_origin)
+        result = split_sub_fn(
+            image,
+            x1,
+            y1,
+            dx1,
+            dy1,
+            mask=mask,
+            bg=bg,
+            err=err,
+            header=header,
+            wcs=wcs,
+            obj=obj,
+            cat=cat,
+            get_origin=get_origin,
+        )
 
         if get_index:
             result = [i] + result
 
-        log('Block %d: %d %d - %d %d' % (i, x1, y1, x1+dx1, y1+dy1))
+        log('Block %d: %d %d - %d %d' % (i, x1, y1, x1 + dx1, y1 + dy1))
 
         yield result if len(result) > 1 else result[0]
 
-def get_subimage_centered(image, x0, y0, width, height=None, mask=None, bg=None, err=None, header=None, wcs=None, obj=None, cat=None, get_origin=False, verbose=False):
+
+def get_subimage_centered(
+    image,
+    x0,
+    y0,
+    width,
+    height=None,
+    mask=None,
+    bg=None,
+    err=None,
+    header=None,
+    wcs=None,
+    obj=None,
+    cat=None,
+    get_origin=False,
+    verbose=False,
+):
     """
     Convenience function for getting the cropped sub-image centered at a given pixel position,
     while also optionally providing the mask, header, wcs, object list etc for it.
@@ -594,25 +850,47 @@ def get_subimage_centered(image, x0, y0, width, height=None, mask=None, bg=None,
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
     if not height:
         height = width
 
-    x1 = int(np.floor(x0 - 0.5*width))
-    y1 = int(np.floor(y0 - 0.5*height))
+    x1 = int(np.floor(x0 - 0.5 * width))
+    y1 = int(np.floor(y0 - 0.5 * height))
 
     x2 = x1 + width - 1
     y2 = y1 + height - 1
 
-    x1,x2 = max(0, x1), min(x2, image.shape[1] - 1)
-    y1,y2 = max(0, y1), min(y2, image.shape[0] - 1)
+    x1, x2 = max(0, x1), min(x2, image.shape[1] - 1)
+    y1, y2 = max(0, y1), min(y2, image.shape[0] - 1)
 
-    log('Will crop the %d %d - %d %d sub-image from original (%dx%d) image centered at %d %d' % (x1, y1, x2, y2, image.shape[1], image.shape[0], x0, y0))
+    log(
+        'Will crop the %d %d - %d %d sub-image from original (%dx%d) image centered at %d %d'
+        % (x1, y1, x2, y2, image.shape[1], image.shape[0], x0, y0)
+    )
 
-    result = split_sub_fn(image, x1, y1, x2 - x1 + 1, y2 - y1 + 1, mask=mask, bg=bg, err=err, header=header, wcs=wcs, obj=obj, cat=cat, get_origin=get_origin)
+    result = split_sub_fn(
+        image,
+        x1,
+        y1,
+        x2 - x1 + 1,
+        y2 - y1 + 1,
+        mask=mask,
+        bg=bg,
+        err=err,
+        header=header,
+        wcs=wcs,
+        obj=obj,
+        cat=cat,
+        get_origin=get_origin,
+    )
 
     return result
+
 
 def get_detection_limit(obj, sn=5, method='sn', verbose=True):
     """
@@ -628,11 +906,17 @@ def get_detection_limit(obj, sn=5, method='sn', verbose=True):
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
     if method == 'sn':
         log('Estimating detection limit using S/N vs magnitude method')
-        mag0 = photometry.get_detection_limit_sn(obj['mag_calib'], 1/obj['mag_calib_err'], sn=sn, verbose=verbose)
+        mag0 = photometry.get_detection_limit_sn(
+            obj['mag_calib'], 1 / obj['mag_calib_err'], sn=sn, verbose=verbose
+        )
     elif method == 'bg':
         log('Estimating detection limit using background noise method')
         raise RuntimeError('Not implemented')

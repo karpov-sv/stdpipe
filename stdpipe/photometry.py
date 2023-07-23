@@ -14,6 +14,7 @@ from astropy.table import Table
 
 import warnings
 from astropy.wcs import FITSFixedWarning
+
 # warnings.simplefilter(action='ignore', category=FITSFixedWarning)
 # warnings.simplefilter(action='ignore', category=FutureWarning)
 
@@ -28,22 +29,52 @@ from . import astrometry
 
 try:
     import cv2
+
     # Much faster dilation
-    dilate = lambda image,mask: cv2.dilate(image.astype(np.uint8), mask).astype(bool)
+    dilate = lambda image, mask: cv2.dilate(image.astype(np.uint8), mask).astype(bool)
 except:
     from scipy.signal import fftconvolve
-    dilate = lambda image,mask: fftconvolve(image, mask, mode='same') > 0.9
+
+    dilate = lambda image, mask: fftconvolve(image, mask, mode='same') > 0.9
 
 from . import utils
 
+
 def make_kernel(r0=1.0, ext=1.0):
-    x,y = np.mgrid[np.floor(-ext*r0):np.ceil(ext*r0+1), np.floor(-ext*r0):np.ceil(ext*r0+1)]
-    r = np.hypot(x,y)
-    image = np.exp(-r**2/2/r0**2)
+    x, y = np.mgrid[
+        np.floor(-ext * r0) : np.ceil(ext * r0 + 1),
+        np.floor(-ext * r0) : np.ceil(ext * r0 + 1),
+    ]
+    r = np.hypot(x, y)
+    image = np.exp(-r ** 2 / 2 / r0 ** 2)
 
     return image
 
-def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.0, bkgann=None, r0=0.5, gain=1, edge=0, minnthresh=2, minarea=5, relfluxradius=2.0, wcs=None, bg_size=64, use_fwhm=False, use_mask_large=False, subtract_bg=True, npix_large=100, sn=10.0, verbose=True, **kwargs):
+
+def get_objects_sep(
+    image,
+    header=None,
+    mask=None,
+    err=None,
+    thresh=4.0,
+    aper=3.0,
+    bkgann=None,
+    r0=0.5,
+    gain=1,
+    edge=0,
+    minnthresh=2,
+    minarea=5,
+    relfluxradius=2.0,
+    wcs=None,
+    bg_size=64,
+    use_fwhm=False,
+    use_mask_large=False,
+    subtract_bg=True,
+    npix_large=100,
+    sn=10.0,
+    verbose=True,
+    **kwargs
+):
     """Opject detection and simple aperture photometry using `SEP <https://github.com/kbarbary/sep>`_ routines, with the signature as similar as possible to :func:`~stdpipe.photometry.get_objects_sextractor` function.
 
     Detection flags are documented at https://sep.readthedocs.io/en/v1.1.x/reference.html - they are different from SExtractor ones!
@@ -73,7 +104,11 @@ def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.
     """
 
     # Simple Wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
     if r0 > 0.0:
         kernel = make_kernel(r0)
@@ -90,7 +125,7 @@ def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.
 
     log("Building background map")
 
-    bg = sep.Background(image, mask=mask|mask_bg, bw=bg_size, bh=bg_size)
+    bg = sep.Background(image, mask=mask | mask_bg, bw=bg_size, bh=bg_size)
     if subtract_bg:
         image1 = image - bg.back()
     else:
@@ -99,67 +134,127 @@ def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.
     if err is None:
         err = bg.rms()
         err[~np.isfinite(err)] = 1e30
-        err[err==0] = 1e30
+        err[err == 0] = 1e30
 
-    sep.set_extract_pixstack(image.shape[0]*image.shape[1])
+    sep.set_extract_pixstack(image.shape[0] * image.shape[1])
 
     if use_mask_large:
         # Mask regions around huge objects as they are most probably corrupted by saturation and blooming
         log("Extracting initial objects")
 
-        obj0,segm = sep.extract(image1, err=err, thresh=thresh, minarea=minarea, mask=mask|mask_bg, filter_kernel=kernel, segmentation_map=True)
+        obj0, segm = sep.extract(
+            image1,
+            err=err,
+            thresh=thresh,
+            minarea=minarea,
+            mask=mask | mask_bg,
+            filter_kernel=kernel,
+            segmentation_map=True,
+        )
 
         log("Dilating large objects")
 
-        mask_segm = np.isin(segm, [_+1 for _,npix in enumerate(obj0['npix']) if npix > npix_large])
+        mask_segm = np.isin(
+            segm, [_ + 1 for _, npix in enumerate(obj0['npix']) if npix > npix_large]
+        )
         mask_segm = dilate(mask_segm, np.ones([10, 10]))
 
     log("Extracting final objects")
 
-    obj0 = sep.extract(image1, err=err, thresh=thresh, minarea=minarea, mask=mask|mask_bg|mask_segm, filter_kernel=kernel, **kwargs)
+    obj0 = sep.extract(
+        image1,
+        err=err,
+        thresh=thresh,
+        minarea=minarea,
+        mask=mask | mask_bg | mask_segm,
+        filter_kernel=kernel,
+        **kwargs
+    )
 
     if use_fwhm:
         # Estimate FHWM and use it to get optimal aperture size
         idx = obj0['flag'] == 0
-        fwhm = 2.0*np.sqrt(np.hypot(obj0['a'][idx], obj0['b'][idx])*np.log(2))
-        fwhm = 2.0*sep.flux_radius(image1, obj0['x'][idx], obj0['y'][idx], relfluxradius*fwhm*np.ones_like(obj0['x'][idx]), 0.5, mask=mask)[0]
+        fwhm = 2.0 * np.sqrt(np.hypot(obj0['a'][idx], obj0['b'][idx]) * np.log(2))
+        fwhm = (
+            2.0
+            * sep.flux_radius(
+                image1,
+                obj0['x'][idx],
+                obj0['y'][idx],
+                relfluxradius * fwhm * np.ones_like(obj0['x'][idx]),
+                0.5,
+                mask=mask,
+            )[0]
+        )
         fwhm = np.median(fwhm)
 
-        aper = max(1.5*fwhm, aper)
+        aper = max(1.5 * fwhm, aper)
 
         log("FWHM = %.2g, aperture = %.2g" % (fwhm, aper))
 
     # Windowed positional parameters are often biased in crowded fields, let's avoid them for now
     # xwin,ywin,flag = sep.winpos(image1, obj0['x'], obj0['y'], 0.5, mask=mask)
-    xwin,ywin = obj0['x'], obj0['y']
+    xwin, ywin = obj0['x'], obj0['y']
 
     # Filter out objects too close to frame edges
-    idx = (np.round(xwin) > edge) & (np.round(ywin) > edge) & (np.round(xwin) < image.shape[1]-edge) & (np.round(ywin) < image.shape[0]-edge) # & (obj0['flag'] == 0)
+    idx = (
+        (np.round(xwin) > edge)
+        & (np.round(ywin) > edge)
+        & (np.round(xwin) < image.shape[1] - edge)
+        & (np.round(ywin) < image.shape[0] - edge)
+    )  # & (obj0['flag'] == 0)
 
     if minnthresh:
-        idx &= (obj0['tnpix'] >= minnthresh)
+        idx &= obj0['tnpix'] >= minnthresh
 
     log("Measuring final objects")
 
-    flux,fluxerr,flag = sep.sum_circle(image1, xwin[idx], ywin[idx], aper, err=err, gain=gain, mask=mask|mask_bg|mask_segm, bkgann=bkgann)
+    flux, fluxerr, flag = sep.sum_circle(
+        image1,
+        xwin[idx],
+        ywin[idx],
+        aper,
+        err=err,
+        gain=gain,
+        mask=mask | mask_bg | mask_segm,
+        bkgann=bkgann,
+    )
     # For debug purposes, let's make also the same aperture photometry on the background map
-    bgflux,bgfluxerr,bgflag = sep.sum_circle(bg.back(), xwin[idx], ywin[idx], aper, err=bg.rms(), gain=gain, mask=mask|mask_bg|mask_segm)
+    bgflux, bgfluxerr, bgflag = sep.sum_circle(
+        bg.back(),
+        xwin[idx],
+        ywin[idx],
+        aper,
+        err=bg.rms(),
+        gain=gain,
+        mask=mask | mask_bg | mask_segm,
+    )
 
-    bgnorm = bgflux/np.pi/aper**2
+    bgnorm = bgflux / np.pi / aper ** 2
 
     # Fluxes to magnitudes
-    mag,magerr = np.zeros_like(flux), np.zeros_like(flux)
-    mag[flux>0] = -2.5*np.log10(flux[flux>0])
+    mag, magerr = np.zeros_like(flux), np.zeros_like(flux)
+    mag[flux > 0] = -2.5 * np.log10(flux[flux > 0])
     # magerr[flux>0] = 2.5*np.log10(1.0 + fluxerr[flux>0]/flux[flux>0])
-    magerr[flux>0] = 2.5/np.log(10)*fluxerr[flux>0]/flux[flux>0]
+    magerr[flux > 0] = 2.5 / np.log(10) * fluxerr[flux > 0] / flux[flux > 0]
 
     # FWHM estimation - FWHM=HFD for Gaussian
-    fwhm = 2.0*sep.flux_radius(image1, xwin[idx], ywin[idx], relfluxradius*aper*np.ones_like(xwin[idx]), 0.5, mask=mask)[0]
+    fwhm = (
+        2.0
+        * sep.flux_radius(
+            image1,
+            xwin[idx],
+            ywin[idx],
+            relfluxradius * aper * np.ones_like(xwin[idx]),
+            0.5,
+            mask=mask,
+        )[0]
+    )
 
     flag |= obj0['flag'][idx]
 
     # Quality cuts
-    fidx = (flux > 0) & (magerr < 1.0/sn)
+    fidx = (flux > 0) & (magerr < 1.0 / sn)
 
     if wcs is None and header is not None:
         # If header is provided, we may build WCS from it
@@ -167,22 +262,33 @@ def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.
 
     if wcs is not None:
         # If WCS is provided we may convert x,y to ra,dec
-        ra,dec = wcs.all_pix2world(obj0['x'][idx], obj0['y'][idx], 0)
+        ra, dec = wcs.all_pix2world(obj0['x'][idx], obj0['y'][idx], 0)
     else:
-        ra,dec = np.zeros_like(obj0['x'][idx]),np.zeros_like(obj0['y'][idx])
+        ra, dec = np.zeros_like(obj0['x'][idx]), np.zeros_like(obj0['y'][idx])
 
     if verbose:
         print("All done")
 
-    obj = Table({'x':xwin[idx][fidx], 'y':ywin[idx][fidx],
-                 'xerr': np.sqrt(obj0['errx2'][idx][fidx]), 'yerr': np.sqrt(obj0['erry2'][idx][fidx]),
-                 'flux':flux[fidx], 'fluxerr':fluxerr[fidx],
-                 'mag':mag[fidx], 'magerr':magerr[fidx],
-                 'flags':obj0['flag'][idx][fidx]|flag[fidx],
-                 'ra':ra[fidx], 'dec':dec[fidx],
-                 'bg':bgnorm[fidx], 'fwhm':fwhm[fidx],
-                 'a':obj0['a'][idx][fidx], 'b':obj0['b'][idx][fidx],
-                 'theta':obj0['theta'][idx][fidx]})
+    obj = Table(
+        {
+            'x': xwin[idx][fidx],
+            'y': ywin[idx][fidx],
+            'xerr': np.sqrt(obj0['errx2'][idx][fidx]),
+            'yerr': np.sqrt(obj0['erry2'][idx][fidx]),
+            'flux': flux[fidx],
+            'fluxerr': fluxerr[fidx],
+            'mag': mag[fidx],
+            'magerr': magerr[fidx],
+            'flags': obj0['flag'][idx][fidx] | flag[fidx],
+            'ra': ra[fidx],
+            'dec': dec[fidx],
+            'bg': bgnorm[fidx],
+            'fwhm': fwhm[fidx],
+            'a': obj0['a'][idx][fidx],
+            'b': obj0['b'][idx][fidx],
+            'theta': obj0['theta'][idx][fidx],
+        }
+    )
 
     obj.meta['aper'] = aper
     obj.meta['bkgann'] = bkgann
@@ -191,7 +297,34 @@ def get_objects_sep(image, header=None, mask=None, err=None, thresh=4.0, aper=3.
 
     return obj
 
-def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, aper=3.0, r0=0.5, gain=1, edge=0, minarea=5, wcs=None, sn=3.0, bg_size=None, sort=True, reject_negative=True, mask_to_nans=False, checkimages=[], extra_params=[], extra={}, psf=None, catfile=None, _workdir=None, _tmpdir=None, _exe=None, verbose=False):
+
+def get_objects_sextractor(
+    image,
+    header=None,
+    mask=None,
+    err=None,
+    thresh=2.0,
+    aper=3.0,
+    r0=0.5,
+    gain=1,
+    edge=0,
+    minarea=5,
+    wcs=None,
+    sn=3.0,
+    bg_size=None,
+    sort=True,
+    reject_negative=True,
+    mask_to_nans=False,
+    checkimages=[],
+    extra_params=[],
+    extra={},
+    psf=None,
+    catfile=None,
+    _workdir=None,
+    _tmpdir=None,
+    _exe=None,
+    verbose=False,
+):
     """Thin wrapper around SExtractor binary.
 
     It processes the image taking into account optional mask and noise map, and returns the list of detected objects and optionally a set of SExtractor-produced checkimages.
@@ -228,7 +361,11 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
     # Find the binary
     binname = None
@@ -250,7 +387,11 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
     # else:
     #     log("Using SExtractor binary at", binname)
 
-    workdir = _workdir if _workdir is not None else tempfile.mkdtemp(prefix='sex', dir=_tmpdir)
+    workdir = (
+        _workdir
+        if _workdir is not None
+        else tempfile.mkdtemp(prefix='sex', dir=_tmpdir)
+    )
     obj = None
 
     if mask_to_nans and mask is not None:
@@ -275,8 +416,12 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
         'GAIN': gain,
         'DETECT_THRESH': thresh,
         'WEIGHT_TYPE': 'BACKGROUND',
-        'MASK_TYPE': 'NONE', # both 'CORRECT' and 'BLANK' seem to cause systematics?
-        'SATUR_LEVEL': (np.nanmax(image) + 1) if mask is None else (np.nanmax(image[~mask]) + 1), # Saturation should be handled in external mask
+        'MASK_TYPE': 'NONE',  # both 'CORRECT' and 'BLANK' seem to cause systematics?
+        'SATUR_LEVEL': (np.nanmax(image) + 1)
+        if mask is None
+        else (
+            np.nanmax(image[~mask]) + 1
+        ),  # Saturation should be handled in external mask
     }
 
     if bg_size is not None:
@@ -289,7 +434,7 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
         # User-provided noise model
         err = err.copy().astype(np.double)
         err[~np.isfinite(err)] = 1e30
-        err[err==0] = 1e30
+        err[err == 0] = 1e30
 
         errname = os.path.join(workdir, 'errors.fits')
         fits.writeto(errname, err, overwrite=True)
@@ -301,23 +446,52 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
     opts['FLAG_IMAGE'] = flagsname
 
     if np.isscalar(aper):
-        opts['PHOT_APERTURES'] = aper*2 # SExtractor expects diameters, not radii
+        opts['PHOT_APERTURES'] = aper * 2  # SExtractor expects diameters, not radii
         size = ''
     else:
-        opts['PHOT_APERTURES'] = ','.join([str(_*2) for _ in aper])
+        opts['PHOT_APERTURES'] = ','.join([str(_ * 2) for _ in aper])
         size = '[%d]' % len(aper)
 
-    checknames = [os.path.join(workdir, _.replace('-', 'M_') + '.fits') for _ in checkimages]
+    checknames = [
+        os.path.join(workdir, _.replace('-', 'M_') + '.fits') for _ in checkimages
+    ]
     if checkimages:
         opts['CHECKIMAGE_TYPE'] = ','.join(checkimages)
         opts['CHECKIMAGE_NAME'] = ','.join(checknames)
 
-    params = ['MAG_APER'+size, 'MAGERR_APER'+size, 'FLUX_APER'+size, 'FLUXERR_APER'+size, 'X_IMAGE', 'Y_IMAGE', 'ERRX2_IMAGE', 'ERRY2_IMAGE', 'A_IMAGE', 'B_IMAGE', 'THETA_IMAGE', 'FLUX_RADIUS', 'FWHM_IMAGE', 'FLAGS', 'IMAFLAGS_ISO', 'BACKGROUND']
+    params = [
+        'MAG_APER' + size,
+        'MAGERR_APER' + size,
+        'FLUX_APER' + size,
+        'FLUXERR_APER' + size,
+        'X_IMAGE',
+        'Y_IMAGE',
+        'ERRX2_IMAGE',
+        'ERRY2_IMAGE',
+        'A_IMAGE',
+        'B_IMAGE',
+        'THETA_IMAGE',
+        'FLUX_RADIUS',
+        'FWHM_IMAGE',
+        'FLAGS',
+        'IMAFLAGS_ISO',
+        'BACKGROUND',
+    ]
     params += extra_params
 
     if psf is not None:
         opts['PSF_NAME'] = psf
-        params += ['MAG_PSF', 'MAGERR_PSF', 'FLUX_PSF', 'FLUXERR_PSF', 'XPSF_IMAGE', 'YPSF_IMAGE', 'SPREAD_MODEL', 'SPREADERR_MODEL', 'CHI2_PSF']
+        params += [
+            'MAG_PSF',
+            'MAGERR_PSF',
+            'FLUX_PSF',
+            'FLUXERR_PSF',
+            'XPSF_IMAGE',
+            'YPSF_IMAGE',
+            'SPREAD_MODEL',
+            'SPREADERR_MODEL',
+            'CHI2_PSF',
+        ]
 
     paramname = os.path.join(workdir, 'cfg.param')
     with open(paramname, 'w') as paramfile:
@@ -333,14 +507,26 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
     else:
         kernel = make_kernel(r0, ext=1.0)
         kernelname = os.path.join(workdir, 'kernel.txt')
-        np.savetxt(kernelname, kernel/np.sum(kernel), fmt=b'%.6f', header='CONV NORM', comments='')
+        np.savetxt(
+            kernelname,
+            kernel / np.sum(kernel),
+            fmt=b'%.6f',
+            header='CONV NORM',
+            comments='',
+        )
         opts['FILTER'] = 'Y'
         opts['FILTER_NAME'] = kernelname
 
     opts.update(extra)
 
     # Build the command line
-    cmd = binname + ' ' + shlex.quote(imagename) + ' ' + utils.format_astromatic_opts(opts)
+    cmd = (
+        binname
+        + ' '
+        + shlex.quote(imagename)
+        + ' '
+        + utils.format_astromatic_opts(opts)
+    )
     if not verbose:
         cmd += ' > /dev/null 2>/dev/null'
     log('Will run SExtractor like that:')
@@ -353,19 +539,19 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
     if res == 0 and os.path.exists(catname):
         log('SExtractor run succeeded')
         obj = Table.read(catname, hdu=2)
-        obj.meta.clear() # Remove unnecessary entries from the metadata
+        obj.meta.clear()  # Remove unnecessary entries from the metadata
 
         idx = (obj['X_IMAGE'] > edge) & (obj['X_IMAGE'] < image.shape[1] - edge)
         idx &= (obj['Y_IMAGE'] > edge) & (obj['Y_IMAGE'] < image.shape[0] - edge)
 
         if np.isscalar(aper):
             if sn:
-                idx &= obj['MAGERR_APER'] < 1.0/sn
+                idx &= obj['MAGERR_APER'] < 1.0 / sn
             if reject_negative:
                 idx &= obj['FLUX_APER'] > 0
         else:
             if sn:
-                idx &= np.all(obj['MAGERR_APER'] < 1.0/sn, axis=1)
+                idx &= np.all(obj['MAGERR_APER'] < 1.0 / sn, axis=1)
             if reject_negative:
                 idx &= np.all(obj['FLUX_APER'] > 0, axis=1)
 
@@ -375,47 +561,54 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
             wcs = WCS(header)
 
         if wcs is not None:
-            obj['ra'],obj['dec'] = wcs.all_pix2world(obj['X_IMAGE'], obj['Y_IMAGE'], 1)
+            obj['ra'], obj['dec'] = wcs.all_pix2world(obj['X_IMAGE'], obj['Y_IMAGE'], 1)
         else:
-            obj['ra'],obj['dec'] = np.zeros_like(obj['X_IMAGE']), np.zeros_like(obj['Y_IMAGE'])
+            obj['ra'], obj['dec'] = (
+                np.zeros_like(obj['X_IMAGE']),
+                np.zeros_like(obj['Y_IMAGE']),
+            )
 
-        obj['FLAGS'][obj['IMAFLAGS_ISO'] > 0] |= 0x100 # Masked pixels in the footprint
-        obj.remove_column('IMAFLAGS_ISO') # We do not need this column
+        obj['FLAGS'][obj['IMAFLAGS_ISO'] > 0] |= 0x100  # Masked pixels in the footprint
+        obj.remove_column('IMAFLAGS_ISO')  # We do not need this column
 
         # Convert variances to rms
         obj['ERRX2_IMAGE'] = np.sqrt(obj['ERRX2_IMAGE'])
         obj['ERRY2_IMAGE'] = np.sqrt(obj['ERRY2_IMAGE'])
 
-        for _,__ in [['X_IMAGE', 'x'],
-                     ['Y_IMAGE', 'y'],
-                     ['ERRX2_IMAGE', 'xerr'],
-                     ['ERRY2_IMAGE', 'yerr'],
-                     ['FLUX_APER', 'flux'],
-                     ['FLUXERR_APER', 'fluxerr'],
-                     ['MAG_APER', 'mag'],
-                     ['MAGERR_APER', 'magerr'],
-                     ['BACKGROUND', 'bg'],
-                     ['FLAGS', 'flags'],
-                     ['FWHM_IMAGE', 'fwhm'],
-                     ['A_IMAGE', 'a'],
-                     ['B_IMAGE', 'b'],
-                     ['THETA_IMAGE', 'theta']]:
+        for _, __ in [
+            ['X_IMAGE', 'x'],
+            ['Y_IMAGE', 'y'],
+            ['ERRX2_IMAGE', 'xerr'],
+            ['ERRY2_IMAGE', 'yerr'],
+            ['FLUX_APER', 'flux'],
+            ['FLUXERR_APER', 'fluxerr'],
+            ['MAG_APER', 'mag'],
+            ['MAGERR_APER', 'magerr'],
+            ['BACKGROUND', 'bg'],
+            ['FLAGS', 'flags'],
+            ['FWHM_IMAGE', 'fwhm'],
+            ['A_IMAGE', 'a'],
+            ['B_IMAGE', 'b'],
+            ['THETA_IMAGE', 'theta'],
+        ]:
             obj.rename_column(_, __)
 
         if psf:
-            for _,__ in [['XPSF_IMAGE', 'x_psf'],
-                         ['YPSF_IMAGE', 'y_psf'],
-                         ['MAG_PSF', 'mag_psf'],
-                         ['MAGERR_PSF', 'magerr_psf'],
-                         ['FLUX_PSF', 'flux_psf'],
-                         ['FLUXERR_PSF', 'fluxerr_psf'],
-                         ['CHI2_PSF', 'chi2_psf'],
-                         ['SPREAD_MODEL', 'spread_model'],
-                         ['SPREADERR_MODEL', 'spreaderr_model']]:
+            for _, __ in [
+                ['XPSF_IMAGE', 'x_psf'],
+                ['YPSF_IMAGE', 'y_psf'],
+                ['MAG_PSF', 'mag_psf'],
+                ['MAGERR_PSF', 'magerr_psf'],
+                ['FLUX_PSF', 'flux_psf'],
+                ['FLUXERR_PSF', 'fluxerr_psf'],
+                ['CHI2_PSF', 'chi2_psf'],
+                ['SPREAD_MODEL', 'spread_model'],
+                ['SPREADERR_MODEL', 'spreaderr_model'],
+            ]:
                 if _ in obj.keys():
                     obj.rename_column(_, __)
                     if 'mag' in __:
-                        obj[__][obj[__] == 99] = np.nan # TODO: use masked column here?
+                        obj[__][obj[__] == 99] = np.nan  # TODO: use masked column here?
 
         # SExtractor uses 1-based pixel coordinates
         obj['x'] -= 1
@@ -432,7 +625,7 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
                 obj.sort('flux', reverse=True)
             else:
                 # Table sorting by vector columns seems to be broken?..
-                obj = obj[np.argsort(-obj['flux'][:,0])]
+                obj = obj[np.argsort(-obj['flux'][:, 0])]
 
         if catfile is not None:
             shutil.copyfile(catname, catfile)
@@ -458,38 +651,73 @@ def get_objects_sextractor(image, header=None, mask=None, err=None, thresh=2.0, 
 
     return result
 
+
 def make_series(mul=1.0, x=1.0, y=1.0, order=1, sum=False, zero=True):
     x = np.atleast_1d(x)
     y = np.atleast_1d(y)
 
     if zero:
-        res = [np.ones_like(x)*mul]
+        res = [np.ones_like(x) * mul]
     else:
         res = []
 
-    for i in range(1,order+1):
-        maxr = i+1
+    for i in range(1, order + 1):
+        maxr = i + 1
 
         for j in range(maxr):
-            res.append(mul * x**(i-j) * y**j)
+            res.append(mul * x ** (i - j) * y ** j)
     if sum:
         return np.sum(res, axis=0)
     else:
         return res
 
+
 def get_intrinsic_scatter(y, yerr, min=0, max=None):
     def log_likelihood(theta, y, yerr):
         a, b, c = theta
         model = b
-        sigma2 = a*yerr**2 + c**2
-        return -0.5 * np.sum((y - model)**2/sigma2 + np.log(sigma2))
+        sigma2 = a * yerr ** 2 + c ** 2
+        return -0.5 * np.sum((y - model) ** 2 / sigma2 + np.log(sigma2))
 
     nll = lambda *args: -log_likelihood(*args)
-    C = minimize(nll, [1, 0.0, 0.0], args=(y, yerr), bounds=[[1,1], [None, None], [min, max]], method='Powell')
+    C = minimize(
+        nll,
+        [1, 0.0, 0.0],
+        args=(y, yerr),
+        bounds=[[1, 1], [None, None], [min, max]],
+        method='Powell',
+    )
 
     return C.x[2]
 
-def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_mag, cat_magerr=None, cat_color=None, sr=3/3600, obj_x=None, obj_y=None, spatial_order=0, bg_order=None, threshold=5.0, niter=10, accept_flags=0, cat_saturation=None, max_intrinsic_rms=0, sn=None, verbose=False, robust=True, scale_noise=False, use_color=True):
+
+def match(
+    obj_ra,
+    obj_dec,
+    obj_mag,
+    obj_magerr,
+    obj_flags,
+    cat_ra,
+    cat_dec,
+    cat_mag,
+    cat_magerr=None,
+    cat_color=None,
+    sr=3 / 3600,
+    obj_x=None,
+    obj_y=None,
+    spatial_order=0,
+    bg_order=None,
+    threshold=5.0,
+    niter=10,
+    accept_flags=0,
+    cat_saturation=None,
+    max_intrinsic_rms=0,
+    sn=None,
+    verbose=False,
+    robust=True,
+    scale_noise=False,
+    use_color=True,
+):
     """Low-level photometric matching routine.
 
     It tries to build the photometric model for objects detected on the image that includes catalogue magnitude, positionally-dependent zero point, linear color term, optional additive flux term, and also takes into account possible intrinsic magnitude scatter on top of measurement errors.
@@ -548,18 +776,35 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
-    oidx,cidx,dist = astrometry.spherical_match(obj_ra, obj_dec, cat_ra, cat_dec, sr)
+    oidx, cidx, dist = astrometry.spherical_match(obj_ra, obj_dec, cat_ra, cat_dec, sr)
 
-    log(len(dist), 'initial matches between', len(obj_ra), 'objects and', len(cat_ra), 'catalogue stars, sr = %.2f arcsec' % (sr*3600))
-    log('Median separation is %.2f arcsec' % (np.median(dist)*3600))
+    log(
+        len(dist),
+        'initial matches between',
+        len(obj_ra),
+        'objects and',
+        len(cat_ra),
+        'catalogue stars, sr = %.2f arcsec' % (sr * 3600),
+    )
+    log('Median separation is %.2f arcsec' % (np.median(dist) * 3600))
 
     omag = np.ma.filled(obj_mag[oidx], fill_value=np.nan)
     omag_err = np.ma.filled(obj_magerr[oidx], fill_value=np.nan)
-    oflags = obj_flags[oidx] if obj_flags is not None else np.zeros_like(omag, dtype=bool)
+    oflags = (
+        obj_flags[oidx] if obj_flags is not None else np.zeros_like(omag, dtype=bool)
+    )
     cmag = np.ma.filled(cat_mag[cidx], fill_value=np.nan)
-    cmag_err = np.ma.filled(cat_magerr[cidx], fill_value=np.nan) if cat_magerr is not None else np.zeros_like(cmag)
+    cmag_err = (
+        np.ma.filled(cat_magerr[cidx], fill_value=np.nan)
+        if cat_magerr is not None
+        else np.zeros_like(cmag)
+    )
 
     if obj_x is not None and obj_y is not None:
         x0, y0 = np.mean(obj_x[oidx]), np.mean(obj_y[oidx])
@@ -576,7 +821,7 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
 
     if bg_order is not None:
         # Spatially varying additive flux component, linearized in magnitudes
-        X += make_series(-2.5/np.log(10)/10**(-0.4*omag), x, y, order=bg_order)
+        X += make_series(-2.5 / np.log(10) / 10 ** (-0.4 * omag), x, y, order=bg_order)
         log('Adjusting background level using polynomial with bg_order =', bg_order)
 
     if robust:
@@ -592,20 +837,26 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
     else:
         ccolor = np.zeros_like(cmag)
 
-    Nparams = len(X) # Number of parameters to be fitted
+    Nparams = len(X)  # Number of parameters to be fitted
 
     X = np.vstack(X).T
-    zero = cmag - omag # We will build a model for this definition of zero point
+    zero = cmag - omag  # We will build a model for this definition of zero point
     zero_err = np.hypot(omag_err, cmag_err)
     # weights = 1.0/zero_err**2
 
-    idx0 = np.isfinite(omag) & np.isfinite(omag_err) & np.isfinite(cmag) & np.isfinite(cmag_err) & ((oflags & ~accept_flags) == 0) # initial mask
+    idx0 = (
+        np.isfinite(omag)
+        & np.isfinite(omag_err)
+        & np.isfinite(cmag)
+        & np.isfinite(cmag_err)
+        & ((oflags & ~accept_flags) == 0)
+    )  # initial mask
     if cat_color is not None and use_color:
         idx0 &= np.isfinite(ccolor)
     if cat_saturation is not None:
         idx0 &= cmag >= cat_saturation
     if sn is not None:
-        idx0 &= omag_err < 1/sn
+        idx0 &= omag_err < 1 / sn
 
     log('%d objects pass initial quality cuts' % np.sum(idx0))
 
@@ -617,31 +868,56 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
 
     for iter in range(niter):
         if np.sum(idx) < Nparams + 1:
-            log("Fit failed - %d objects remaining for fitting %d parameters" % (np.sum(idx), Nparams))
+            log(
+                "Fit failed - %d objects remaining for fitting %d parameters"
+                % (np.sum(idx), Nparams)
+            )
             return None
 
         if robust:
             # Rescale the arguments with weights
-            C = sm.RLM(zero[idx]/total_err[idx], (X[idx].T/total_err[idx]).T).fit()
+            C = sm.RLM(zero[idx] / total_err[idx], (X[idx].T / total_err[idx]).T).fit()
         else:
-            C = sm.WLS(zero[idx], X[idx], weights=1/total_err[idx]**2).fit()
+            C = sm.WLS(zero[idx], X[idx], weights=1 / total_err[idx] ** 2).fit()
 
-        zero_model = np.sum(X*C.params, axis=1)
+        zero_model = np.sum(X * C.params, axis=1)
         zero_model_err = np.sqrt(C.cov_params(X).diagonal())
 
-        intrinsic_rms = get_intrinsic_scatter((zero-zero_model)[idx], total_err[idx], max=max_intrinsic_rms) if max_intrinsic_rms > 0 else 0
+        intrinsic_rms = (
+            get_intrinsic_scatter(
+                (zero - zero_model)[idx], total_err[idx], max=max_intrinsic_rms
+            )
+            if max_intrinsic_rms > 0
+            else 0
+        )
 
-        scale_err = 1 if not scale_noise else np.sqrt(C.scale) # rms
-        total_err = np.hypot(zero_err*scale_err, intrinsic_rms)
+        scale_err = 1 if not scale_noise else np.sqrt(C.scale)  # rms
+        total_err = np.hypot(zero_err * scale_err, intrinsic_rms)
 
         if threshold:
-            idx1 = np.abs((zero - zero_model)/total_err)[idx] < threshold
+            idx1 = np.abs((zero - zero_model) / total_err)[idx] < threshold
         else:
             idx1 = np.ones_like(idx[idx])
 
-        log('Iteration', iter, ':', np.sum(idx), '/', len(idx), '- rms', '%.2f' % np.std((zero - zero_model)[idx0]), '%.2f' % np.std((zero - zero_model)[idx]), '- normed', '%.2f' % np.std((zero - zero_model)[idx]/zero_err[idx]), '%.2f' % np.std((zero - zero_model)[idx]/total_err[idx]), '- scale %.2f %.2f' % (np.sqrt(C.scale), scale_err), '- rms', '%.2f' % intrinsic_rms)
+        log(
+            'Iteration',
+            iter,
+            ':',
+            np.sum(idx),
+            '/',
+            len(idx),
+            '- rms',
+            '%.2f' % np.std((zero - zero_model)[idx0]),
+            '%.2f' % np.std((zero - zero_model)[idx]),
+            '- normed',
+            '%.2f' % np.std((zero - zero_model)[idx] / zero_err[idx]),
+            '%.2f' % np.std((zero - zero_model)[idx] / total_err[idx]),
+            '- scale %.2f %.2f' % (np.sqrt(C.scale), scale_err),
+            '- rms',
+            '%.2f' % intrinsic_rms,
+        )
 
-        if not np.sum(~idx1):# and new_intrinsic_rms <= intrinsic_rms:
+        if not np.sum(~idx1):  # and new_intrinsic_rms <= intrinsic_rms:
             log('Fitting converged')
             break
         else:
@@ -661,7 +937,9 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
         X = make_series(1.0, x, y, order=spatial_order)
 
         if bg_order is not None and mag is not None:
-            X += make_series(-2.5/np.log(10)/10**(-0.4*mag), x, y, order=bg_order)
+            X += make_series(
+                -2.5 / np.log(10) / 10 ** (-0.4 * mag), x, y, order=bg_order
+            )
 
         X = np.vstack(X).T
 
@@ -674,45 +952,75 @@ def match(obj_ra, obj_dec, obj_mag, obj_magerr, obj_flags, cat_ra, cat_dec, cat_
                 err = np.hypot(err, intrinsic_rms)
             return err
         else:
-            return np.sum(X*C.params[0:X.shape[1]], axis=1)
+            return np.sum(X * C.params[0 : X.shape[1]], axis=1)
 
     if cat_color is not None and use_color:
         X = make_series(order=spatial_order)
         if bg_order is not None:
             X += make_series(order=bg_order)
-        color_term = C.params[len(X):][0]
+        color_term = C.params[len(X) :][0]
         log('Color term is %.2f' % color_term)
     else:
         color_term = None
 
-    return {'oidx': oidx, 'cidx': cidx, 'dist': dist,
-            'omag': omag, 'omag_err': omag_err,
-            'cmag': cmag, 'cmag_err': cmag_err,
-            'color': ccolor, 'color_term': color_term,
-            'zero': zero, 'zero_err': zero_err,
-            'zero_model': zero_model, 'zero_model_err':zero_model_err, 'zero_fn': zero_fn,
-            'params': C.params,
-            'error_scale': np.sqrt(C.scale),
-            'intrinsic_rms': intrinsic_rms,
-            'obj_zero': zero_fn(obj_x, obj_y, mag=obj_mag),
-            'ox': ox, 'oy': oy, 'oflags': oflags,
-            'idx': idx, 'idx0': idx0}
+    return {
+        'oidx': oidx,
+        'cidx': cidx,
+        'dist': dist,
+        'omag': omag,
+        'omag_err': omag_err,
+        'cmag': cmag,
+        'cmag_err': cmag_err,
+        'color': ccolor,
+        'color_term': color_term,
+        'zero': zero,
+        'zero_err': zero_err,
+        'zero_model': zero_model,
+        'zero_model_err': zero_model_err,
+        'zero_fn': zero_fn,
+        'params': C.params,
+        'error_scale': np.sqrt(C.scale),
+        'intrinsic_rms': intrinsic_rms,
+        'obj_zero': zero_fn(obj_x, obj_y, mag=obj_mag),
+        'ox': ox,
+        'oy': oy,
+        'oflags': oflags,
+        'idx': idx,
+        'idx0': idx0,
+    }
+
 
 def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kwargs):
     if method == 'sep':
         bg = sep.Background(image, mask=mask, bw=size, bh=size, **kwargs)
 
-        back,backrms = bg.back(), bg.rms()
-    else: # photutils
+        back, backrms = bg.back(), bg.rms()
+    else:  # photutils
         bg = photutils.Background2D(image, size, mask=mask, **kwargs)
-        back,backrms = bg.background, bg.background_rms
+        back, backrms = bg.background, bg.background_rms
 
     if get_rms:
         return back, backrms
     else:
         return back
 
-def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=None, err=None, gain=None, bg_size=64, sn=None, keep_negative=True, get_bg=False, verbose=False):
+
+def measure_objects(
+    obj,
+    image,
+    aper=3,
+    bkgann=None,
+    fwhm=None,
+    mask=None,
+    bg=None,
+    err=None,
+    gain=None,
+    bg_size=64,
+    sn=None,
+    keep_negative=True,
+    get_bg=False,
+    verbose=False,
+):
     """Aperture photometry at the positions of already detected objects.
 
     It will estimate and subtract the background unless external background estimation (`bg`) is provided, and use user-provided noise map (`err`) if requested.
@@ -740,7 +1048,11 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
     if not len(obj):
         log('No objects to measure')
@@ -751,7 +1063,7 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
 
     # Sanitize the image and make its copy to safely operate on it
     image1 = image.astype(np.double)
-    mask0 = ~np.isfinite(image1) # Minimal mask
+    mask0 = ~np.isfinite(image1)  # Minimal mask
     # image1[mask0] = np.median(image1[~mask0])
 
     # Ensure that the mask is defined
@@ -761,26 +1073,46 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
     if bg is None or err is None or get_bg:
         log('Estimating global background with %dx%d mesh' % (bg_size, bg_size))
         try:
-            bg_est = photutils.Background2D(image1, bg_size, mask=mask|mask0, exclude_percentile=10)
+            bg_est = photutils.Background2D(
+                image1, bg_size, mask=mask | mask0, exclude_percentile=10
+            )
         except ValueError:
-            bg_est = photutils.Background2D(image1, bg_size, mask=mask|mask0, exclude_percentile=30)
+            bg_est = photutils.Background2D(
+                image1, bg_size, mask=mask | mask0, exclude_percentile=30
+            )
 
     if bg is None:
-        log('Subtracting global background: median %.1f rms %.2f' % (np.median(bg_est.background), np.std(bg_est.background)))
+        log(
+            'Subtracting global background: median %.1f rms %.2f'
+            % (np.median(bg_est.background), np.std(bg_est.background))
+        )
         image1 -= bg_est.background
     else:
-        log('Subtracting user-provided background: median %.1f rms %.2f' % (np.median(bg), np.std(bg)))
+        log(
+            'Subtracting user-provided background: median %.1f rms %.2f'
+            % (np.median(bg), np.std(bg))
+        )
         image1 -= bg
 
     image1[mask0] = 0
 
     if err is None:
-        log('Using global background noise map: median %.1f rms %.2f + gain %.1f' % (np.median(bg_est.background_rms), np.std(bg_est.background_rms), gain if gain else np.inf))
+        log(
+            'Using global background noise map: median %.1f rms %.2f + gain %.1f'
+            % (
+                np.median(bg_est.background_rms),
+                np.std(bg_est.background_rms),
+                gain if gain else np.inf,
+            )
+        )
         err = bg_est.background_rms
         if gain:
             err = calc_total_error(image1, err, gain)
     else:
-        log('Using user-provided noise map: median %.1f rms %.2f' % (np.median(err), np.std(err)))
+        log(
+            'Using user-provided noise map: median %.1f rms %.2f'
+            % (np.median(err), np.std(err))
+        )
 
     if fwhm is not None and fwhm > 0:
         log('Scaling aperture radii with FWHM %.1f pix' % fwhm)
@@ -800,31 +1132,44 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
         obj['flags'] = 0
 
     # Check whether some aperture pixels are masked, and set the flags for that
-    for i,a in enumerate(apertures):
+    for i, a in enumerate(apertures):
         am = a.to_mask(method='center')
-        vals = am.multiply(mask|mask0)
+        vals = am.multiply(mask | mask0)
         if vals is None or np.any(vals):
             obj['flags'][i] |= 0x200
 
     # Local background
     if bkgann is not None and len(bkgann) == 2:
         if fwhm is not None and fwhm > 0:
-            bkgann = [_*fwhm for _ in bkgann]
-        log('Using local background annulus between %.1f and %.1f pixels' % (bkgann[0], bkgann[1]))
+            bkgann = [_ * fwhm for _ in bkgann]
+        log(
+            'Using local background annulus between %.1f and %.1f pixels'
+            % (bkgann[0], bkgann[1])
+        )
 
-        bg_apertures = photutils.CircularAnnulus(positions, r_in=bkgann[0], r_out=bkgann[1])
+        bg_apertures = photutils.CircularAnnulus(
+            positions, r_in=bkgann[0], r_out=bkgann[1]
+        )
         image_ones = np.ones_like(image1)
         res_area = photutils.aperture_photometry(image_ones, apertures, mask=mask0)
 
-        obj['bg_local'] = 0.0 # Dedicated column for local background on top of global estimation
-        obj['bg_fluxerr'] = 0.0 # Local background flux error inside the aperture
+        obj[
+            'bg_local'
+        ] = 0.0  # Dedicated column for local background on top of global estimation
+        obj['bg_fluxerr'] = 0.0  # Local background flux error inside the aperture
 
-        for row,area,bg_mask in zip(obj, res_area, bg_apertures.to_mask(method='center')):
+        for row, area, bg_mask in zip(
+            obj, res_area, bg_apertures.to_mask(method='center')
+        ):
             bg_overlap = bg_mask.multiply(image1)
-            mask_overlap = bg_mask.multiply(mask|mask0)
+            mask_overlap = bg_mask.multiply(mask | mask0)
 
             if bg_overlap is None or mask_overlap is None:
-                row['flags'] |= 0x400 # Flag the values where the annulus is completely outside the image
+                row[
+                    'flags'
+                ] |= (
+                    0x400
+                )  # Flag the values where the annulus is completely outside the image
                 continue
 
             bg_vals = bg_overlap[bg_mask.data > 0]
@@ -834,32 +1179,39 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
                 # Mean, Median and Std, all sigma-clipped
                 bg_stats = sigma_clipped_stats(bg_vals, mask=mask_vals, stdfunc=mad_std)
                 # SExtractor-like background estimation: 3*median - 2*mean
-                local_bg_est = 3.0*bg_stats[1] - 2.0*bg_stats[0]
+                local_bg_est = 3.0 * bg_stats[1] - 2.0 * bg_stats[0]
 
                 row['flux'] -= local_bg_est * area['aperture_sum']
                 # Rough estimation of bg_est error as rms/sqrt(N)
-                row['fluxerr'] = np.hypot(row['fluxerr'], bg_stats[2] / np.sqrt(np.sum(mask_vals == 0)) * area['aperture_sum'])
+                row['fluxerr'] = np.hypot(
+                    row['fluxerr'],
+                    bg_stats[2]
+                    / np.sqrt(np.sum(mask_vals == 0))
+                    * area['aperture_sum'],
+                )
                 row['bg_local'] = local_bg_est
                 row['bg_fluxerr'] = bg_stats[2] * np.sqrt(area['aperture_sum'])
             else:
-                row['flags'] |= 0x400 # Flag the values where local bg estimation failed
+                row[
+                    'flags'
+                ] |= 0x400  # Flag the values where local bg estimation failed
 
     idx = obj['flux'] > 0
     for _ in ['mag', 'magerr']:
         if _ not in obj.keys():
             obj[_] = np.nan
 
-    obj['mag'][idx] = -2.5*np.log10(obj['flux'][idx])
+    obj['mag'][idx] = -2.5 * np.log10(obj['flux'][idx])
     obj['mag'][~idx] = np.nan
 
-    obj['magerr'][idx] = 2.5/np.log(10)*obj['fluxerr'][idx]/obj['flux'][idx]
+    obj['magerr'][idx] = 2.5 / np.log(10) * obj['fluxerr'][idx] / obj['flux'][idx]
     obj['magerr'][~idx] = np.nan
 
     # Final filtering of properly measured objects
     if sn is not None and sn > 0:
         log('Filtering out measurements with S/N < %.1f' % sn)
         idx = np.isfinite(obj['magerr'])
-        idx[idx] &= (obj['magerr'][idx] < 1/sn)
+        idx[idx] &= obj['magerr'][idx] < 1 / sn
         obj = obj[idx]
 
     if not keep_negative:
@@ -871,6 +1223,7 @@ def measure_objects(obj, image, aper=3, bkgann=None, fwhm=None, mask=None, bg=No
         return obj, bg_est.background, err
     else:
         return obj
+
 
 def make_sn_model(mag, sn):
     """
@@ -886,7 +1239,7 @@ def make_sn_model(mag, sn):
     sn = sn[idx]
 
     def sn_fn(p, mag):
-        return 1/np.sqrt(p[0]*10**(0.8*mag) + p[1]*10**(0.4*mag))
+        return 1 / np.sqrt(p[0] * 10 ** (0.8 * mag) + p[1] * 10 ** (0.4 * mag))
 
     def lstsq_fn(p, x, y):
         # Minimize residuals in logarithms, for better stability
@@ -895,11 +1248,15 @@ def make_sn_model(mag, sn):
     aidx = np.argsort(sn)
 
     # Initial params from two limiting cases, one on average and one on brightest point
-    x = [np.median(10**(-0.8*mag)/sn**2), 10**(-0.4*mag[aidx][-1])/sn[aidx][-1]**2]
+    x = [
+        np.median(10 ** (-0.8 * mag) / sn ** 2),
+        10 ** (-0.4 * mag[aidx][-1]) / sn[aidx][-1] ** 2,
+    ]
 
     res = least_squares(lstsq_fn, x, args=(mag, sn), method='lm')
 
     return lambda mag: sn_fn(res.x, mag)
+
 
 def get_detection_limit_sn(mag, mag_sn, sn=5, get_model=False, verbose=True):
     """
@@ -914,12 +1271,20 @@ def get_detection_limit_sn(mag, mag_sn, sn=5, get_model=False, verbose=True):
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
     mag0 = None
 
     sn_model = make_sn_model(mag, mag_sn)
-    res = root_scalar(lambda x: np.log10(sn_model(x)) - np.log10(sn), x0=np.nanmax(mag), x1=np.nanmax(mag)+1)
+    res = root_scalar(
+        lambda x: np.log10(sn_model(x)) - np.log10(sn),
+        x0=np.nanmax(mag),
+        x1=np.nanmax(mag) + 1,
+    )
     if res.converged:
         mag0 = res.root
     else:

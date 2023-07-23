@@ -16,7 +16,10 @@ from scipy.stats import chi2
 
 from . import utils
 
-def get_frame_center(filename=None, header=None, wcs=None, width=None, height=None, shape=None):
+
+def get_frame_center(
+    filename=None, header=None, wcs=None, width=None, height=None, shape=None
+):
     """
     Returns image center RA, Dec, and radius in degrees.
     Accepts either filename, or FITS header, or WCS structure
@@ -33,17 +36,18 @@ def get_frame_center(filename=None, header=None, wcs=None, width=None, height=No
             width = header['NAXIS1']
             height = header['NAXIS2']
         elif shape is not None:
-            height,width = shape
+            height, width = shape
 
     if not wcs or not wcs.is_celestial:
         return None, None, None
 
-    ra1,dec1 = wcs.all_pix2world(0, 0, 0)
-    ra0,dec0 = wcs.all_pix2world(width/2, height/2, 0)
+    ra1, dec1 = wcs.all_pix2world(0, 0, 0)
+    ra0, dec0 = wcs.all_pix2world(width / 2, height / 2, 0)
 
     sr = spherical_distance(ra0, dec0, ra1, dec1)
 
     return ra0.item(), dec0.item(), sr.item()
+
 
 def get_pixscale(wcs=None, filename=None, header=None):
     '''
@@ -57,23 +61,30 @@ def get_pixscale(wcs=None, filename=None, header=None):
             header = fits.getheader(filename, -1)
             wcs = WCS(header=header)
 
-    return np.hypot(wcs.pixel_scale_matrix[0,0], wcs.pixel_scale_matrix[0,1])
+    return np.hypot(wcs.pixel_scale_matrix[0, 0], wcs.pixel_scale_matrix[0, 1])
+
 
 def radectoxyz(ra, dec):
-    ra_rad  = np.deg2rad(ra)
+    ra_rad = np.deg2rad(ra)
     dec_rad = np.deg2rad(dec)
-    xyz = np.array((np.cos(dec_rad)*np.cos(ra_rad),
-                    np.cos(dec_rad)*np.sin(ra_rad),
-                    np.sin(dec_rad)))
+    xyz = np.array(
+        (
+            np.cos(dec_rad) * np.cos(ra_rad),
+            np.cos(dec_rad) * np.sin(ra_rad),
+            np.sin(dec_rad),
+        )
+    )
 
     return xyz
 
+
 def xyztoradec(xyz):
     ra = np.arctan2(xyz[1], xyz[0])
-    ra += 2*np.pi * (ra < 0)
+    ra += 2 * np.pi * (ra < 0)
     dec = np.arcsin(xyz[2] / np.linalg.norm(xyz, axis=0))
 
     return (np.rad2deg(ra), np.rad2deg(dec))
+
 
 def spherical_distance(ra1, dec1, ra2, dec2):
     """Spherical distance.
@@ -86,17 +97,18 @@ def spherical_distance(ra1, dec1, ra2, dec2):
 
     """
 
-    x = np.sin(np.deg2rad((ra1 - ra2)/2))
-    x *= x;
-    y = np.sin(np.deg2rad((dec1 - dec2)/2))
-    y *= y;
+    x = np.sin(np.deg2rad((ra1 - ra2) / 2))
+    x *= x
+    y = np.sin(np.deg2rad((dec1 - dec2) / 2))
+    y *= y
 
-    z = np.cos(np.deg2rad((dec1 + dec2)/2))
-    z *= z;
+    z = np.cos(np.deg2rad((dec1 + dec2) / 2))
+    z *= z
 
-    return np.rad2deg(2*np.arcsin(np.sqrt(x*(z - y) + y)))
+    return np.rad2deg(2 * np.arcsin(np.sqrt(x * (z - y) + y)))
 
-def spherical_match(ra1, dec1, ra2, dec2, sr=1/3600):
+
+def spherical_match(ra1, dec1, ra2, dec2, sr=1 / 3600):
     """Positional match on the sphere for two lists of coordinates.
 
     Aimed to be a direct replacement for :func:`esutil.htm.HTM.match` method with :code:`maxmatch=0`.
@@ -116,11 +128,14 @@ def spherical_match(ra1, dec1, ra2, dec2, sr=1/3600):
     ra2 = np.atleast_1d(ra2)
     dec2 = np.atleast_1d(dec2)
 
-    idx1,idx2,dist,_ = search_around_sky(SkyCoord(ra1, dec1, unit='deg'), SkyCoord(ra2, dec2, unit='deg'), sr*u.deg)
+    idx1, idx2, dist, _ = search_around_sky(
+        SkyCoord(ra1, dec1, unit='deg'), SkyCoord(ra2, dec2, unit='deg'), sr * u.deg
+    )
 
-    dist = dist.deg # convert to degrees
+    dist = dist.deg  # convert to degrees
 
     return idx1, idx2, dist
+
 
 def get_objects_center(obj, col_ra='ra', col_dec='dec'):
     """
@@ -128,17 +143,34 @@ def get_objects_center(obj, col_ra='ra', col_dec='dec'):
     """
     xyz = radectoxyz(obj[col_ra], obj[col_dec])
     xyz0 = np.mean(xyz, axis=1)
-    ra0,dec0 = xyztoradec(xyz0)
+    ra0, dec0 = xyztoradec(xyz0)
 
     sr0 = np.max(spherical_distance(ra0, dec0, obj[col_ra], obj[col_dec]))
 
     return ra0, dec0, sr0
 
-def blind_match_objects(obj, order=2, update=False, sn=20, get_header=False,
-                        width=None, height=None,
-                        center_ra=None, center_dec=None, radius=None,
-                        scale_lower=None, scale_upper=None, scale_units='arcsecperpix',
-                        config=None, extra={}, _workdir=None, _tmpdir=None, _exe=None, verbose=False):
+
+def blind_match_objects(
+    obj,
+    order=2,
+    update=False,
+    sn=20,
+    get_header=False,
+    width=None,
+    height=None,
+    center_ra=None,
+    center_dec=None,
+    radius=None,
+    scale_lower=None,
+    scale_upper=None,
+    scale_units='arcsecperpix',
+    config=None,
+    extra={},
+    _workdir=None,
+    _tmpdir=None,
+    _exe=None,
+    verbose=False,
+):
 
     """Thin wrapper for blind plate solving using local Astrometry.Net and a list of detected objects.
 
@@ -171,7 +203,11 @@ def blind_match_objects(obj, order=2, update=False, sn=20, get_header=False,
     '''
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
     # Find the binary
     binname = None
@@ -185,7 +221,15 @@ def blind_match_objects(obj, order=2, update=False, sn=20, get_header=False,
         binname = shutil.which('solve-field')
 
         if binname is None:
-            for path in ['.', '/usr/bin', '/usr/local/bin', '/opt/local/bin', '/usr/astrometry/bin', '/usr/local/astrometry/bin', '/opt/local/astrometry/bin']:
+            for path in [
+                '.',
+                '/usr/bin',
+                '/usr/local/bin',
+                '/opt/local/bin',
+                '/usr/astrometry/bin',
+                '/usr/local/astrometry/bin',
+                '/opt/local/astrometry/bin',
+            ]:
                 for exe in ['solve-field']:
                     if os.path.isfile(os.path.join(path, exe)):
                         binname = os.path.join(path, exe)
@@ -202,18 +246,24 @@ def blind_match_objects(obj, order=2, update=False, sn=20, get_header=False,
 
     # Filter out least-significant detections, if SN limit is specified
     if sn is not None and sn > 0:
-        aidx = [_ for _ in aidx if obj['flux'][_]/obj['fluxerr'][_] > sn]
+        aidx = [_ for _ in aidx if obj['flux'][_] / obj['fluxerr'][_] > sn]
 
     if width is None:
         width = int(np.max(obj['x']))
     if height is None:
         height = int(np.max(obj['y']))
 
-    workdir = _workdir if _workdir is not None else tempfile.mkdtemp(prefix='astrometry', dir=_tmpdir)
+    workdir = (
+        _workdir
+        if _workdir is not None
+        else tempfile.mkdtemp(prefix='astrometry', dir=_tmpdir)
+    )
 
-    columns = [fits.Column(name='XIMAGE', format='1D', array=obj['x'][aidx] + 1),
-               fits.Column(name='YIMAGE', format='1D', array=obj['y'][aidx] + 1),
-               fits.Column(name='FLUX', format='1D', array=obj['flux'][aidx])]
+    columns = [
+        fits.Column(name='XIMAGE', format='1D', array=obj['x'][aidx] + 1),
+        fits.Column(name='YIMAGE', format='1D', array=obj['y'][aidx] + 1),
+        fits.Column(name='FLUX', format='1D', array=obj['flux'][aidx]),
+    ]
     tbhdu = fits.BinTableHDU.from_columns(columns)
     objname = os.path.join(workdir, 'list.fits')
     tbhdu.writeto(objname, overwrite=True)
@@ -273,7 +323,9 @@ def blind_match_objects(obj, order=2, update=False, sn=20, get_header=False,
         shutil.move(wcsname, tmpname)
 
         opts['verify'] = tmpname
-        command = binname + ' ' + shlex.quote(objname) + ' ' + utils.format_long_opts(opts)
+        command = (
+            binname + ' ' + shlex.quote(objname) + ' ' + utils.format_long_opts(opts)
+        )
         if not verbose:
             command += ' > /dev/null 2>/dev/null'
         log('Will run second iteration of Astrometry.Net like that:')
@@ -286,13 +338,16 @@ def blind_match_objects(obj, order=2, update=False, sn=20, get_header=False,
             header = fits.getheader(wcsname)
             wcs = WCS(header)
 
-            ra0,dec0,sr0 = get_frame_center(wcs=wcs, width=width, height=height)
+            ra0, dec0, sr0 = get_frame_center(wcs=wcs, width=width, height=height)
             pixscale = get_pixscale(wcs=wcs)
 
-            log('Got WCS solution with center at %.4f %.4f radius %.2f deg and pixel scale %.2f arcsec/pix' % (ra0, dec0, sr0, pixscale*3600))
+            log(
+                'Got WCS solution with center at %.4f %.4f radius %.2f deg and pixel scale %.2f arcsec/pix'
+                % (ra0, dec0, sr0, pixscale * 3600)
+            )
 
             if update and wcs:
-                obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
+                obj['ra'], obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
 
         else:
             log('Error %s running Astrometry.Net' % res)
@@ -305,11 +360,25 @@ def blind_match_objects(obj, order=2, update=False, sn=20, get_header=False,
 
     return wcs
 
-def blind_match_astrometrynet(obj, order=2, update=False, sn=20, get_header=False,
-                              width=None, height=None,
-                              solve_timeout=600, api_key=None,
-                              center_ra=None, center_dec=None, radius=None,
-                              scale_lower=None, scale_upper=None, scale_units='arcsecperpix', **kwargs):
+
+def blind_match_astrometrynet(
+    obj,
+    order=2,
+    update=False,
+    sn=20,
+    get_header=False,
+    width=None,
+    height=None,
+    solve_timeout=600,
+    api_key=None,
+    center_ra=None,
+    center_dec=None,
+    radius=None,
+    scale_lower=None,
+    scale_upper=None,
+    scale_units='arcsecperpix',
+    **kwargs
+):
 
     """Thin wrapper for remote plate solving using Astrometry.Net and a list of detected objects.
     Most of the parameters are passed directly to `astroquery.astrometrynet.AstrometryNet.solve_from_source_list` routine.
@@ -341,7 +410,7 @@ def blind_match_astrometrynet(obj, order=2, update=False, sn=20, get_header=Fals
 
     # Filter out least-significant detections, if SN limit is specified
     if sn is not None and sn > 0:
-        aidx = [_ for _ in aidx if obj['flux'][_]/obj['fluxerr'][_] > sn]
+        aidx = [_ for _ in aidx if obj['flux'][_] / obj['fluxerr'][_] > sn]
 
     if width is None:
         width = int(np.max(obj['x']))
@@ -353,12 +422,24 @@ def blind_match_astrometrynet(obj, order=2, update=False, sn=20, get_header=Fals
         an.api_key = api_key
 
     try:
-        header = an.solve_from_source_list(obj['x'][aidx] + 1, obj['y'][aidx] + 1, width, height,
-                                           center_ra=center_ra, center_dec=center_dec, radius=radius,
-                                           scale_lower=scale_lower, scale_upper=scale_upper, scale_units=scale_units,
-                                           solve_timeout=solve_timeout, tweak_order=order, **kwargs)
+        header = an.solve_from_source_list(
+            obj['x'][aidx] + 1,
+            obj['y'][aidx] + 1,
+            width,
+            height,
+            center_ra=center_ra,
+            center_dec=center_dec,
+            radius=radius,
+            scale_lower=scale_lower,
+            scale_upper=scale_upper,
+            scale_units=scale_units,
+            solve_timeout=solve_timeout,
+            tweak_order=order,
+            **kwargs
+        )
     except:
         import traceback
+
         traceback.print_exc()
 
         header = None
@@ -367,7 +448,7 @@ def blind_match_astrometrynet(obj, order=2, update=False, sn=20, get_header=Fals
         wcs = WCS(header)
 
         if update:
-            obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
+            obj['ra'], obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
 
         if get_header:
             return header
@@ -376,19 +457,36 @@ def blind_match_astrometrynet(obj, order=2, update=False, sn=20, get_header=Fals
 
     return None
 
-def refine_wcs(obj, cat, order=2, match=True, sr=3/3600, update=False,
-               cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
-               method='astropy', _tmpdir=None, verbose=False):
+
+def refine_wcs(
+    obj,
+    cat,
+    order=2,
+    match=True,
+    sr=3 / 3600,
+    update=False,
+    cat_col_ra='RAJ2000',
+    cat_col_dec='DEJ2000',
+    method='astropy',
+    _tmpdir=None,
+    verbose=False,
+):
     '''
     Refine the WCS using detected objects and catalogue.
     '''
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
     if match:
         # Perform simple nearest-neighbor matching within given radius
-        oidx,cidx,dist = spherical_match(obj['ra'], obj['dec'], cat[cat_col_ra], cat[cat_col_dec], sr)
+        oidx, cidx, dist = spherical_match(
+            obj['ra'], obj['dec'], cat[cat_col_ra], cat[cat_col_dec], sr
+        )
         _obj = obj[oidx]
         _cat = cat[cidx]
     else:
@@ -399,7 +497,11 @@ def refine_wcs(obj, cat, order=2, match=True, sr=3/3600, update=False,
     wcs = None
 
     if method == 'astropy':
-        wcs = fit_wcs_from_points([_obj['x'], _obj['y']], SkyCoord(_cat[cat_col_ra], _cat[cat_col_dec], unit='deg'), sip_degree=order)
+        wcs = fit_wcs_from_points(
+            [_obj['x'], _obj['y']],
+            SkyCoord(_cat[cat_col_ra], _cat[cat_col_dec], unit='deg'),
+            sip_degree=order,
+        )
     elif method == 'astrometrynet':
         binname = None
 
@@ -415,17 +517,26 @@ def refine_wcs(obj, cat, order=2, match=True, sr=3/3600, update=False,
         if binname:
             dirname = tempfile.mkdtemp(prefix='astrometry', dir=_tmpdir)
 
-            columns = [fits.Column(name='FIELD_X', format='1D', array=obj['x'] + 1),
-                       fits.Column(name='FIELD_Y', format='1D', array=obj['y'] + 1),
-                       fits.Column(name='INDEX_RA', format='1D', array=cat[cat_col_ra]),
-                       fits.Column(name='INDEX_DEC', format='1D', array=cat[cat_col_dec])]
+            columns = [
+                fits.Column(name='FIELD_X', format='1D', array=obj['x'] + 1),
+                fits.Column(name='FIELD_Y', format='1D', array=obj['y'] + 1),
+                fits.Column(name='INDEX_RA', format='1D', array=cat[cat_col_ra]),
+                fits.Column(name='INDEX_DEC', format='1D', array=cat[cat_col_dec]),
+            ]
             tbhdu = fits.BinTableHDU.from_columns(columns)
             filename = os.path.join(dirname, 'list.fits')
             wcsname = os.path.join(dirname, 'list.wcs')
 
             tbhdu.writeto(filename, overwrite=True)
 
-            command = "%s -c %s -o %s -W %d -H %d -C -s %d" % (binname, filename, wcsname, width, height, order)
+            command = "%s -c %s -o %s -W %d -H %d -C -s %d" % (
+                binname,
+                filename,
+                wcsname,
+                width,
+                height,
+                order,
+            )
 
             log('Running Astrometry.Net WCS fitter like that:')
             log(command)
@@ -448,13 +559,20 @@ def refine_wcs(obj, cat, order=2, match=True, sr=3/3600, update=False,
         if update:
             log('Updating object sky coordinates in-place')
             # Update the sky coordinates of objects using new wcs
-            obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
+            obj['ra'], obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
     else:
         log('WCS refinement failed')
 
     return wcs
 
-def clear_wcs(header, remove_comments=False, remove_history=False, remove_underscored=False, copy=False):
+
+def clear_wcs(
+    header,
+    remove_comments=False,
+    remove_history=False,
+    remove_underscored=False,
+    copy=False,
+):
     """Clears WCS related keywords from FITS header
 
     :param header: Header to operate on
@@ -468,9 +586,51 @@ def clear_wcs(header, remove_comments=False, remove_history=False, remove_unders
     if copy:
         header = header.copy()
 
-    wcs_keywords = ['WCSAXES', 'CRPIX1', 'CRPIX2', 'PC1_1', 'PC1_2', 'PC2_1', 'PC2_2', 'CDELT1', 'CDELT2', 'CUNIT1', 'CUNIT2', 'CTYPE1', 'CTYPE2', 'CRVAL1', 'CRVAL2', 'LONPOLE', 'LATPOLE', 'RADESYS', 'EQUINOX', 'B_ORDER', 'A_ORDER', 'BP_ORDER', 'AP_ORDER', 'CD1_1', 'CD2_1', 'CD1_2', 'CD2_2', 'IMAGEW', 'IMAGEH']
+    wcs_keywords = [
+        'WCSAXES',
+        'CRPIX1',
+        'CRPIX2',
+        'PC1_1',
+        'PC1_2',
+        'PC2_1',
+        'PC2_2',
+        'CDELT1',
+        'CDELT2',
+        'CUNIT1',
+        'CUNIT2',
+        'CTYPE1',
+        'CTYPE2',
+        'CRVAL1',
+        'CRVAL2',
+        'LONPOLE',
+        'LATPOLE',
+        'RADESYS',
+        'EQUINOX',
+        'B_ORDER',
+        'A_ORDER',
+        'BP_ORDER',
+        'AP_ORDER',
+        'CD1_1',
+        'CD2_1',
+        'CD1_2',
+        'CD2_2',
+        'IMAGEW',
+        'IMAGEH',
+    ]
 
-    scamp_keywords = ['FGROUPNO', 'ASTIRMS1', 'ASTIRMS2', 'ASTRRMS1', 'ASTRRMS2', 'ASTINST', 'FLXSCALE', 'MAGZEROP', 'PHOTIRMS', 'PHOTINST', 'PHOTLINK']
+    scamp_keywords = [
+        'FGROUPNO',
+        'ASTIRMS1',
+        'ASTIRMS2',
+        'ASTRRMS1',
+        'ASTRRMS2',
+        'ASTINST',
+        'FLXSCALE',
+        'MAGZEROP',
+        'PHOTIRMS',
+        'PHOTINST',
+        'PHOTLINK',
+    ]
 
     remove = []
 
@@ -503,11 +663,13 @@ def clear_wcs(header, remove_comments=False, remove_history=False, remove_unders
 
     return header
 
+
 def wcs_pv2sip(header, method='astrometrynet'):
     """
     TODO
     """
     pass
+
 
 def wcs_sip2pv(header):
     """
@@ -520,14 +682,15 @@ def wcs_sip2pv(header):
     if 'CD1_1' not in header and 'PC1_1' in header:
         cdelt = [header.get('CDELT1'), header.get('CDELT2')]
 
-        header['CD1_1'] = header.pop('PC1_1')*cdelt[0]
-        header['CD2_1'] = header.pop('PC2_1')*cdelt[0]
-        header['CD1_2'] = header.pop('PC1_2')*cdelt[0]
-        header['CD2_2'] = header.pop('PC2_2')*cdelt[0]
+        header['CD1_1'] = header.pop('PC1_1') * cdelt[0]
+        header['CD2_1'] = header.pop('PC2_1') * cdelt[0]
+        header['CD1_2'] = header.pop('PC1_2') * cdelt[0]
+        header['CD2_2'] = header.pop('PC2_2') * cdelt[0]
 
     sip_tpv.sip_to_pv(header)
 
     return header
+
 
 def table_to_ldac(table, header=None, writeto=None):
 
@@ -538,7 +701,9 @@ def table_to_ldac(table, header=None, writeto=None):
     # as astropy.io.fits tends to strip trailing whitespaces from string data, and it breaks at least SCAMP
     header_str += fits.Header().tostring(endcard=True)
 
-    header_col = fits.Column(name='Field Header Card', format='%dA' % len(header_str), array=[header_str])
+    header_col = fits.Column(
+        name='Field Header Card', format='%dA' % len(header_str), array=[header_str]
+    )
     header_hdu = fits.BinTableHDU.from_columns(fits.ColDefs([header_col]))
     header_hdu.header['EXTNAME'] = 'LDAC_IMHEAD'
 
@@ -552,13 +717,30 @@ def table_to_ldac(table, header=None, writeto=None):
 
     return hdulist
 
-def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
-                     cat_col_ra='RAJ2000', cat_col_dec='DEJ2000',
-                     cat_col_ra_err='e_RAJ2000', cat_col_dec_err='e_DEJ2000',
-                     cat_col_mag='rmag', cat_col_mag_err='e_rmag',
-                     cat_mag_lim=99, sn=None, extra={},
-                     get_header=False, update=False,
-                     _workdir=None, _tmpdir=None, _exe=None, verbose=False):
+
+def refine_wcs_scamp(
+    obj,
+    cat=None,
+    wcs=None,
+    header=None,
+    sr=2 / 3600,
+    order=3,
+    cat_col_ra='RAJ2000',
+    cat_col_dec='DEJ2000',
+    cat_col_ra_err='e_RAJ2000',
+    cat_col_dec_err='e_DEJ2000',
+    cat_col_mag='rmag',
+    cat_col_mag_err='e_rmag',
+    cat_mag_lim=99,
+    sn=None,
+    extra={},
+    get_header=False,
+    update=False,
+    _workdir=None,
+    _tmpdir=None,
+    _exe=None,
+    verbose=False,
+):
     """Wrapper for running SCAMP on user-provided object list and catalogue to get refined astrometric solution.
 
     :param obj: List of objects on the frame that should contain at least `x`, `y` and `flux` columns.
@@ -585,8 +767,12 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
     :returns: Refined astrometric solution, or FITS header if :code:`get_header=True`
     """
 
-     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    # Simple wrapper around print for logging in verbose mode only
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
     # Find the binary
     binname = None
@@ -608,11 +794,23 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
     # else:
     #     log("Using SCAMP binary at", binname)
 
-    workdir = _workdir if _workdir is not None else tempfile.mkdtemp(prefix='scamp', dir=_tmpdir)
+    workdir = (
+        _workdir
+        if _workdir is not None
+        else tempfile.mkdtemp(prefix='scamp', dir=_tmpdir)
+    )
 
     if header is None:
         # Construct minimal FITS header covering our data points
-        header = fits.Header({'NAXIS':2, 'NAXIS1':np.max(obj['x']+1), 'NAXIS2':np.max(obj['y'] + 1), 'BITPIX':-64, 'EQUINOX': 2000.0})
+        header = fits.Header(
+            {
+                'NAXIS': 2,
+                'NAXIS1': np.max(obj['x'] + 1),
+                'NAXIS2': np.max(obj['y'] + 1),
+                'BITPIX': -64,
+                'EQUINOX': 2000.0,
+            }
+        )
     else:
         header = header.copy()
 
@@ -642,33 +840,32 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
         'WRITE_XML': 'Y',
         'XML_NAME': xmlname,
         'PROJECTION_TYPE': 'TPV',
-        'CROSSID_RADIUS': sr*3600,
+        'CROSSID_RADIUS': sr * 3600,
         'DISTORT_DEGREES': max(1, order),
     }
 
     if sn is not None:
         if np.isscalar(sn):
-            opts['SN_THRESHOLDS'] = [sn, 10*sn]
+            opts['SN_THRESHOLDS'] = [sn, 10 * sn]
         else:
             opts['SN_THRESHOLDS'] = [sn[0], sn[1]]
 
     opts.update(extra)
 
     # Minimal LDAC table with objects
-    t_obj = Table(data={
-        'XWIN_IMAGE': obj['x'] + 1, # SCAMP uses 1-based coordinates
-        'YWIN_IMAGE': obj['y'] + 1,
-
-        'ERRAWIN_IMAGE': obj['xerr'],
-        'ERRBWIN_IMAGE': obj['yerr'],
-
-        'FLUX_AUTO': obj['flux'],
-        'FLUXERR_AUTO': obj['fluxerr'],
-        'MAG_AUTO': obj['mag'],
-        'MAGERR_AUTO': obj['magerr'],
-
-        'FLAGS': obj['flags'],
-    })
+    t_obj = Table(
+        data={
+            'XWIN_IMAGE': obj['x'] + 1,  # SCAMP uses 1-based coordinates
+            'YWIN_IMAGE': obj['y'] + 1,
+            'ERRAWIN_IMAGE': obj['xerr'],
+            'ERRBWIN_IMAGE': obj['yerr'],
+            'FLUX_AUTO': obj['flux'],
+            'FLUXERR_AUTO': obj['fluxerr'],
+            'MAG_AUTO': obj['mag'],
+            'MAGERR_AUTO': obj['magerr'],
+            'FLAGS': obj['flags'],
+        }
+    )
 
     objname = os.path.join(workdir, 'objects.cat')
     table_to_ldac(t_obj, header, objname)
@@ -685,18 +882,18 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
             log('Using', cat, 'as a network catalogue')
         else:
             # Match with user-provided catalogue
-            t_cat = Table(data={
-                'X_WORLD': cat[cat_col_ra],
-                'Y_WORLD': cat[cat_col_dec],
-
-                'ERRA_WORLD': utils.table_get(cat, cat_col_ra_err, 1/3600),
-                'ERRB_WORLD': utils.table_get(cat, cat_col_dec_err, 1/3600),
-
-                'MAG': utils.table_get(cat, cat_col_mag, 0),
-                'MAGERR': utils.table_get(cat, cat_col_mag_err, 0.01),
-                'OBSDATE': np.ones_like(cat[cat_col_ra])*2000.0,
-                'FLAGS': np.zeros_like(cat[cat_col_ra], dtype=int),
-            })
+            t_cat = Table(
+                data={
+                    'X_WORLD': cat[cat_col_ra],
+                    'Y_WORLD': cat[cat_col_dec],
+                    'ERRA_WORLD': utils.table_get(cat, cat_col_ra_err, 1 / 3600),
+                    'ERRB_WORLD': utils.table_get(cat, cat_col_dec_err, 1 / 3600),
+                    'MAG': utils.table_get(cat, cat_col_mag, 0),
+                    'MAGERR': utils.table_get(cat, cat_col_mag_err, 0.01),
+                    'OBSDATE': np.ones_like(cat[cat_col_ra]) * 2000.0,
+                    'FLAGS': np.zeros_like(cat[cat_col_ra], dtype=int),
+                }
+            )
 
             # Remove masked values
             for _ in t_cat.colnames:
@@ -712,7 +909,10 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
             if cat_mag_lim is not None:
                 if hasattr(cat_mag_lim, '__len__') and len(cat_mag_lim) == 2:
                     # Two elements provided, treat them as lower and upper limits
-                    t_cat = t_cat[(t_cat['MAG'] >= cat_mag_lim[0]) & (t_cat['MAG'] <= cat_mag_lim[1])]
+                    t_cat = t_cat[
+                        (t_cat['MAG'] >= cat_mag_lim[0])
+                        & (t_cat['MAG'] <= cat_mag_lim[1])
+                    ]
                 else:
                     # One element provided, treat it as upper limit
                     t_cat = t_cat[t_cat['MAG'] <= cat_mag_lim]
@@ -727,7 +927,9 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
         log('Using default settings for network catalogue')
 
     # Build the command line
-    command = binname + ' ' + shlex.quote(objname) + ' ' + utils.format_astromatic_opts(opts)
+    command = (
+        binname + ' ' + shlex.quote(objname) + ' ' + utils.format_astromatic_opts(opts)
+    )
     if not verbose:
         command += ' > /dev/null 2>/dev/null'
     log('Will run SCAMP like that:')
@@ -745,20 +947,33 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
         diag = Table.read(xmlname, table_id=0)[0]
         log('%d matches, chi2 %.1f' % (diag['NDeg_Reference'], diag['Chi2_Reference']))
         # FIXME: is df correct here?..
-        if diag['NDeg_Reference'] < 3 or chi2.sf(diag['Chi2_Reference'], df=diag['NDeg_Reference']) < 1e-3:
+        if (
+            diag['NDeg_Reference'] < 3
+            or chi2.sf(diag['Chi2_Reference'], df=diag['NDeg_Reference']) < 1e-3
+        ):
             log('It seems the fitting failed')
         else:
             with open(hdrname, 'r') as f:
-                h1 = fits.Header.fromstring(f.read().encode('ascii', 'ignore'), sep='\n')
+                h1 = fits.Header.fromstring(
+                    f.read().encode('ascii', 'ignore'), sep='\n'
+                )
 
                 # Sometimes SCAMP returns TAN type solution even despite PV keywords present
                 if h1['CTYPE1'] != 'RA---TPV' and 'PV1_0' in h1.keys():
-                    log('Got WCS solution with CTYPE1 =', h1['CTYPE1'], ' and PV keywords, fixing it')
+                    log(
+                        'Got WCS solution with CTYPE1 =',
+                        h1['CTYPE1'],
+                        ' and PV keywords, fixing it',
+                    )
                     h1['CTYPE1'] = 'RA---TPV'
                     h1['CTYPE2'] = 'DEC--TPV'
                 # .. while sometimes it does the opposite
                 elif h1['CTYPE1'] == 'RA---TPV' and 'PV1_0' not in h1.keys():
-                    log('Got WCS solution with CTYPE1 =', h1['CTYPE1'], ' and without PV keywords, fixing it')
+                    log(
+                        'Got WCS solution with CTYPE1 =',
+                        h1['CTYPE1'],
+                        ' and without PV keywords, fixing it',
+                    )
                     h1['CTYPE1'] = 'RA---TAN'
                     h1['CTYPE2'] = 'DEC--TAN'
                     h1 = WCS(h1).to_header(relax=True)
@@ -771,9 +986,12 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
                     wcs = WCS(h1)
 
                     if update:
-                        obj['ra'],obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
+                        obj['ra'], obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
 
-                    log('Astrometric accuracy: %.2f" %.2f"' % (h1.get('ASTRRMS1', 0)*3600, h1.get('ASTRRMS2', 0)*3600))
+                    log(
+                        'Astrometric accuracy: %.2f" %.2f"'
+                        % (h1.get('ASTRRMS1', 0) * 3600, h1.get('ASTRRMS2', 0) * 3600)
+                    )
 
     else:
         log('Error', res, 'running SCAMP')
@@ -783,6 +1001,7 @@ def refine_wcs_scamp(obj, cat=None, wcs=None, header=None, sr=2/3600, order=3,
         shutil.rmtree(workdir)
 
     return wcs
+
 
 def store_wcs(filename, wcs, overwrite=True):
     '''
@@ -798,6 +1017,7 @@ def store_wcs(filename, wcs, overwrite=True):
 
     hdu = fits.PrimaryHDU(header=wcs.to_header(relax=True))
     hdu.writeto(filename, overwrite=overwrite)
+
 
 def upscale_wcs(wcs, scale=2, will_rebin=False):
     """
@@ -823,28 +1043,28 @@ def upscale_wcs(wcs, scale=2, will_rebin=False):
             for i in range(0, whdr.get('A_ORDER', 0) + 1):
                 for j in range(0, whdr.get('A_ORDER', 0) + 1):
                     if 'A_%d_%d' % (i, j) in whdr:
-                        whdr['A_%d_%d' % (i, j)] /= scale**(i + j - 1)
+                        whdr['A_%d_%d' % (i, j)] /= scale ** (i + j - 1)
 
             for i in range(0, whdr.get('B_ORDER', 0) + 1):
                 for j in range(0, whdr.get('B_ORDER', 0) + 1):
                     if 'B_%d_%d' % (i, j) in whdr:
-                        whdr['B_%d_%d' % (i, j)] /= scale**(i + j - 1)
+                        whdr['B_%d_%d' % (i, j)] /= scale ** (i + j - 1)
 
             for i in range(0, whdr.get('AP_ORDER', 0) + 1):
                 for j in range(0, whdr.get('AP_ORDER', 0) + 1):
                     if 'AP_%d_%d' % (i, j) in whdr:
-                        whdr['AP_%d_%d' % (i, j)] /= scale**(i + j - 1)
+                        whdr['AP_%d_%d' % (i, j)] /= scale ** (i + j - 1)
 
             for i in range(0, whdr.get('BP_ORDER', 0) + 1):
                 for j in range(0, whdr.get('BP_ORDER', 0) + 1):
                     if 'BP_%d_%d' % (i, j) in whdr:
-                        whdr['BP_%d_%d' % (i, j)] /= scale**(i + j - 1)
+                        whdr['BP_%d_%d' % (i, j)] /= scale ** (i + j - 1)
 
         new = WCS(whdr)
 
         if will_rebin:
             # Switch from conserving pixel center position to pixel corner, so
             # that naive downscaling back will give the same image as original
-            new.wcs.crpix -= -0.5*scale + 0.5
+            new.wcs.crpix -= -0.5 * scale + 0.5
 
     return new

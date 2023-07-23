@@ -19,6 +19,7 @@ from scipy.ndimage.interpolation import shift
 from . import utils
 from . import astrometry
 
+
 def crop_image_centered(data, x0, y0, r0, header=None):
     """
     Crops the image to keep only the region with a given radius around the position.
@@ -31,10 +32,11 @@ def crop_image_centered(data, x0, y0, r0, header=None):
 
     # x1,x2 = int(np.floor(x0 - r0)), int(np.ceil(x0 + r0))
     # y1,y2 = int(np.floor(y0 - r0)), int(np.ceil(y0 + r0))
-    x1,x2 = int(np.round(x0) - np.ceil(r0)), int(np.round(x0) + np.ceil(r0))
-    y1,y2 = int(np.round(y0) - np.ceil(r0)), int(np.round(y0) + np.ceil(r0))
+    x1, x2 = int(np.round(x0) - np.ceil(r0)), int(np.round(x0) + np.ceil(r0))
+    y1, y2 = int(np.round(y0) - np.ceil(r0)), int(np.round(y0) + np.ceil(r0))
 
     return crop_image(data, x1, y1, x2 - x1 + 1, y2 - y1 + 1, header=header)
+
 
 def crop_image(data, x1, y1, width, height, header=None):
     """
@@ -46,18 +48,20 @@ def crop_image(data, x1, y1, width, height, header=None):
     x2 = x1 + width
     y2 = y1 + height
 
-    src = [min(max(y1, 0), data.shape[0]),
-           max(min(y2, data.shape[0]), 0),
-           min(max(x1, 0), data.shape[1]),
-           max(min(x2, data.shape[1]), 0)]
+    src = [
+        min(max(y1, 0), data.shape[0]),
+        max(min(y2, data.shape[0]), 0),
+        min(max(x1, 0), data.shape[1]),
+        max(min(x2, data.shape[1]), 0),
+    ]
 
     dst = [src[0] - y1, src[1] - y1, src[2] - x1, src[3] - x1]
 
-    sub = np.zeros((y2-y1, x2-x1), data.dtype)
+    sub = np.zeros((y2 - y1, x2 - x1), data.dtype)
     if isinstance(data[0][0], np.floating):
         # For floating-point we may use NaN as a filler value
         sub.fill(np.nan)
-    sub[dst[0]:dst[1], dst[2]:dst[3]] = data[src[0]:src[1], src[2]:src[3]]
+    sub[dst[0] : dst[1], dst[2] : dst[3]] = data[src[0] : src[1], src[2] : src[3]]
 
     if header is not None:
         subheader = header.copy()
@@ -82,7 +86,24 @@ def crop_image(data, x1, y1, width, height, header=None):
     else:
         return sub
 
-def get_cutout(image, candidate, radius, mask=None, background=None, diff=None, template=None, convolved=None, err=None, footprint=None, header=None, wcs=None, time=None, filename=None, name=None):
+
+def get_cutout(
+    image,
+    candidate,
+    radius,
+    mask=None,
+    background=None,
+    diff=None,
+    template=None,
+    convolved=None,
+    err=None,
+    footprint=None,
+    header=None,
+    wcs=None,
+    time=None,
+    filename=None,
+    name=None,
+):
     """Create the cutout from one or more image planes based on the candidate object.
 
     The object may be either a row from :class:`astropy.table.Table`, or a dictionary with at least
@@ -124,9 +145,9 @@ def get_cutout(image, candidate, radius, mask=None, background=None, diff=None, 
 
     _ = crop_image_centered(image, x0, y0, radius, header=header)
     if header is not None:
-        crop,crophead = _
+        crop, crophead = _
     else:
-        crop,crophead = _,None
+        crop, crophead = _, None
 
     cutout = {'image': crop, 'meta': {}}
 
@@ -175,10 +196,15 @@ def get_cutout(image, candidate, radius, mask=None, background=None, diff=None, 
 
     if name is not None:
         cutout['meta']['name'] = name
-    elif 'name' not in cutout['meta'] and 'ra' in cutout['meta'].keys() and 'dec' in cutout['meta'].keys():
+    elif (
+        'name' not in cutout['meta']
+        and 'ra' in cutout['meta'].keys()
+        and 'dec' in cutout['meta'].keys()
+    ):
         cutout['meta']['name'] = utils.make_jname(candidate['ra'], candidate['dec'])
 
     return cutout
+
 
 def write_cutout(cutout, filename):
     """Store the cutout as a multi-extension FITS file.
@@ -208,7 +234,19 @@ def write_cutout(cutout, filename):
 
         hdu.header[_] = data
 
-    for _ in ['x', 'y', 'ra', 'dec', 'mag', 'magerr', 'mag_calib', 'flags', 'id', 'time', 'filename']:
+    for _ in [
+        'x',
+        'y',
+        'ra',
+        'dec',
+        'mag',
+        'magerr',
+        'mag_calib',
+        'flags',
+        'id',
+        'time',
+        'filename',
+    ]:
         if _ in cutout:
             data = cutout[_]
             # Special handling for unsupported FITS types
@@ -220,7 +258,17 @@ def write_cutout(cutout, filename):
     hdus.append(hdu)
 
     # Store imaging data to named extensions
-    for _ in ['image', 'template', 'convolved', 'diff', 'adjusted', 'mask', 'err', 'background', 'footprint']:
+    for _ in [
+        'image',
+        'template',
+        'convolved',
+        'diff',
+        'adjusted',
+        'mask',
+        'err',
+        'background',
+        'footprint',
+    ]:
         if _ in cutout:
             data = cutout[_]
 
@@ -231,6 +279,7 @@ def write_cutout(cutout, filename):
             hdus.append(hdu)
 
     fits.HDUList(hdus).writeto(filename, overwrite=True)
+
 
 def load_cutout(filename):
     """Restore the cutout from multi-extension FITS file written by :func:`stdpipe.cutouts.write_cutout`.
@@ -265,7 +314,16 @@ def load_cutout(filename):
 
     return cutout
 
-def adjust_cutout(cutout, max_shift=2, max_scale=1.1, inner=None, normalize=False, fit_bg=False, verbose=False):
+
+def adjust_cutout(
+    cutout,
+    max_shift=2,
+    max_scale=1.1,
+    inner=None,
+    normalize=False,
+    fit_bg=False,
+    verbose=False,
+):
     """Try to apply some positional and scaling adjustment to the cutout in order to minimize the difference between the science image and the template.
 
     It will add one more image plane, `adjusted`, with the optimized difference between the original image and convolved template.
@@ -302,22 +360,30 @@ def adjust_cutout(cutout, max_shift=2, max_scale=1.1, inner=None, normalize=Fals
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
     mask = cutout['mask'] if 'mask' in cutout else ~np.isfinite(cutout['image'])
     imask = np.zeros_like(mask)
 
     # Rough estimation of backgrounds in the image and the template, using SExtractor-like mode estimation
     # bg = np.nanmedian(cutout['image'][~mask])
-    bg = 2.5*np.nanmedian(cutout['image'][~mask]) - 1.5*np.nanmean(cutout['image'][~mask])
+    bg = 2.5 * np.nanmedian(cutout['image'][~mask]) - 1.5 * np.nanmean(
+        cutout['image'][~mask]
+    )
     # tbg = np.nanmedian(cutout['convolved'][~mask])
-    tbg = 2.5*np.nanmedian(cutout['convolved'][~mask]) - 1.5*np.nanmean(cutout['convolved'][~mask])
+    tbg = 2.5 * np.nanmedian(cutout['convolved'][~mask]) - 1.5 * np.nanmean(
+        cutout['convolved'][~mask]
+    )
 
     if inner is not None and inner > 0:
         # Mask everything outside of a central box with given size
-        x,y = np.mgrid[0:mask.shape[1], 0:mask.shape[0]]
-        idx = np.abs(x - mask.shape[1]/2 + 0.5) > inner/2
-        idx |= np.abs(y - mask.shape[0]/2 + 0.5) > inner/2
+        x, y = np.mgrid[0 : mask.shape[1], 0 : mask.shape[0]]
+        idx = np.abs(x - mask.shape[1] / 2 + 0.5) > inner / 2
+        idx |= np.abs(y - mask.shape[0] / 2 + 0.5) > inner / 2
         imask[idx] = True
 
     # Prepare and cleanup the arrays we will use for fitting (as 'shift' does not like nans etc)
@@ -332,31 +398,58 @@ def adjust_cutout(cutout, max_shift=2, max_scale=1.1, inner=None, normalize=Fals
     def _fn(dx, get_df=False, get_diff=False):
         mask1 = mask | shift(mask, dx[:2], mode='reflect')
         imask1 = mask1 | imask
-        diff = image - dx[3] - shift(tmpl - dx[4], dx[:2], mode='reflect')*dx[2]
+        diff = image - dx[3] - shift(tmpl - dx[4], dx[:2], mode='reflect') * dx[2]
 
-        chi2_value = np.sum((diff[~imask1]/err[~imask1])**2) # Chi2
+        chi2_value = np.sum((diff[~imask1] / err[~imask1]) ** 2)  # Chi2
 
         if get_diff:
-            return diff,mask1,imask1
+            return diff, mask1, imask1
         elif get_df:
             return chi2_value, np.sum(~imask1)
         else:
             return chi2_value
 
     if fit_bg:
-        res = minimize(_fn, (0, 0, 1, bg, tbg), bounds=((-max_shift, max_shift), (-max_shift, max_shift), (1/max_scale, max_scale), (None, None), (None, None)), method='Powell', options={'disp':False})
+        res = minimize(
+            _fn,
+            (0, 0, 1, bg, tbg),
+            bounds=(
+                (-max_shift, max_shift),
+                (-max_shift, max_shift),
+                (1 / max_scale, max_scale),
+                (None, None),
+                (None, None),
+            ),
+            method='Powell',
+            options={'disp': False},
+        )
     else:
-        res = minimize(_fn, (0, 0, 1, bg, tbg), bounds=((-max_shift, max_shift), (-max_shift, max_shift), (1/max_scale, max_scale), (bg, bg), (tbg, tbg)), method='Powell', options={'disp':False})
+        res = minimize(
+            _fn,
+            (0, 0, 1, bg, tbg),
+            bounds=(
+                (-max_shift, max_shift),
+                (-max_shift, max_shift),
+                (1 / max_scale, max_scale),
+                (bg, bg),
+                (tbg, tbg),
+            ),
+            method='Powell',
+            options={'disp': False},
+        )
 
     log(res.message)
 
     if res.success:
-        log('Adjustment is: %.2f %.2f bg %.2g tbg %.2g scale %.2f' % (res.x[0], res.x[1], res.x[3], res.x[4], res.x[2]))
+        log(
+            'Adjustment is: %.2f %.2f bg %.2g tbg %.2g scale %.2f'
+            % (res.x[0], res.x[1], res.x[3], res.x[4], res.x[2])
+        )
         log('Chi2 improvement: %.2f -> %.2f' % (_fn([0, 0, 1, bg, tbg]), _fn(res.x)))
 
-        diff,mask1,_ = _fn(res.x, get_diff=True)
+        diff, mask1, _ = _fn(res.x, get_diff=True)
         chi2_0 = _fn([0, 0, 1, bg, tbg])
-        chi2_1,df = _fn(res.x, get_df=True)
+        chi2_1, df = _fn(res.x, get_df=True)
         log('Final Chi2: %.2f df: %d p-value: %.2g' % (chi2_1, df, chi2.sf(chi2_1, df)))
 
         # Keep the adjustment results in the metadata
@@ -372,7 +465,7 @@ def adjust_cutout(cutout, max_shift=2, max_scale=1.1, inner=None, normalize=Fals
 
         if normalize:
             diff[~mask1] /= err[~mask1]
-            diff[err>1e-30] /= err[err>1e-30]
+            diff[err > 1e-30] /= err[err > 1e-30]
 
         # diff[mask1] = 1e-30
 
@@ -383,6 +476,7 @@ def adjust_cutout(cutout, max_shift=2, max_scale=1.1, inner=None, normalize=Fals
 
     else:
         return False
+
 
 def downscale_image(image, scale=1, mode='sum', header=None):
     """
@@ -401,12 +495,11 @@ def downscale_image(image, scale=1, mode='sum', header=None):
     """
 
     # Crop the image if necessary
-    maxx = scale*(image.shape[1]//scale)
-    maxy = scale*(image.shape[0]//scale)
+    maxx = scale * (image.shape[1] // scale)
+    maxy = scale * (image.shape[0] // scale)
     image = image[:maxy, :maxx]
 
-    shape = (image.shape[0]//scale, scale,
-             image.shape[1]//scale, scale)
+    shape = (image.shape[0] // scale, scale, image.shape[1] // scale, scale)
 
     image1 = image.reshape(shape)
 

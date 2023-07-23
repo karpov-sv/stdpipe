@@ -7,12 +7,21 @@ import numpy as np
 
 from astropy.table import Table
 
+
 class DB:
     """
     Class encapsulating the connection to PostgreSQL database
     """
 
-    def __init__(self, dbname=None, dbhost=None, dbport=None, dbuser=None, dbpassword=None, readonly=False):
+    def __init__(
+        self,
+        dbname=None,
+        dbhost=None,
+        dbport=None,
+        dbuser=None,
+        dbpassword=None,
+        readonly=False,
+    ):
         connstring = ""
         if dbname is not None:
             connstring += "dbname=" + dbname
@@ -39,13 +48,17 @@ class DB:
         self.readonly = readonly
 
     def query(self, string="", data=(), table=True, simplify=True, verbose=False):
-        log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+        log = (
+            (verbose if callable(verbose) else print)
+            if verbose
+            else lambda *args, **kwargs: None
+        )
 
         if self.conn.closed:
             log("DB connection is closed, re-connecting")
             self.connect(self.connstring, self.readonly)
 
-        cur = self.conn.cursor(cursor_factory = psycopg2.extras.DictCursor)
+        cur = self.conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
         if verbose:
             log('Sending DB query:', cur.mogrify(string, data))
@@ -62,11 +75,18 @@ class DB:
                 # Code from astrolibpy, https://code.google.com/p/astrolibpy
                 strLength = 10
                 __pgTypeHash = {
-                    16:bool,18:str,20:'i8',21:'i2',23:'i4',25:'|S%d'%strLength,700:'f4',701:'f8',
-                    1042:'|S%d'%strLength,#character()
-                    1043:'|S%d'%strLength,#varchar
-                    1114:'|O',#datetime
-                    1700:'f8' #numeric
+                    16: bool,
+                    18: str,
+                    20: 'i8',
+                    21: 'i2',
+                    23: 'i4',
+                    25: '|S%d' % strLength,
+                    700: 'f4',
+                    701: 'f8',
+                    1042: '|S%d' % strLength,  # character()
+                    1043: '|S%d' % strLength,  # varchar
+                    1114: '|O',  # datetime
+                    1700: 'f8',  # numeric
                 }
 
                 desc = cur.description
@@ -76,7 +96,7 @@ class DB:
                 # table = np.recarray(shape=(cur.rowcount,), formats=formats, names=names)
                 table = np.recarray(shape=(cur.rowcount,), formats=formats, names=names)
 
-                for i,v in enumerate(result):
+                for i, v in enumerate(result):
                     table[i] = tuple(v)
 
                 table = Table(table)
@@ -93,6 +113,6 @@ class DB:
                 return result
         except:
             # Nothing returned from the query
-            #import traceback
-            #traceback.print_exc()
+            # import traceback
+            # traceback.print_exc()
             return None

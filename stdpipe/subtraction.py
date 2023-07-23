@@ -9,12 +9,32 @@ from astropy.table import Table
 
 from astropy.convolution import convolve, Gaussian2DKernel
 
-def run_hotpants(image, template, mask=None, template_mask=None, err=None, template_err=None,
-                 extra=None, image_fwhm=None, template_fwhm=None,
-                 image_gain=None, template_gain=1000, rel_r=3, rel_rss=4,
-                 obj=None,
-                 get_convolved=False, get_scaled=False, get_noise=False, get_kernel=False, get_header=False,
-                 _tmpdir=None, _workdir=None, _exe=None, verbose=False):
+
+def run_hotpants(
+    image,
+    template,
+    mask=None,
+    template_mask=None,
+    err=None,
+    template_err=None,
+    extra=None,
+    image_fwhm=None,
+    template_fwhm=None,
+    image_gain=None,
+    template_gain=1000,
+    rel_r=3,
+    rel_rss=4,
+    obj=None,
+    get_convolved=False,
+    get_scaled=False,
+    get_noise=False,
+    get_kernel=False,
+    get_header=False,
+    _tmpdir=None,
+    _workdir=None,
+    _exe=None,
+    verbose=False,
+):
     """Wrapper for running HOTPANTS to subtract a template from science image.
 
     To better understand the logic and available subtraction options you may check HOTPANTS documentation at https://github.com/acbecker/hotpants
@@ -55,7 +75,11 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, templ
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
 
     # Find the binary
     binname = None
@@ -87,23 +111,27 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, templ
     else:
         template_mask = template_mask | ~np.isfinite(template)
 
-    imin,imax = np.min(image[~mask]), np.max(image[~mask])
-    tmin,tmax = np.min(template[~template_mask]), np.max(template[~template_mask])
+    imin, imax = np.min(image[~mask]), np.max(image[~mask])
+    tmin, tmax = np.min(template[~template_mask]), np.max(template[~template_mask])
 
     # As HOTPANTS uses inclusive checks for high values, let's extend their range just a bit
-    imax += 0.01*(imax - imin)
-    tmax += 0.01*(tmax - tmin)
+    imax += 0.01 * (imax - imin)
+    tmax += 0.01 * (tmax - tmin)
 
     # Logic from https://arxiv.org/pdf/1608.01006.pdf
-    imin = np.median(image[~mask]) - 10*mad_std(image[~mask])
-    tmin = np.median(template[~template_mask]) - 10*mad_std(template[~template_mask])
+    imin = np.median(image[~mask]) - 10 * mad_std(image[~mask])
+    tmin = np.median(template[~template_mask]) - 10 * mad_std(template[~template_mask])
 
-    _nan = 1e-30 #
+    _nan = 1e-30  #
 
-    workdir = _workdir if _workdir is not None else tempfile.mkdtemp(prefix='hotpants', dir=_tmpdir)
+    workdir = (
+        _workdir
+        if _workdir is not None
+        else tempfile.mkdtemp(prefix='hotpants', dir=_tmpdir)
+    )
 
     image = image.copy()
-    image[~np.isfinite(image)] = np.nanmedian(image) # _nan
+    image[~np.isfinite(image)] = np.nanmedian(image)  # _nan
     # image[mask] = _nan
     imagename = os.path.join(workdir, 'image.fits')
     fits.writeto(imagename, image, overwrite=True)
@@ -111,7 +139,7 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, templ
     fits.writeto(imaskname, mask.astype(np.uint16), overwrite=True)
 
     template = template.copy()
-    template[~np.isfinite(template)] = np.nanmedian(template) # _nan
+    template[~np.isfinite(template)] = np.nanmedian(template)  # _nan
     # template[template_mask] = _nan
     templatename = os.path.join(workdir, 'template.fits')
     fits.writeto(templatename, template, overwrite=True)
@@ -127,36 +155,27 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, templ
         'tmplim': templatename,
         'outim': outname,
         'savexy': stampname,
-
         # Masks
         'imi': imaskname,
         'tmi': tmaskname,
-
         # Lower and upper valid values for image
         'il': imin,
         'iu': imax,
-
         # Lower and upper valid values for template
         'tl': tmin,
         'tu': tmax,
-        'tuk': tmax, # Limit used for kernel estimation, why not the same as 'tu'?..
-
+        'tuk': tmax,  # Limit used for kernel estimation, why not the same as 'tu'?..
         # Normalize result to input image
         'n': 'i',
-
         # Return all possible image planes as a result
         'allm': True,
-
         # Convolve template image
         'c': 't',
-
         # Add kernel info to the output
         'hki': True,
-
         # Disable positional variance of the kernel and background
         'ko': 0,
         'bgo': 0,
-
         'v': 2,
     }
 
@@ -166,9 +185,10 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, templ
             # err=True means that we should estimate the noise
             log('Building noise model from the image')
             import sep
+
             bg = sep.Background(image, mask)
             # image[mask] = bg.back()[mask]
-            err = bg.rms() # Background noise level
+            err = bg.rms()  # Background noise level
             # Noise should be estimated on smoothed image
             kernel = Gaussian2DKernel(1)
             smooth = image.copy()
@@ -178,7 +198,7 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, templ
             serr = np.abs((smooth - bg.back()))
             if image_gain is not None:
                 serr /= image_gain
-            err = np.sqrt(err**2 + serr) # Contribution from the sources
+            err = np.sqrt(err ** 2 + serr)  # Contribution from the sources
             # err[mask] = 1/_nan
 
             # image[mask|template_mask] = np.random.normal(0, bg.rms()[mask|template_mask])
@@ -194,8 +214,9 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, templ
             # err=True means that we should estimate the noise
             log('Building noise model from the template')
             import sep
+
             bg = sep.Background(template, template_mask)
-            template_err = bg.rms() # Background noise level
+            template_err = bg.rms()  # Background noise level
             # Noise should be estimated on smoothed image
             kernel = Gaussian2DKernel(1)
             smooth = template.copy()
@@ -205,7 +226,9 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, templ
             serr = np.abs((smooth - bg.back()))
             if template_gain is not None:
                 serr /= template_gain
-            template_err = np.sqrt(template_err**2 + serr) # Contribution from the sources
+            template_err = np.sqrt(
+                template_err ** 2 + serr
+            )  # Contribution from the sources
             # template_err[template_mask] = 1/_nan
 
             # template[mask|template_mask] = np.random.normal(0, bg.rms()[mask|template_mask])
@@ -219,9 +242,17 @@ def run_hotpants(image, template, mask=None, template_mask=None, err=None, templ
     if image_fwhm is not None and template_fwhm is not None:
         # Recommended logic for sigma_match
         if image_fwhm > template_fwhm:
-            sigma_match = np.sqrt(image_fwhm**2 - template_fwhm**2) / 2.35
+            sigma_match = np.sqrt(image_fwhm ** 2 - template_fwhm ** 2) / 2.35
             sigma_match = max(1.0, sigma_match)
-            params['ng'] = [3, 6, 0.5*sigma_match, 4, 1.0*sigma_match, 2, 2.0*sigma_match]
+            params['ng'] = [
+                3,
+                6,
+                0.5 * sigma_match,
+                4,
+                1.0 * sigma_match,
+                2,
+                2.0 * sigma_match,
+            ]
 
     if image_fwhm is not None:
         # Logic from https://arxiv.org/pdf/1608.01006.pdf suggests 2.5 and 6 here
