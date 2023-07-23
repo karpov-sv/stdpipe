@@ -49,7 +49,7 @@ class LCs:
 
             extend(self._params[key], kwargs[key], length)
 
-    def cluster(self, sr=1/3600, min_length=None, col_ra='ra', col_dec='dec', verbose=True):
+    def cluster(self, sr=1/3600, min_length=None, col_ra='ra', col_dec='dec', verbose=True, analyze=None, N=1000):
         """
         Spatially cluster the data vectors using ra/dec values stored in `col_ra` and `col_dec` vectors.
         """
@@ -74,7 +74,6 @@ class LCs:
             self._zarr = np.random.normal(self._zarr, 0.01/206265)
             self.kd = cKDTree(np.array([self._xarr, self._yarr, self._zarr]).T)
 
-
         def refine_pos(x, y, z):
             """Returns mean position for a list of individual positions"""
             x1,y1,z1 = [np.mean(_) for _ in [x, y, z]]
@@ -87,7 +86,7 @@ class LCs:
 
         vmask = np.zeros_like(self._params[col_ra], bool)
 
-        self.lcs = {'x':[], 'y':[], 'z':[], 'N':[]}
+        self.lcs = {'x':[], 'y':[], 'z':[], 'N':[], 'ids':[]}
 
         log('Starting spatial clustering of %d points with %.1f arcsec radius' % (len(vmask), sr*3600))
 
@@ -113,8 +112,17 @@ class LCs:
                         self.lcs['y'].append(y1)
                         self.lcs['z'].append(z1)
                         self.lcs['N'].append(len(ids))
+                        self.lcs['ids'].append(ids)
 
-            if i % 100 == 0 and verbose is not None:
+                        if analyze is not None and callable(analyze):
+                            ares = analyze(self, ids)
+
+                            for _,__ in ares.items():
+                                if _ not in self.lcs:
+                                    self.lcs[_] = []
+                                self.lcs[_].append(__)
+
+            if i % N == 0 and verbose is not None:
                 sys.stdout.write("\r %d points - %d lcs" % (i, len(self.lcs['x'])))
                 sys.stdout.flush()
 
