@@ -308,7 +308,13 @@ def load_cutout(filename):
         if 'header' not in cutout:
             cutout['header'] = hdu.header
 
-        cutout[hdu.name.lower()] = hdu.data
+        name = hdu.name.lower()
+
+        cutout[name] = hdu.data
+
+        # Special handling of mask plane
+        if name == 'mask':
+            cutout[name] = cutout[name].astype(bool)
 
     hdus.close()
 
