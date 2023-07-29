@@ -24,7 +24,7 @@ catalogs = {
     'gaiaedr3': {'vizier': 'I/350/gaiaedr3', 'name': 'Gaia EDR3'},
     'gaiadr3syn': {
         'vizier': 'I/360/syntphot',
-        'name': 'Gaia EDR3',
+        'name': 'Gaia DR3 synthetic photometry',
         'extra': ['**', '_RAJ2000', '_DEJ2000'],
     },
     'usnob1': {'vizier': 'I/284/out', 'name': 'USNO-B1'},
