@@ -502,17 +502,20 @@ def get_cat_vizier(
                 2.5 / np.log(10) * cat['e_F' + name] / cat['F' + name]
             )
 
-        # umag, gmag, rmag, imag and zmag are Sloan ugriz magnitudes! Let's get PS1 ones too
+        # umag, gmag, rmag, imag and zmag are Sloan ugriz magnitudes! Let's get PS1 ones instead
         # Fits are based on clean Landolt sample from https://arxiv.org/pdf/1203.0297.pdf
         pg = [-0.030414391501015867, -0.09960002492299584, -0.002910024005294562]
         pr = [-0.009566553708653305, 0.014924591443344211, -0.003928147919030857]
         pi = [-0.010802807724098494, 0.01124900218746879, 0.01274293783734852]
         pz = [-0.0031896767661109523, 0.06537983414287968, 0.007695587806229381]
 
-        cat['g_ps1'] = cat['gmag'] + np.polyval(pg, cat['gmag'] - cat['rmag'])
-        cat['r_ps1'] = cat['rmag'] + np.polyval(pr, cat['gmag'] - cat['rmag'])
-        cat['i_ps1'] = cat['imag'] + np.polyval(pi, cat['gmag'] - cat['rmag'])
-        cat['z_ps1'] = cat['zmag'] + np.polyval(pz, cat['gmag'] - cat['rmag'])
+        for _ in ['u', 'g', 'r', 'i', 'z']:
+            cat[_ + '_SDSS'] = cat[_ + 'mag']
+
+        cat['gmag'] = cat['g_SDSS'] + np.polyval(pg, cat['g_SDSS'] - cat['r_SDSS'])
+        cat['rmag'] = cat['r_SDSS'] + np.polyval(pr, cat['g_SDSS'] - cat['r_SDSS'])
+        cat['imag'] = cat['i_SDSS'] + np.polyval(pi, cat['g_SDSS'] - cat['r_SDSS'])
+        cat['zmag'] = cat['z_SDSS'] + np.polyval(pz, cat['g_SDSS'] - cat['r_SDSS'])
 
     return cat
 
