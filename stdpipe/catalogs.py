@@ -158,7 +158,8 @@ def get_cat_vizier(
     ):
         cat.rename_columns(['_RAJ2000', '_DEJ2000'], ['RAJ2000', 'DEJ2000'])
 
-    if get_distance:
+    if get_distance and 'RAJ2000' in cat.colnames and 'DEJ2000' in cat.colnames:
+        log("Augmenting the catalogue with distances from field center")
         cat['_r'] = astrometry.spherical_distance(ra0, dec0, cat['RAJ2000'], cat['DEJ2000'])
 
     # Augment catalogue with additional bandpasses
@@ -169,6 +170,8 @@ def get_cat_vizier(
         # cat['V'] = cat['gmag'] - 0.020 - 0.498*(cat['gmag'] - cat['rmag']) - 0.008*(cat['gmag'] - cat['rmag'])**2
         # cat['R'] = cat['rmag'] - 0.163 - 0.086*(cat['gmag'] - cat['rmag']) - 0.061*(cat['gmag'] - cat['rmag'])**2
         # cat['I'] = cat['imag'] - 0.387 - 0.123*(cat['gmag'] - cat['rmag']) - 0.034*(cat['gmag'] - cat['rmag'])**2
+
+        log("Augmenting the catalogue with Johnson-Cousins photometry")
 
         # My own fit on Landolt+Stetson standards from https://arxiv.org/pdf/2205.06186.pdf
         pB1, pB2 = (
@@ -290,6 +293,8 @@ def get_cat_vizier(
         cat['z_SDSS'] = cat['zmag']
 
     elif catalog == 'gaiadr2':
+        log("Augmenting the catalogue with Johnson-Cousins photometry")
+
         # My simple Gaia DR2 to Johnson conversion based on Stetson standards
         pB = [
             -0.05927724559795761,
@@ -385,6 +390,8 @@ def get_cat_vizier(
             cat[_ + 'mag'] = cat[_ + 'PSF']
             cat['e_' + _ + 'mag'] = cat['e_' + _ + 'PSF']
 
+        log("Augmenting the catalogue with Johnson-Cousins photometry")
+
         # Johnson-Cousins, copy from PS1 above
         pB1, pB2 = (
             [
@@ -474,6 +481,8 @@ def get_cat_vizier(
             cat[_] = cat[_ + 'mag']
 
     elif catalog == 'apass':
+        log("Augmenting the catalogue with Cousins R and I photometry")
+
         # My own fit based on Landolt standards
         cat['Rmag'] = (
             cat['r_mag']
@@ -501,6 +510,8 @@ def get_cat_vizier(
             cat['e_' + name + 'mag'] = (
                 2.5 / np.log(10) * cat['e_F' + name] / cat['F' + name]
             )
+
+        log("Converting the catalogue Sloan magnitudes to Pan-STARRS ones")
 
         # umag, gmag, rmag, imag and zmag are Sloan ugriz magnitudes! Let's get PS1 ones instead
         # Fits are based on clean Landolt sample from https://arxiv.org/pdf/1203.0297.pdf
