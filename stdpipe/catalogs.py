@@ -141,7 +141,7 @@ def get_cat_vizier(
         )
 
         if not cats or not len(cats) == 1:
-            print('Error requesting catalogue', catalog)
+            log('Error requesting catalogue', catalog)
             return None
 
     cat = cats[0]

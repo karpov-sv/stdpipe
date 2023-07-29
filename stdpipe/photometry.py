@@ -267,7 +267,7 @@ def get_objects_sep(
         ra, dec = np.zeros_like(obj0['x'][idx]), np.zeros_like(obj0['y'][idx])
 
     if verbose:
-        print("All done")
+        log("All done")
 
     obj = Table(
         {
