@@ -69,7 +69,7 @@ catalogs = {
 
 
 def get_cat_vizier(
-    ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}, extra=[], verbose=False
+    ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}, extra=[], get_distance=False, verbose=False
 ):
     """Download any catalogue from Vizier.
 
@@ -94,6 +94,7 @@ def get_cat_vizier(
     :param limit: Limit for the number of returned rows, optional
     :param filters: Dictionary with column filters to be applied on Vizier side. Dictionary key is the column name, value - filter expression as documented at https://vizier.u-strasbg.fr/vizier/vizHelp/cst.htx
     :param extra: List of extra column names to return in addition to default ones.
+    :param get_distance: If set, the distance from the field center will be returned in `_r` column.
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
     :returns: astropy.table.Table with catalogue as returned by Vizier, with some additional columns added for supported catalogues.
     """
@@ -156,6 +157,9 @@ def get_cat_vizier(
         and not 'RAJ2000' in cat.keys()
     ):
         cat.rename_columns(['_RAJ2000', '_DEJ2000'], ['RAJ2000', 'DEJ2000'])
+
+    if get_distance:
+        cat['_r'] = astrometry.spherical_distance(ra0, dec0, cat['RAJ2000'], cat['DEJ2000'])
 
     # Augment catalogue with additional bandpasses
 
