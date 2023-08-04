@@ -394,7 +394,12 @@ def get_objects_sextractor(
     )
     obj = None
 
-    if mask_to_nans and mask is not None:
+    if mask is None:
+        # Create minimal mask
+        mask = ~np.isfinite(image)
+
+    if mask_to_nans:
+        image = image.copy()
         image[mask] = np.nan
 
     # Prepare
@@ -417,18 +422,11 @@ def get_objects_sextractor(
         'DETECT_THRESH': thresh,
         'WEIGHT_TYPE': 'BACKGROUND',
         'MASK_TYPE': 'NONE',  # both 'CORRECT' and 'BLANK' seem to cause systematics?
-        'SATUR_LEVEL': (np.nanmax(image) + 1)
-        if mask is None
-        else (
-            np.nanmax(image[~mask]) + 1
-        ),  # Saturation should be handled in external mask
+        'SATUR_LEVEL': np.nanmax(image[~mask]) + 1 # Saturation should be handled in external mask
     }
 
     if bg_size is not None:
         opts['BACK_SIZE'] = bg_size
-
-    if mask is None:
-        mask = np.zeros_like(image, dtype=bool)
 
     if err is not None:
         # User-provided noise model

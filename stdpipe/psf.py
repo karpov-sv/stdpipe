@@ -28,6 +28,7 @@ def run_psfex(
     checkimages=[],
     extra={},
     psffile=None,
+    get_obj=False,
     _workdir=None,
     _tmpdir=None,
     _exe=None,
@@ -51,6 +52,7 @@ def run_psfex(
     :param checkimages: List of PSFEx checkimages to return along with PSF model. Optional.
     :param extra: Dictionary of extra configuration parameters to be passed to PSFEx call, with keys as parameter names. See :code:`psfex -dd` for the full list.
     :param psffile: If specified, PSF model file will also be stored under this file name, so that it may e.g. be re-used by SExtractor later. Optional
+    :param get_obj: If set, also return the table with SExtractor detected objects.
     :param _workdir: If specified, all temporary files will be created in this directory, and will be kept intact after running SExtractor and PSFEx. May be used for debugging exact inputs and outputs of the executable. Optional
     :param _tmpdir: If specified, all temporary files will be created in a dedicated directory (that will be deleted after running the executable) inside this path.
     :param _exe: Full path to PSFEx executable. If not provided, the code tries to locate it automatically in your :envvar:`PATH`.
@@ -193,6 +195,12 @@ def run_psfex(
         for name in checknames:
             checkname = os.path.splitext(name)[0] + '_out.fits'
             result.append(fits.getdata(checkname))
+
+    if get_obj:
+        if type(result) != list:
+            result = [result]
+
+        result.append(obj)
 
     if _workdir is None:
         shutil.rmtree(workdir)
