@@ -620,127 +620,134 @@ def place_random_stars(
 
 
 def split_sub_fn(
-    image,
     x1,
     y1,
     dx1,
     dy1,
-    nx=1,
-    ny=None,
-    mask=None,
-    bg=None,
-    err=None,
-    header=None,
-    wcs=None,
-    obj=None,
-    cat=None,
+    *args,
     get_origin=False,
+    **kwargs
 ):
     """
     """
-    _ = cutouts.crop_image(image.astype(np.double), x1, y1, dx1, dy1, header=header)
-    if header:
-        image1, header1 = _
-    else:
-        image1, header1 = _, None
-
     result = []
 
     if get_origin:
         result += [x1, y1]
 
-    result += [image1]
+    # Let's find WCS as we may need it later for converting sky coordinates
+    wcs = None
+    for arg in args + tuple(kwargs.values()):
+        if isinstance(arg, WCS):
+            wcs = arg
+            break
 
-    if mask is not None:
-        result += [cutouts.crop_image(mask, x1, y1, dx1, dy1)]
+    def handle_arg_fn(arg):
+        if isinstance(arg, np.ndarray):
+            # Image
+            return cutouts.crop_image(arg, x1, y1, dx1, dy1)
 
-    if bg is not None:
-        result += [cutouts.crop_image(bg, x1, y1, dx1, dy1)]
+        if isinstance(arg, fits.Header):
+            # FITS header
+            subheader = arg.copy()
+            subheader['NAXIS1'] = dx1
+            subheader['NAXIS2'] = dy1
 
-    if err is not None:
-        result += [cutouts.crop_image(err, x1, y1, dx1, dy1)]
+            # Adjust the WCS keywords if present
+            if 'CRPIX1' in subheader and 'CRPIX2' in subheader:
+                subheader['CRPIX1'] -= x1
+                subheader['CRPIX2'] -= y1
 
-    if header1 is not None:
-        result += [header1]
+            # Crop position inside original frame
+            subheader['CROP_X1'] = x1
+            subheader['CROP_X2'] = x1 + dx1
+            subheader['CROP_Y1'] = y1
+            subheader['CROP_Y2'] = y1 + dy1
 
-    if wcs is not None:
-        wcs1 = wcs.deepcopy()
-        # FIXME: is there any more 'official' way of shifting the WCS?
-        wcs1.wcs.crpix[0] -= x1
-        wcs1.wcs.crpix[1] -= y1
+            return subheader
 
-        wcs1 = WCS(wcs1.to_header(relax=True))
+        if isinstance(arg, WCS):
+            # WCS
+            wcs1 = arg.deepcopy()
+            # FIXME: is there any more 'official' way of shifting the WCS?
+            wcs1.wcs.crpix[0] -= x1
+            wcs1.wcs.crpix[1] -= y1
 
-        result += [wcs1]
+            wcs1 = WCS(wcs1.to_header(relax=True))
+            return wcs1
 
-    if obj is not None:
-        oidx = (
-            (obj['x'] > x1)
-            & (obj['x'] < x1 + dx1)
-            & (obj['y'] > y1)
-            & (obj['y'] < y1 + dy1)
-        )
-        obj1 = obj[oidx].copy()
-        obj1['x'] -= x1
-        obj1['y'] -= y1
-        result += [obj1]
+        if isinstance(arg, Table):
+            # Table
+            table = arg.copy()
 
-    if cat is not None and wcs is not None:
-        cx, cy = wcs.all_world2pix(cat['RAJ2000'], cat['DEJ2000'], 0)
-        cidx = (cx >= x1) & (cx < x1 + dx1) & (cy >= y1) & (cy < y1 + dy1)
-        result += [cat[cidx].copy()]
+            x, y = None, None
+
+            if 'x' in table.colnames and 'y' in table.colnames:
+                x, y = table['x'].copy(), table['y'].copy()
+                table['x'] -= x1
+                table['y'] -= y1
+            elif 'ra' in table.colnames and 'dec' in table.colnames and wcs is not None:
+                x, y = wcs.all_world2pix(table['ra'], table['dec'], 0)
+            elif 'RAJ2000' in table.colnames and 'DEJ2000' in table.colnames and wcs is not None:
+                x, y = wcs.all_world2pix(table['RAJ2000'], table['DEJ2000'], 0)
+
+            if x is not None:
+                idx = (x > x1) & (x < x1 + dx1)
+                idx &= (y > y1) & (y < y1 + dy1)
+            else:
+                idx = np.ones(len(table), dtype=bool)
+
+            return arg[idx]
+
+        return None
+
+    for arg in args + tuple(kwargs.values()):
+        result.append(handle_arg_fn(arg))
 
     return result
 
 
 def split_image(
     image,
+    *args,
     nx=1,
     ny=None,
-    mask=None,
-    bg=None,
-    err=None,
-    header=None,
-    wcs=None,
-    obj=None,
-    cat=None,
     overlap=0,
     get_index=False,
     get_origin=False,
     verbose=False,
+    **kwargs
 ):
     """
-    Generator function to split the image into several (`nx` x `ny`) blocks, while also optionally providing the mask, header, wcs, object list etc for the sub-blocks.
-    The blocks may optionally be extended by 'overlap' pixels in all directions, so that at least in some sub-images every part of original image is far from the edge. This parameter may be used e.g. in conjunction with `edge` parameter of :func:`stdpipe.photometry.get_objects_sextractor` to avoid detecting the same object twice.
+    Generator function to split the image into several (`nx` x `ny`) blocks, while also
+    optionally providing the subsets of images, FITS headers, WCS solutions, catalogues
+    or object lists for the sub-blocks. FITS headers and WCS solutions will be adjusted
+    to properly reflect the astrometry in the sub-image. Tables will be sub-setted to only
+    include the rows that are inside the sub-image, according to their `x` and `y`, or
+    `ra` and `dec`, or `RAJ2000` and `DEJ2000` columns.
+
+    The blocks may optionally be extended by 'overlap' pixels in all directions, so that
+    at least in some sub-images every part of original image is far from the edge. This
+    parameter may be used e.g. in conjunction with `edge` parameter of
+    :func:`stdpipe.photometry.get_objects_sextractor` to avoid detecting the same object twice.
 
     :param image: Image to split
+    :param *args: Set of additional images, headers, WCS solutions, or tables to split
     :param nx: Number of sub-images in `x` direction
     :param ny: Number of sub-images in `y` direction
-    :param mask: Mask image to split, optional
-    :param bg: Background map to split, optional
-    :param err: Noise model image to split, optional
-    :param header: Image header, optional. If set, the header corresponding to splitted sub-image will be returned, with correctly adjusted WCS information
-    :param wcs: WCS solution for the image, optional. If set, the solution for sub-image will be returned
-    :param obj: Object list, optional. If provided, the list of objects contained in the sub-image, with accordingly adjusted pixel coordinates, will be returned
-    :param cat: Reference catalogue, optional. If provided, the catalogue for the stars on the sub-image will be returned
     :param overlap: If set, defines how much sub-images will overlap, in pixels.
     :param get_index: If set, also returns the number of current sub-image, starting from zero
     :param get_origin: If set, also return the sub-image origin pixel coordinates
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
+    :param **kwargs: Set of images, headers, WCS solutions, or tables to split
     :returns: Every concesutive call to the generator will return the list of cropped objects corresponding to the next sub-image, as well as some sub-image metadata.
 
     The returned list is constructed from the following elements:
 
     - Index of current sub-image, if :code:`get_index=True`
     - `x` and `y` coordinates of current sub-image origin inside the original image
-    - Current sub-image
-    - Cropped mask corresponding to current sub-image, if `mask` is provided
-    - Cropped background map, if `bg` is provided
-    - Cropped noise model, if `err` is provided
-    - FITS header corresponding to the sub-image with correct astrometric solution for it, if `header` is provided
-    - WCS astrometric solution for the sub-image, if `wcs` is provided
-    - Object list containing only objects that are inside the sub-image with their pixel coordinates adjusted correspondingly, if `obj` is set
-    - Reference catalogue containing only stars overlaying the sub-image, if `cat` is provided and `wcs` is set
+    - Cropped image
+    - Cropped additional images, headers, WCS objects or tables in the order of their appearance in the arguments
 
     """
 
@@ -753,6 +760,12 @@ def split_image(
 
     if not ny:
         ny = nx
+
+    # Find the first image to use its dimensions later
+    for arg in args + tuple(kwargs.values()):
+        if isinstance(arg, np.ndarray):
+            image = arg
+            break
 
     dx, dy = int(np.floor(image.shape[1] / nx)), int(np.floor(image.shape[0] / ny))
 
@@ -773,19 +786,14 @@ def split_image(
         dy1 = min(y0 - y1 + dy + overlap, image.shape[0] - y1)
 
         result = split_sub_fn(
-            image,
             x1,
             y1,
             dx1,
             dy1,
-            mask=mask,
-            bg=bg,
-            err=err,
-            header=header,
-            wcs=wcs,
-            obj=obj,
-            cat=cat,
+            image,
+            *args,
             get_origin=get_origin,
+            **kwargs
         )
 
         if get_index:
@@ -798,54 +806,41 @@ def split_image(
 
 def get_subimage_centered(
     image,
-    x0,
-    y0,
-    width,
+    *args,
+    x0=None,
+    y0=None,
+    width=None,
     height=None,
-    mask=None,
-    bg=None,
-    err=None,
-    header=None,
-    wcs=None,
-    obj=None,
-    cat=None,
     get_origin=False,
     verbose=False,
+    **kwargs
 ):
     """
     Convenience function for getting the cropped sub-image centered at a given pixel position,
     while also optionally providing the mask, header, wcs, object list etc for it.
     Its behaviour and arguments are mostly identical to the ones of :func:`stdpipe.pipeline.split_image`.
 
-    In contrast to :func:`stdpipe.utils.crop_image_centered` it accepts output width and height as parameters. These will correspond to the size of the output if it is completely inside the original image; if not - they will be correspondingly smaller (i.e. it does not pad the data to keep requested position exactly at the center).
+    In contrast to :func:`stdpipe.utils.crop_image_centered` it accepts output width and height as parameters.
+    These will correspond to the size of the output if it is completely inside the original image;
+    if not - they will be correspondingly smaller (i.e. it does not pad the data to keep requested
+    position exactly at the center).
 
     :param image: Image to crop
+    :param *args: Set of images, headers, WCS solutions, or tables to split
     :param x0: Pixel `x` coordinate of the cropped image center in the original image
     :param y0: Pixel `y` coordinate of the cropped image center in the original image
     :param width: Pixel width of the sub-image
     :param height: Pixel height of the sub-image, optional. If not provided, assumed to be equal to `width`
-    :param mask: Mask image to crop, optional
-    :param bg: Background map to crop, optional
-    :param err: Noise model image to crop, optional
-    :param header: Image header, optional. If set, the header corresponding to cropped sub-image will be returned, with correctly adjusted WCS information
-    :param wcs: WCS solution for the image, optional. If set, the solution for sub-image will be returned
-    :param obj: Object list, optional. If provided, the list of objects contained in the sub-image, with accordingly adjusted pixel coordinates, will be returned
-    :param cat: Reference catalogue, optional. If provided, the catalogue for the stars on the sub-image will be returned
     :param get_origin: If set, also return the sub-image origin pixel coordinates
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
+    :param **kwargs: Set of images, headers, WCS solutions, or tables to split
     :returns: list of cropped objects corresponding to the sub-image, as well as some sub-image metadata.
 
     The returned list is constructed from the following elements:
 
-    - `x` and `y` coordinates of the sub-image origin inside the original image
-    -sub-image
-    - Cropped mask corresponding to the sub-image, if `mask` is provided
-    - Cropped background map, if `bg` is provided
-    - Cropped noise model, if `err` is provided
-    - FITS header corresponding to the sub-image with correct astrometric solution for it, if `header` is provided
-    - WCS astrometric solution for the sub-image, if `wcs` is provided
-    - Object list containing only objects that are inside the sub-image with their pixel coordinates adjusted correspondingly, if `obj` is set
-    - Reference catalogue containing only stars overlaying the sub-image, if `cat` is provided and `wcs` is set
+    - `x` and `y` coordinates of current sub-image origin inside the original image
+    - Cropped image
+    - Cropped images, headers, WCS objects or tables in the order of their appearance in the arguments
 
     """
 
@@ -874,19 +869,14 @@ def get_subimage_centered(
     )
 
     result = split_sub_fn(
-        image,
         x1,
         y1,
         x2 - x1 + 1,
         y2 - y1 + 1,
-        mask=mask,
-        bg=bg,
-        err=err,
-        header=header,
-        wcs=wcs,
-        obj=obj,
-        cat=cat,
+        image,
+        *args,
         get_origin=get_origin,
+        **kwargs
     )
 
     return result
