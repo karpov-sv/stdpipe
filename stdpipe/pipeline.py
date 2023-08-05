@@ -761,12 +761,6 @@ def split_image(
     if not ny:
         ny = nx
 
-    # Find the first image to use its dimensions later
-    for arg in args + tuple(kwargs.values()):
-        if isinstance(arg, np.ndarray):
-            image = arg
-            break
-
     dx, dy = int(np.floor(image.shape[1] / nx)), int(np.floor(image.shape[0] / ny))
 
     log(
@@ -826,7 +820,7 @@ def get_subimage_centered(
     position exactly at the center).
 
     :param image: Image to crop
-    :param *args: Set of images, headers, WCS solutions, or tables to split
+    :param *args: Set of additional images, headers, WCS solutions, or tables to split
     :param x0: Pixel `x` coordinate of the cropped image center in the original image
     :param y0: Pixel `y` coordinate of the cropped image center in the original image
     :param width: Pixel width of the sub-image
@@ -840,7 +834,7 @@ def get_subimage_centered(
 
     - `x` and `y` coordinates of current sub-image origin inside the original image
     - Cropped image
-    - Cropped images, headers, WCS objects or tables in the order of their appearance in the arguments
+    - Cropped additional images, headers, WCS objects or tables in the order of their appearance in the arguments
 
     """
 
