@@ -10,6 +10,8 @@ import numpy as np
 from astropy.io import fits
 from astropy.table import Table
 
+from scipy import ndimage
+
 from . import photometry
 from . import utils
 
@@ -381,7 +383,8 @@ def get_psf_stamp(psf, x=0, y=0, dx=None, dy=None, normalize=True):
     y1 = ssy0 + (y - y0) / psf['sampling']
 
     # FIXME: it should really be Lanczos interpolation here!
-    stamp = bilinear_interpolate(supersampled, x1, y1) / psf['sampling'] ** 2
+    # stamp = bilinear_interpolate(supersampled, x1, y1) / psf['sampling'] ** 2
+    stamp = ndimage.map_coordinates(supersampled, [y1, x1], order=3) / psf['sampling'] ** 2
 
     if normalize:
         stamp /= np.sum(stamp)
