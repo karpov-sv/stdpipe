@@ -13,6 +13,7 @@ from astropy import units as u
 import sip_tpv
 
 from scipy.stats import chi2
+from scipy.spatial import KDTree
 
 from . import utils
 
@@ -137,6 +138,31 @@ def spherical_match(ra1, dec1, ra2, dec2, sr=1 / 3600):
     return idx1, idx2, dist
 
 
+def planar_match(x1, y1, x2, y2, sr = 1):
+    """Positional match on the plane for two lists of coordinates.
+
+    :param ra1: First set of points X
+    :param dec1: First set of points Y
+    :param ra2: Second set of points X
+    :param dec2: Second set of points Y
+    :param sr: Maximal acceptable pair distance to be considered a match
+    :returns: Two parallel sets of indices corresponding to matches from first and second lists, along with the pairwise distances
+    """
+
+    kd = KDTree(np.array([x2, y2]).T)
+    idx1, idx2 = [], []
+    for i, js in enumerate(kd.query_ball_point(np.array([x1, y1]).T, sr)):
+        for j in js:
+            idx1.append(i)
+            idx2.append(j)
+
+    idx1 = np.array(idx1)
+    idx2 = np.array(idx2)
+    dist = np.hypot(x1[idx1] - x2[idx2], y1[idx1] - y2[idx2])
+
+    return idx1, idx2, dist
+
+
 def get_objects_center(obj, col_ra='ra', col_dec='dec'):
     """
     Returns the center RA, Dec, and radius in degrees for a cloud of objects on the sky.
@@ -197,10 +223,6 @@ def blind_match_objects(
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
     :returns: Either astrometric solution as astropy.wcs.WCS object, or FITS header if :code:`get_header=True`
     """
-
-    '''
-    Thin wrapper for blind plate solving using local Astrometry.Net and a list of detected objects.
-    '''
 
     # Simple wrapper around print for logging in verbose mode only
     log = (

@@ -19,6 +19,7 @@ requirements = [
     'python-dateutil',
     'requests',
     'sip_tpv',
+    'pyfftw',
 ]
 
 setup(
