@@ -20,8 +20,8 @@ def run_psfex(
     image,
     mask=None,
     thresh=2.0,
-    aper=3.0,
-    r0=0.5,
+    aper=None,
+    r0=0.0,
     gain=1,
     minarea=5,
     vignet_size=None,
@@ -44,7 +44,7 @@ def run_psfex(
     :param image: Input image as a NumPy array
     :param mask: Image mask as a boolean array (True values will be masked), optional
     :param thresh: Detection threshold in sigmas above local background, for running initial SExtractor object detection
-    :param aper: Circular aperture radius in pixels, to be used for initial SExtractor object detection
+    :param aper: Circular aperture radius in pixels, to be used for PSF normalization. Should contain most of object flux. If not specified, will be estimated as twice the FWHM
     :param r0: Smoothing kernel size (sigma) to be used for improving object detection in initial SExtractor call
     :param gain: Image gain
     :param minarea: Minimal number of pixels in the object to be considered a detection (`DETECT_MINAREA` parameter of SExtractor)
@@ -110,6 +110,27 @@ def run_psfex(
         else tempfile.mkdtemp(prefix='psfex', dir=_tmpdir)
     )
     psf = None
+
+    # Estimate image FWHM if aperture radius is not set
+    if not aper:
+        log('Aperture size not specified, will estimate it from image FWHM')
+        obj = photometry.get_objects_sextractor(
+            image,
+            mask=mask,
+            thresh=thresh,
+            aper=3.0,
+            r0=r0,
+            gain=gain,
+            minarea=minarea,
+            _workdir=workdir,
+            _tmpdir=_tmpdir,
+            _exe=_sex_exe,
+            verbose=verbose,
+            extra=sex_extra,
+        )
+        fwhm = np.median(obj['fwhm'][obj['flags'] == 0])
+        aper = 2.0*fwhm
+        log('FWHM = %.1f pixels, will use aperture radius %.1f pixels' % (fwhm, aper))
 
     if vignet_size is None:
         vignet_size = 6 * aper + 1
