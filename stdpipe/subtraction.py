@@ -428,14 +428,16 @@ def run_zogy(
     overlap=50,
     fit_scale=True,
     fit_shift=True,
+    good_regions=None,
+    image_obj=None,
+    template_obj=None,
     get_psf=False,
     get_Fpsf=False,
     nthreads=0,
     verbose=False,
     **kwargs
 ):
-    """
-    Image subtraction using Zackay–Ofek–Gal-Yam (ZOGY) algorithm, as described in
+    """Image subtraction using Zackay–Ofek–Gal-Yam (ZOGY) algorithm, as described in
     http://dx.doi.org/10.3847/0004-637X/830/1/27
 
     The science and template images should be already aligned astrometrically, and roughly
@@ -444,15 +446,26 @@ def run_zogy(
     optionally (if `fit_shift` is set) it may fit for a small systematic positional error
     (sub-pixel shift) of the template.
 
-    Required inputs are science and template images (plus optionally their masks), their noise
-    maps and PSFs. If noise maps are not provided, they will be constructed from the
-    input images using estimated background noise and gain values for source contributions.
-    If PSFs are not specified, they will be also estimated from the images using :func:`stdpipe.psf.run_psfex`.
-    Flux normalization for PSF estimation also requires FWHMs of the images, which may either
-    be specified directly, or estimated from the images too.
+    Required inputs are science and template images (plus optionally their
+    masks), their noise maps and PSFs, as well as their relative flux scale. If
+    noise maps are not provided, they will be constructed from the input images
+    using estimated background noise and gain values for source contributions.
+    If PSFs are not specified, they will be also estimated from the images
+    using :func:`stdpipe.psf.run_psfex`.  Flux normalization for PSF estimation
+    also requires FWHMs of the images, which may either be specified directly,
+    or estimated from the images too.
 
-    The image will be optionally split into given number (`nx`x`ny`) of sub-images, subtracted
-    independently, and then the results will be stitched back. Sub-images will overlap by `overlap` pixels.
+    Relative template image flux scaling may either be provided as `scale`
+    argument, or it may be estimated from the lists of objects detected in both
+    images. These may either be provided directly (`image_obj` and
+    `template_obj`), or derived during PSF estimation. These objects will also
+    be used for restricting the scale/shift fitting to their vicinities
+    only. Alternatively, the map of good regions may be directly provided as
+    `good_regions` argument.
+
+    The image will be optionally split into given number (`nx`x`ny`) of
+    sub-images, subtracted independently, and then the results will be stitched
+    back. Sub-images will overlap by `overlap` pixels.
 
     :param image: Input science image as a Numpy array
     :param template: Input template image, should have the same shape as a science image
@@ -481,6 +494,9 @@ def run_zogy(
 
     :param fit_scale: If set, will fit for the difference in flux scales between template and science images
     :param fit_shift: If set, will also fit for the sub-pixel shift between template and science images
+    :param good_regions: If set, this boolean map will be used to restrict scale/shift fitting to only these regions
+    :param image_obj: List of objects detected in science image. If provided, they will be used for placing good regions
+    :param template_obj: List of objects detected in science image. If provided, they will be used for deriving template flux scale
     :param get_psf: If set, will also return the PSF of the difference image
     :param get_Fpsf: If set, will also return the optimal PSF photometry image and its error
     :param nthreads: Set the number of threads to use for FFTW routines (0 for auto)
@@ -554,43 +570,81 @@ def run_zogy(
     # Estimate image PSF, if not specified
     if image_psf is None:
         log("Estimating image PSF")
+        # TODO: should we overwrite image_obj if it was set by the user?..
         image_psf,image_obj = psf.run_psfex(
             image, mask=mask, gain=image_gain,
             aper=2.0*image_fwhm if image_fwhm else None,
             verbose=verbose, get_obj=True,
             **kwargs
         )
-    else:
-        image_obj = None
 
     # Estimate template PSF, if not specified
     if template_psf is None:
         log("Estimating template PSF")
+        # TODO: should we overwrite image_obj if it was set by the user?..
         template_psf,template_obj = psf.run_psfex(
             template, mask=template_mask, gain=template_gain,
             aper=2.0*template_fwhm if template_fwhm else None,
             verbose=verbose, get_obj=True,
             **kwargs
         )
+
+    # "Good" regions for flux scale refinement
+    if good_regions is not None and isinstance(good_regions, np.ndarray):
+        good_regions = good_regions.astype(np.bool)
+        log("Will use user-provided regions for scale/shift fitting")
     else:
-        template_obj = None
+        good_regions = np.zeros_like(image, dtype=bool)
 
     # Guess initial relative flux scale
     if image_obj and template_obj:
+        # Use half FWHM radius for matching
+        sr = 0.5*max(image_psf['fwhm'], template_psf['fwhm'])
         iidx,tidx,_ = astrometry.planar_match(
             image_obj['x'], image_obj['y'],
             template_obj['x'], template_obj['y'],
-            # Use half FWHM radius for matching
-            0.5*max(image_psf['fwhm'], template_psf['fwhm'])
+            sr
         )
 
-        if len(iidx) > 5:
-            scale = np.median(template_obj['flux'][tidx] / image_obj['flux'][iidx])
-            log("Estimated initial template flux scale Fr = %.2g" % scale)
-        else:
-            log("Not enough matched objects to guess template flux scale")
+        if len(iidx):
+            # Exclude all flagged objects
+            fidx = (image_obj['flags'][iidx] & 0x100) == 0
+            fidx &= (template_obj['flags'][tidx] & 0x100) == 0
+
+            if np.sum(fidx) > 5:
+                # TODO: take into account flux errors
+                scale = np.median(template_obj['flux'][tidx][fidx] / image_obj['flux'][iidx][fidx])
+                log("Estimated initial template flux scale Fr = %.2g" % scale)
+            else:
+                log("Not enough matched objects to guess template flux scale")
+
+        if len(iidx) > 0 and (fit_scale or fit_shift) and np.sum(good_regions) == 0:
+            # Use matched objects (they are all unflagged) to define good regions
+            size = int(6*sr) # 3*FWHM
+            N = 0
+            for i in range(len(iidx)):
+                x0 = int(image_obj['x'][iidx][i])
+                y0 = int(image_obj['y'][iidx][i])
+
+                # Exclude objects too close to the edges
+                if (x0 < size or x0 >= image.shape[1] - size
+                    or y0 < size or y0 >= image.shape[0] - size):
+                    continue
+
+                # Exclude sub-regions containing masked pixels
+                if np.sum((mask|template_mask)[y0 - size: y0 + size, x0 - size:x0 + size]) == 0:
+                    good_regions[y0 - size: y0 + size, x0 - size:x0 + size] = True
+                    N += 1
+
+            if N > 0:
+                log(N, "regions selected for scale/shift fitting")
+
     else:
         log("Initial template flux scale Fr = %.2g" % scale)
+
+    if (fit_scale or fit_shift) and np.sum(good_regions) == 0:
+        good_regions = np.ones_like(good_regions, dtype=bool)
+        log("Will fit for scale/shift using whole image")
 
     # Split the image into sub-images to later stitch it back
     if not ny:
@@ -602,8 +656,8 @@ def run_zogy(
     Fpsf_full = np.zeros_like(image, dtype=np.double)
     Fpsf_err_full = np.zeros_like(image, dtype=np.double)
 
-    for i, x0, y0, N, R, U_N, U_R in pipeline.split_image(
-            N_full, R_full, U_N_full, U_R_full,
+    for i, x0, y0, N, R, U_N, U_R, good_reg in pipeline.split_image(
+            N_full, R_full, U_N_full, U_R_full, good_regions,
             nx=nx, ny=ny, overlap=overlap,
             get_index=True, get_origin=True,
             verbose=True if nx > 1 and ny > 1 else False
@@ -656,7 +710,7 @@ def run_zogy(
         P_N_hat = fft.fft2(P_N, threads=nthreads)
         P_R_hat = fft.fft2(P_R, threads=nthreads)
 
-        if fit_scale:
+        if fit_scale or fit_shift:
             # Estimate beta=Fn/Fr and shift using Equations 37-39
             def fn(par):
                 Fn = 1
@@ -672,26 +726,30 @@ def run_zogy(
                 DD_n = np.real(fft.ifft2(D_hat_n, threads=0))
                 DD_r = np.real(fft.ifft2(D_hat_r, threads=0))
 
-                return (Fr * DD_n - Fn * DD_r).flatten()
+                return (Fr * DD_n - Fn * DD_r)[good_reg].flatten()
 
-            if fit_shift:
-                log('Fitting for flux scale difference and sub-pixel template shift')
-            else:
-                log('Fitting for flux scale difference')
+            if np.sum(good_reg) > 10:
+                if fit_scale and fit_shift:
+                    log('Fitting for flux scale difference and sub-pixel template shift')
+                    C = least_squares(fn, [scale, 0, 0], bounds=((0, -0.5, -0.5), (np.inf, 0.5, 0.5)), verbose=0)
+                elif fit_scale:
+                    log('Fitting for flux scale difference')
+                    C = least_squares(fn, [scale], bounds=(0, np.inf), verbose=0)
+                else:
+                    log('Fitting for sub-pixel template shift')
+                    C = least_squares(fn, [scale, 0, 0], bounds=((scale*0.9999, -0.5, -0.5), (scale*1.0001, 0.5, 0.5)), verbose=0)
 
-            if fit_shift:
-                C = least_squares(fn, [scale, 0, 0], bounds=((0, -0.5, -0.5), (np.inf, 0.5, 0.5)), verbose=0)
+                if C.success:
+                    if fit_scale:
+                        Fr = C.x[0]
+                        log('Template flux scale Fr = %.2g' % Fr)
+                    if len(C.x) > 1:
+                        log('Shift is dy = %.2f dx = %.2f' % (C.x[1], C.x[2]))
+                        R_hat = ndimage.fourier_shift(R_hat, C.x[1:])
+                else:
+                    log('Fitting failed')
             else:
-                C = least_squares(fn, [scale], bounds=(0, np.inf), verbose=0)
-
-            if C.success:
-                Fr = C.x[0]
-                log('Template flux scale Fr = %.2g' % Fr)
-                if len(C.x) > 1:
-                    log('Shift is dy = %.2f dx = %.2f' % (C.x[1], C.x[2]))
-                    R_hat = ndimage.fourier_shift(R_hat, C.x[1:])
-            else:
-                log('Fitting failed')
+                log('Not enough good pixels for fitting')
 
         # Fourier Transform of Difference Image (Equation 13)
         D_hat_num = (Fr * P_R_hat * N_hat - Fn * P_N_hat * R_hat)
