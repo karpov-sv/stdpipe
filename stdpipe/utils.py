@@ -146,7 +146,7 @@ def get_obs_time(
         else:
             time = Time(time)
 
-        log('Time parsed as:', time)
+        log('Time parsed as:', time.iso)
         if get_datetime:
             return time.datetime
         else:

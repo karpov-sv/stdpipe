@@ -8,6 +8,7 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 import os
 import numpy as np
 import itertools
+from copy import deepcopy
 
 from astropy.wcs import WCS
 from astropy.io import fits
@@ -697,7 +698,15 @@ def split_sub_fn(
             else:
                 idx = np.ones(len(table), dtype=bool)
 
-            return arg[idx]
+            return table[idx]
+
+        if isinstance(arg, dict) and 'x0' in arg and 'y0' in arg:
+            # PSF structure, but also maybe some other dict-based objects
+            res = deepcopy(arg)
+            res['x0'] -= x1
+            res['y0'] -= y1
+
+            return res
 
         return None
 
@@ -718,18 +727,19 @@ def split_image(
     verbose=False,
     **kwargs
 ):
-    """
-    Generator function to split the image into several (`nx` x `ny`) blocks, while also
-    optionally providing the subsets of images, FITS headers, WCS solutions, catalogues
-    or object lists for the sub-blocks. FITS headers and WCS solutions will be adjusted
-    to properly reflect the astrometry in the sub-image. Tables will be sub-setted to only
-    include the rows that are inside the sub-image, according to their `x` and `y`, or
-    `ra` and `dec`, or `RAJ2000` and `DEJ2000` columns.
+    """Generator function to split the image into several (`nx` x `ny`)
+    blocks, while also optionally providing the subsets of images, FITS
+    headers, WCS solutions, PSFs, catalogues or object lists for the
+    sub-blocks. FITS headers and WCS solutions will be adjusted to properly
+    reflect the astrometry in the sub-image. Tables will be sub-setted to only
+    include the rows that are inside the sub-image, according to their `x` and
+    `y`, or `ra` and `dec`, or `RAJ2000` and `DEJ2000` columns.
 
-    The blocks may optionally be extended by 'overlap' pixels in all directions, so that
-    at least in some sub-images every part of original image is far from the edge. This
-    parameter may be used e.g. in conjunction with `edge` parameter of
-    :func:`stdpipe.photometry.get_objects_sextractor` to avoid detecting the same object twice.
+    The blocks may optionally be extended by 'overlap' pixels in all
+    directions, so that at least in some sub-images every part of original
+    image is far from the edge. This parameter may be used e.g. in conjunction
+    with `edge` parameter of :func:`stdpipe.photometry.get_objects_sextractor`
+    to avoid detecting the same object twice.
 
     :param image: Image to split
     :param *args: Set of additional images, headers, WCS solutions, or tables to split
@@ -809,14 +819,15 @@ def get_subimage_centered(
     verbose=False,
     **kwargs
 ):
-    """
-    Convenience function for getting the cropped sub-image centered at a given pixel position,
-    while also optionally providing the mask, header, wcs, object list etc for it.
-    Its behaviour and arguments are mostly identical to the ones of :func:`stdpipe.pipeline.split_image`.
+    """Convenience function for getting the cropped sub-image centered at a
+    given pixel position, while also optionally providing the mask, header,
+    wcs, psf, object list etc for it.  Its behaviour and arguments are mostly
+    identical to the ones of :func:`stdpipe.pipeline.split_image`.
 
-    In contrast to :func:`stdpipe.utils.crop_image_centered` it accepts output width and height as parameters.
-    These will correspond to the size of the output if it is completely inside the original image;
-    if not - they will be correspondingly smaller (i.e. it does not pad the data to keep requested
+    In contrast to :func:`stdpipe.utils.crop_image_centered` it accepts output
+    width and height as parameters.  These will correspond to the size of the
+    output if it is completely inside the original image; if not - they will be
+    correspondingly smaller (i.e. it does not pad the data to keep requested
     position exactly at the center).
 
     :param image: Image to crop
