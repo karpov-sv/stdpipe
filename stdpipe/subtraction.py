@@ -535,9 +535,9 @@ def run_zogy(
 
     N_full = image - image_bg.back()
     R_full = template - template_bg.back()
-    # We should set masked regions to zero or else it will fail
-    N_full[mask | template_mask] = 0
-    R_full[mask | template_mask] = 0
+    # Set to zero the regions where we have no data
+    N_full[~np.isfinite(image)] = 0
+    R_full[~np.isfinite(template)] = 0
 
     if err is None:
         log('Building noise model from the image')
@@ -563,9 +563,9 @@ def run_zogy(
         U_R_full = template_err
         SR= np.median(template_err)
 
-    # We should set masked regions to zero or else it will fail
-    U_N_full[mask | template_mask] = 0
-    U_R_full[mask | template_mask] = 0
+    # Artificially assign large uncertainty to the regions we set to zero
+    U_N_full[~np.isfinite(image)] = np.nanmax(U_N_full)
+    U_R_full[~np.isfinite(template)] = np.nanmax(U_R_full)
 
     # Estimate image PSF, if not specified
     if image_psf is None:
