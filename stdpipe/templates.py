@@ -552,17 +552,12 @@ def get_skycells(
                             pass
 
                 if _cache_downscale > 1:
-                    flxscale = header.get(
-                        'FLXSCALE'
-                    )  # It will be removed inside downscale_image()
                     image, header = cutouts.downscale_image(
                         image,
                         header=header,
                         scale=_cache_downscale,
                         mode='or' if ext == 'mask' else 'sum',
                     )
-                    if flxscale:
-                        header['FLXSCALE'] = flxscale
 
                     log(
                         "Downscaling the image and storing it as",
@@ -609,7 +604,7 @@ def normalize_ps1_skycell(image, header, verbose=False):
 
             x = image * 0.4 * np.log(10)
             image = header['BOFFSET'] + header['BSOFTEN'] * (np.exp(x) - np.exp(-x))
-            header['FLXSCALE'] = 1 / header['BSOFTEN']  # For proper co-adding in SWarp
+            image /= header['EXPTIME'] # For common photometric zero-point
 
             for _ in ['BSOFTEN', 'BOFFSET', 'BLANK']:
                 header.remove(_, ignore_missing=True)
