@@ -17,6 +17,7 @@ pyfftw.interfaces.cache.set_keepalive_time(1.)
 
 from scipy import ndimage
 from scipy.optimize import least_squares
+import statsmodels.api as sm
 
 import sep
 
@@ -612,9 +613,14 @@ def run_zogy(
             fidx &= (template_obj['flags'][tidx] & 0x100) == 0
 
             if np.sum(fidx) > 5:
-                # TODO: take into account flux errors
-                scale = np.median(template_obj['flux'][tidx][fidx] / image_obj['flux'][iidx][fidx])
-                log("Estimated initial template flux scale Fr = %.2g" % scale)
+                # Compute photometric zero point shift between two object lists
+                ZP = template_obj['mag'][tidx][fidx] - image_obj['mag'][iidx][fidx]
+                dZP = np.hypot(image_obj['magerr'][iidx][fidx], template_obj['magerr'][tidx][fidx])
+                X = np.ones_like(ZP).T
+                # Weighted robust regression
+                C = sm.RLM(ZP / dZP, (X.T / dZP).T).fit()
+                scale = 10**(-0.4*C.params[0])
+                log("Estimated initial template flux scale Fr = %.3g" % scale)
             else:
                 log("Not enough matched objects to guess template flux scale")
 
@@ -640,7 +646,7 @@ def run_zogy(
                 log(N, "regions selected for scale/shift fitting")
 
     else:
-        log("Initial template flux scale Fr = %.2g" % scale)
+        log("Initial template flux scale Fr = %.3g" % scale)
 
     if (fit_scale or fit_shift) and np.sum(good_regions) == 0:
         good_regions = np.ones_like(good_regions, dtype=bool)
@@ -742,7 +748,7 @@ def run_zogy(
                 if C.success:
                     if fit_scale:
                         Fr = C.x[0]
-                        log('Template flux scale Fr = %.2g' % Fr)
+                        log('Template flux scale Fr = %.3g' % Fr)
                     if len(C.x) > 1:
                         log('Shift is dy = %.2f dx = %.2f' % (C.x[1], C.x[2]))
                         R_hat = ndimage.fourier_shift(R_hat, C.x[1:])
