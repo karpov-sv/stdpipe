@@ -12,6 +12,7 @@ requirements = [
     'matplotlib',
     'astroquery>0.4.1',
     'sep',
+    'astroscrappy',
     'photutils',
     'statsmodels',
     'tqdm',
@@ -33,9 +34,4 @@ setup(
     packages=['stdpipe'],
     package_data={'stdpipe':['data/*']},
     include_package_data=True,
-    extras_require={
-	"example": [
-	    'astroscrappy',
-	],
-    },
 )

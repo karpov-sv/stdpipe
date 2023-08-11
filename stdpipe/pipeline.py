@@ -16,12 +16,107 @@ from astropy.coordinates import SkyCoord
 from astropy.time import Time
 from astropy.table import Table
 
+import sep
+import astroscrappy
+
 from . import photometry
 from . import astrometry
 from . import catalogs
 from . import psf
 from . import utils
 from . import cutouts
+
+
+def make_mask(
+    image,
+    header=None,
+    saturation=None,
+    external_mask=None,
+    mask_cosmics=False,
+    gain=None,
+    verbose=True
+):
+    """
+    Make basic mask for the image. The mask is a boolean bitmap with True values marking the regions
+    that should be excluded from following processing, thus "masked".
+
+    The routine masks the following regions of the image:
+    - pixels with undefined or non-finite (inf or nan) values
+    - regions outside of usable area defined by header DATASEC or TRIMSEC keyword
+    - pixels with values above the saturation limit, if provided
+    - pixels masked in external mask, if provided
+    - cosmic rays, if requested
+
+    If :code:`saturation=True`, saturation level will be estimated from the image as :code:`median + 0.95(max - median)`
+
+    :param image: Image to be masked
+    :param header: FITS header, optional
+    :param saturation: Saturation level. If set to `True`, will be estimated from the image itself. Optional
+    :param external_mask: External mask, to be ORed with the created mask. Optional
+    :param mask_cosmics: If set, cosmic rays will be masked using LACosmic algorithm.
+    :param gain: Gain value to be used for cosmic rays masking
+    :returns: Boolean bitmap ("mask") with True values marking the regions that should be excluded from following processing
+
+    """
+
+    # Simple wrapper around print for logging in verbose mode only
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
+
+    mask = ~np.isfinite(image)
+
+    if header is not None:
+        # DATASEC or TRIMSEC
+        for kw in ['TRIMSEC', 'DATASEC']:
+            if kw in header:
+                x1, x2, y1, y2 = utils.parse_det(header.get(kw))
+
+                log('Masking the region outside of %s = %s' % (kw, header.get(kw)))
+                mask1 = np.ones_like(mask)
+                mask1[y1 : y2 + 1, x1 : x2 + 1] = False
+                mask |= mask1
+
+    if saturation is not None:
+        if type(saturation) is bool and saturation == True:
+            saturation = 0.05*np.nanmedian(image) + 0.95*np.nanmax(image) # med + 0.95(max-med)
+        log('Masking pixels above saturation level %.1f ADU' % saturation)
+        mask |= image >= saturation
+
+    if external_mask is not None:
+        external_mask = external_mask.astype(bool)
+        log('Applying external mask with %d masked pixels' % np.sum(external_mask))
+        mask |= external_mask
+
+    if mask_cosmics:
+        # We will use custom noise model for astroscrappy as we do not know whether
+        # the image is background-subtracted already, or how it was flatfielded
+        bg = sep.Background(image, mask=mask)
+        rms = bg.rms()
+        var = rms**2
+        if gain:
+            var += np.abs(image - bg.back())/gain
+        cmask, cimage = astroscrappy.detect_cosmics(
+            image, mask,
+            verbose=verbose,
+            invar=var.astype(np.float32),
+            gain=gain if gain else 1.0,
+            satlevel=saturation,
+            cleantype='medmask')
+        log('Done masking cosmics, %d (%.1f%%) pixels masked' % (
+            np.sum(cmask),
+            100*np.sum(cmask)/cmask.shape[0]/cmask.shape[1]
+        ))
+        mask |= cmask
+
+    log('%d (%.1f%%) pixels masked in total' % (
+        np.sum(mask),
+        100*np.sum(mask)/mask.shape[0]/mask.shape[1]
+    ))
+
+    return mask
 
 
 def refine_astrometry(
