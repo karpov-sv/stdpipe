@@ -103,7 +103,7 @@ def make_mask(
             verbose=verbose,
             invar=var.astype(np.float32),
             gain=gain if gain else 1.0,
-            satlevel=saturation,
+            satlevel=saturation if saturation else np.max(image),
             cleantype='medmask')
         log('Done masking cosmics, %d (%.1f%%) pixels masked' % (
             np.sum(cmask),
