@@ -72,6 +72,7 @@ def get_objects_sep(
     subtract_bg=True,
     npix_large=100,
     sn=10.0,
+    get_segmentation=False,
     verbose=True,
     **kwargs
 ):
@@ -99,6 +100,7 @@ def get_objects_sep(
     :param npix_large: Threshold for rejecting large objects (if `use_mask_large` is set)
     :param subtract_bg: Whether to subtract the background (default) or not
     :param sn: Minimal S/N ratio for the object to be considered a detection
+    :param get_segmentation: If set, segmentation map will also be returned
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
     :returns: astropy.table.Table object with detected objects
     """
@@ -161,13 +163,14 @@ def get_objects_sep(
 
     log("Extracting final objects")
 
-    obj0 = sep.extract(
+    obj0,segm = sep.extract(
         image1,
         err=err,
         thresh=thresh,
         minarea=minarea,
         mask=mask | mask_bg | mask_segm,
         filter_kernel=kernel,
+        segmentation_map=True,
         **kwargs
     )
 
@@ -295,7 +298,13 @@ def get_objects_sep(
 
     obj.sort('flux', reverse=True)
 
-    return obj
+    if get_segmentation:
+        number = np.arange(len(obj0['x'])) + 1 # Running object number
+        obj['number'] = number[idx][fidx]
+
+        return obj, segm
+    else:
+        return obj
 
 
 def get_objects_sextractor(
