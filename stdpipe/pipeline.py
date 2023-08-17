@@ -466,6 +466,7 @@ def calibrate_photometry(
     obj_col_mag_err='magerr',
     obj_col_ra='ra',
     obj_col_dec='dec',
+    obj_col_flags='flags',
     obj_col_x='x',
     obj_col_y='y',
     cat_col_mag='R',
@@ -493,6 +494,7 @@ def calibrate_photometry(
     :param obj_col_mag_err: Column name for object magnitude error
     :param obj_col_ra: Column name for object Right Ascension
     :param obj_col_dec: Column name for object Declination
+    :param obj_col_flags: Column name for object flags
     :param obj_col_x: Column name for object x coordinate
     :param obj_col_y: Column name for object y coordinate
     :param cat_col_mag: Column name for catalogue magnitude
@@ -544,19 +546,19 @@ def calibrate_photometry(
         cat_magerr = None
 
     m = photometry.match(
-        obj['ra'],
-        obj['dec'],
+        obj[obj_col_ra],
+        obj[obj_col_dec],
         obj[obj_col_mag],
         obj[obj_col_mag_err],
-        obj['flags'],
+        obj[obj_col_flags],
         cat[cat_col_ra],
         cat[cat_col_dec],
         cat[cat_col_mag],
         cat_magerr=cat_magerr,
         sr=sr,
         cat_color=color,
-        obj_x=obj['x'],
-        obj_y=obj['y'],
+        obj_x=obj[obj_col_x] if obj_col_x else None,
+        obj_y=obj[obj_col_y] if obj_col_y else None,
         spatial_order=order,
         bg_order=bg_order,
         verbose=verbose,
