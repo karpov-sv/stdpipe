@@ -24,8 +24,9 @@
      - spatial polynomial + color term + intrinsic scatter
  - image subtraction
      - HiPS templates
-     - PanSTARRS DR1 templates
-     - hotpants + custom noise model
+     - PanSTARRS DR1 or Legacy Survey templates
+     - HOTPANTS + custom noise model
+     - ZOGY
  - transient detection and photometry
      - noise-weighted detection, cutout adjustment, ...
  - auxiliary functions
@@ -43,10 +44,10 @@ git clone https://github.com/karpov-sv/stdpipe.git
 ```
 and then installing from it in development (or "editable") mode by running the command
 ```
-python3 setup.py develop --user
+cd stdpipe
+python3 -m pip install -e .
 ```
 This way you may update the repository or apply local patches, and it will immediately be reflected in the installed package.
-
 
 Apart of Python requirements that will be installed automatically, *STDPipe* also (optionally) makes use of the following external software:
  - [SExtractor](https://github.com/astromatic/sextractor)
@@ -60,9 +61,13 @@ Most of them may be installed from your package manager. E.g. on Debian or Ubunt
 ```
 sudo apt install sextractor scamp psfex swarp
 ```
+or, on Miniconda/Anaconda, like that:
+```
+conda install -c conda-forge astromatic-source-extractor astromatic-scamp astromatic-psfex astromatic-swarp
+```
 
 You may also check more detailed installation instructions [here](https://stdpipe.readthedocs.io/en/latest/installation.html).
 
 # Usage
 
-The [documentation for *STDPipe*](https://stdpipe.readthedocs.io/) is now being actively written. In the meantime you may check the examples inside [notebooks/](notebooks/) folder, especially the [tutorial](notebooks/stdpipe_tutorial.ipynb) that demonstrates basic steps of a typical image processing.
+Please consult the [documentation for *STDPipe*](https://stdpipe.readthedocs.io/) for the basic usage patterns and description of its API. You may check the examples inside [notebooks/](notebooks/) folder, especially the [tutorial](notebooks/stdpipe_tutorial.ipynb) that demonstrates basic steps of a typical image processing.

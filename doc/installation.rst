@@ -9,36 +9,39 @@ Preparing the environment (optional)
 ------------------------------------
 
 The steps highlighted below are primarily for Linux and MacOS systems.
-Windows users are advised to use WSL (preferrably Ubuntu 20.04) for smooth installation.
+Windows users are advised to use WSL (preferrably Ubuntu 20.04 or later) for smooth installation.
 Ubuntu 20.04 is available for free download on Microsoft Store.
 
 You may safely skip these steps if you already have a working Python environment where you would like to install *STDPipe*.
 
-Installing Anaconda
+Installing Miniconda
 ^^^^^^^^^^^^^^^^^^^
 
-On your Linux/MacOS/WSL terminal, run the following commands to install `Anaconda <https://www.anaconda.com>`_ (replace 5.3.1 by the latest version, and adjust operating system name):
+On your Linux/MacOS/WSL terminal, run the following commands to install `Miniconda <https://docs.conda.io/en/latest/miniconda.html>`_ (or full `Anaconda <https://www.anaconda.com>`_ if you prefer):
 
 .. prompt:: bash
 
-   wget https://repo.anaconda.com/archive/Anaconda3-5.3.1-Linux-x86_64.sh
+   wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh
 
 .. prompt:: bash
 
-   bash Anaconda3-5.3.1-Linux-x86_64.sh
+   bash Miniconda3-latest-Linux-x86_64.sh
 
-(For 32-bit installation, skip the ‘_64’ in both commands)
+Alternatively, you may install full `Anaconda <https://www.anaconda.com>`_ by following the instructions on their web site.
 
-
-NOTE: If you already have Anaconda3 installed, please make sure that it is updated to the latest version (:code:`conda update --all`). Also check that you do not have multiple
-versions of python installed in usr/lib/ directory as it can cause version conflicts while installing dependencies.
-
-Now do:
+Now update it to the latest version (you should also do it if you already have Miniconda or Anaconda installed:
 
 .. prompt:: bash
 
    conda update --all
 
+Optionally, you may create the separate Conda environment that will contain *STDPipe*, and switch to it. Here, as an example, we will select Python 3.10 as default Python interpreter for it:
+
+.. prompt:: bash
+
+   conda create -n stdpipe python=3.10
+
+   conda activate stdpipe
 
 Installing basic dependencies
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -79,7 +82,7 @@ Use the command below to install the rest of dependencies and the package itself
 
 .. prompt:: bash
 
-   python setup.py develop
+   python -m pip install -e .
 
 .. note::
 
@@ -87,7 +90,7 @@ Use the command below to install the rest of dependencies and the package itself
 
    .. prompt:: bash
 
-      pip install -e .
+      python setup.py develop
 
 Keeping up to date
 ^^^^^^^^^^^^^^^^^^
@@ -111,16 +114,18 @@ Run the following commands inside your python (e.g. after typing :code:`ipython`
    import stdpipe
    import stdpipe.photometry
    import stdpipe.cutouts
+   import stdpipe.subtraction
+   import stdpipe.pipeline
 
-NOTE (Okay, last one!): if everything is ok, it's the end of the installation. But in case it shows that such-and-such modules are absent, feel free to install those modules by visiting their anaconda documentation and install
-those with their given commands. In case modules like photutils and statsmodels are needed, don't hesitate to do it with pip (normally it shouldn't happen), but some modules may not install correctly in case of disturbance.
+NOTE (Okay, last one!): if everything is ok, it's the end of the installation. But in case it shows that such-and-such modules are absent, feel free to install those modules by visiting their conda documentation and install
+those with their given commands, or by using pip directly. In case modules like photutils and statsmodels are needed, don't hesitate to do it with pip (normally it shouldn't happen), but some modules may not install correctly in case of disturbance.
 
-This instruction page will likely cover the issues you might face during your installation. However, please open issues on GitHub if there appear to be unresolvable conflicts.
+This instruction page will likely cover the issues you might face during your installation. However, please open `issues on GitHub <https://github.com/karpov-sv/stdpipe/issues>`_ if there appear to be unresolvable conflicts.
 
 Installation of external packages
 ---------------------------------
 
-*STDPipe* makes use of a number of (optional) external packages:
+*STDPipe* makes use of a number of (optional) external packages that provides various low-level functionality:
 
 - `SExtractor <https://github.com/astromatic/sextractor>`__
 - `SCAMP <https://github.com/astromatic/scamp>`__
@@ -137,6 +142,8 @@ HOTPANTS image subtraction package cannot presently (as far as I know) be instal
 
    If HOTPANTS compilation fails for you on the linking stage with a number of :code:`multiple definition of` error messages - that's a `known bug <https://github.com/acbecker/hotpants/issues/5>`__ related to some recent changes in GCC compiler defaults. You may easily fix it by editing the :file:`Makefile` and adding :code:`-fcommon` switch among the others in the `COPTS` options (line `30 <https://github.com/acbecker/hotpants/blob/master/Makefile#L30>`__ at the moment of writing).
 
+We have a dedicated script `install_hotpants.sh` that may be used to do it automatically - it will grab the sources, patch it to fix the problem described above, compile, and install the `hotpants` binary to `/usr/local/bin/`. If it fails at any step, you may try to manually fix the issues (the code should be in `/tmp/hotpants` folder) and continue installing it.
+
 Ubuntu
 ^^^^^^
 
@@ -150,9 +157,11 @@ Astrometry.Net may also be installed from repository, but might require addition
 
    sudo apt install astrometry.net
 
-Anaconda
+Miniconda / Anaconda
 ^^^^^^^^
 
 .. prompt:: bash
 
    conda install -c conda-forge astromatic-source-extractor astromatic-scamp astromatic-psfex astromatic-swarp
+
+Conda does not have Astrometry.Net package, so, if you need it, you may install it manually following the instructions on their website.
