@@ -41,6 +41,12 @@ E.g. to pre-process the raw image using pre-computed master dark and flat, mask 
    mask |= cmask
 
 
+We have a simple routine that implements these steps, :func:`stdpipe.pipeline.make_mask`, which is documented below.
+
+.. autofunction:: stdpipe.pipeline.make_mask
+   :noindex:
+
+
 Stacking the images
 -------------------
 

@@ -839,14 +839,14 @@ def split_image(
     to avoid detecting the same object twice.
 
     :param image: Image to split
-    :param *args: Set of additional images, headers, WCS solutions, or tables to split
+    :param \*args: Set of additional images, headers, WCS solutions, or tables to split
     :param nx: Number of sub-images in `x` direction
     :param ny: Number of sub-images in `y` direction
     :param overlap: If set, defines how much sub-images will overlap, in pixels.
     :param get_index: If set, also returns the number of current sub-image, starting from zero
     :param get_origin: If set, also return the sub-image origin pixel coordinates
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
-    :param **kwargs: Set of images, headers, WCS solutions, or tables to split
+    :param \**kwargs: Set of images, headers, WCS solutions, or tables to split
     :returns: Every concesutive call to the generator will return the list of cropped objects corresponding to the next sub-image, as well as some sub-image metadata.
 
     The returned list is constructed from the following elements:
@@ -928,14 +928,14 @@ def get_subimage_centered(
     position exactly at the center).
 
     :param image: Image to crop
-    :param *args: Set of additional images, headers, WCS solutions, or tables to split
+    :param \*args: Set of additional images, headers, WCS solutions, or tables to split
     :param x0: Pixel `x` coordinate of the cropped image center in the original image
     :param y0: Pixel `y` coordinate of the cropped image center in the original image
     :param width: Pixel width of the sub-image
     :param height: Pixel height of the sub-image, optional. If not provided, assumed to be equal to `width`
     :param get_origin: If set, also return the sub-image origin pixel coordinates
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
-    :param **kwargs: Set of images, headers, WCS solutions, or tables to split
+    :param \**kwargs: Set of images, headers, WCS solutions, or tables to split
     :returns: list of cropped objects corresponding to the sub-image, as well as some sub-image metadata.
 
     The returned list is constructed from the following elements:

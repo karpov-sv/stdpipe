@@ -15,7 +15,7 @@ Ubuntu 20.04 is available for free download on Microsoft Store.
 You may safely skip these steps if you already have a working Python environment where you would like to install *STDPipe*.
 
 Installing Miniconda
-^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^
 
 On your Linux/MacOS/WSL terminal, run the following commands to install `Miniconda <https://docs.conda.io/en/latest/miniconda.html>`_ (or full `Anaconda <https://www.anaconda.com>`_ if you prefer):
 
@@ -158,7 +158,7 @@ Astrometry.Net may also be installed from repository, but might require addition
    sudo apt install astrometry.net
 
 Miniconda / Anaconda
-^^^^^^^^
+^^^^^^^^^^^^^^^^^^^^
 
 .. prompt:: bash
 
