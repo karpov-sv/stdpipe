@@ -314,7 +314,7 @@ def get_objects_sextractor(
     err=None,
     thresh=2.0,
     aper=3.0,
-    r0=0.5,
+    r0=0.0,
     gain=1,
     edge=0,
     minarea=5,
