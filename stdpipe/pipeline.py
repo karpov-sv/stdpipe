@@ -270,7 +270,7 @@ def filter_transient_candidates(
     cat=None,
     cat_col_ra='RAJ2000',
     cat_col_dec='DEJ2000',
-    vizier=['ps1', 'usnob1', 'gsc'],
+    vizier=[],
     skybot=True,
     ned=False,
     flagged=True,
@@ -367,7 +367,10 @@ def filter_transient_candidates(
         obj_in['candidate_refcat'] = False
     if cat is not None and np.any(cand_idx):
         m = astrometry.spherical_match(
-            obj['ra'], obj['dec'], cat[cat_col_ra], cat[cat_col_dec], sr
+            obj[obj_col_ra],
+            obj[obj_col_dec],
+            cat[cat_col_ra],
+            cat[cat_col_dec], sr
         )
         cand_idx[m[0]] = False
 
@@ -386,7 +389,13 @@ def filter_transient_candidates(
         if not np.any(cand_idx):
             break
 
-        xcat = catalogs.xmatch_objects(obj[cand_idx], catname, sr)
+        xcat = catalogs.xmatch_objects(
+            obj[cand_idx],
+            catname,
+            sr,
+            col_ra=obj_col_ra,
+            col_dec=obj_col_dec,
+        )
         if xcat is not None and len(xcat):
             cand_idx &= ~np.in1d(obj[col_id], xcat[col_id])
 
@@ -411,7 +420,13 @@ def filter_transient_candidates(
                 obj_in['candidate_skybot'] = False
 
         if time is not None:
-            xcat = catalogs.xmatch_skybot(obj[cand_idx], time=time, col_id=col_id)
+            xcat = catalogs.xmatch_skybot(
+                obj[cand_idx],
+                time=time,
+                col_ra=obj_col_ra,
+                col_dec=obj_col_dec,
+                col_id=col_id
+            )
             if xcat is not None and len(xcat):
                 cand_idx &= ~np.in1d(obj[col_id], xcat[col_id])
 
@@ -428,7 +443,13 @@ def filter_transient_candidates(
             if 'candidate_ned' not in obj_in.keys():
                 obj_in['candidate_ned'] = False
 
-        xcat = catalogs.xmatch_ned(obj[cand_idx], sr, col_id=col_id)
+        xcat = catalogs.xmatch_ned(
+            obj[cand_idx],
+            sr,
+            col_id=col_id,
+            col_ra=obj_col_ra,
+            col_dec=obj_col_dec,
+        )
         if xcat is not None and len(xcat):
             cand_idx &= ~np.in1d(obj[col_id], xcat[col_id])
 
