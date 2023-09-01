@@ -5,7 +5,8 @@ import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 
 from astropy.stats import mad_std
-from astropy.visualization import simple_norm
+from astropy.visualization import simple_norm, ImageNormalize
+from astropy.visualization.stretch import HistEqStretch
 
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.stats import binned_statistic_2d
@@ -76,12 +77,26 @@ def imshow(
                 kwargs['interpolation'] = 'bicubic'
 
         if stretch and stretch != 'linear':
-            kwargs['norm'] = simple_norm(
-                image,
-                stretch,
-                min_cut=kwargs.pop('vmin', None),
-                max_cut=kwargs.pop('vmax', None),
-            )
+            if stretch == 'histeq':
+                data = image
+                if 'vmin' in kwargs:
+                    data = data[data >= kwargs['vmin']]
+                if 'vmax' in kwargs:
+                    data = data[data <= kwargs['vmax']]
+
+                kwargs['norm'] = ImageNormalize(
+                    stretch=HistEqStretch(data),
+                    vmin=kwargs.pop('vmin', None),
+                    vmax=kwargs.pop('vmax', None),
+                )
+            else:
+                kwargs['norm'] = simple_norm(
+                    image,
+                    stretch,
+                    min_cut=kwargs.pop('vmin', None),
+                    max_cut=kwargs.pop('vmax', None),
+                    power=2,
+                )
 
     img = ax.imshow(image, **kwargs)
     if not show_axis:
