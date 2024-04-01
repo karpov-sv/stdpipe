@@ -1127,7 +1127,8 @@ def measure_objects(
 
     log('Using aperture radius %.1f pixels' % aper)
 
-    positions = [(_['x'], _['y']) for _ in obj]
+    # FIXME: is there any better way to exclude some positions from photometry?..
+    positions = [(_['x'], _['y']) if np.isfinite(_['x']) and np.isfinite(_['y']) else (-1000, -1000) for _ in obj]
     apertures = photutils.CircularAperture(positions, r=aper)
     # Use just a minimal mask here so that the flux from 'soft-masked' (e.g. saturated) pixels is still counted
     res = photutils.aperture_photometry(image1, apertures, error=err, mask=mask0)
@@ -1172,11 +1173,8 @@ def measure_objects(
             mask_overlap = bg_mask.multiply(mask | mask0)
 
             if bg_overlap is None or mask_overlap is None:
-                row[
-                    'flags'
-                ] |= (
-                    0x400
-                )  # Flag the values where the annulus is completely outside the image
+                # Flag the values where the annulus is completely outside the image
+                row['flags'] |= 0x400
                 continue
 
             bg_vals = bg_overlap[bg_mask.data > 0]
@@ -1199,9 +1197,8 @@ def measure_objects(
                 row['bg_local'] = local_bg_est
                 row['bg_fluxerr'] = bg_stats[2] * np.sqrt(area['aperture_sum'])
             else:
-                row[
-                    'flags'
-                ] |= 0x400  # Flag the values where local bg estimation failed
+                # Flag the values where local bg estimation failed
+                row['flags'] |= 0x400
 
     idx = obj['flux'] > 0
     for _ in ['mag', 'magerr']:
