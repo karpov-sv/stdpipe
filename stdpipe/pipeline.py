@@ -1028,7 +1028,7 @@ def get_detection_limit(obj, sn=5, method='sn', verbose=True):
     if method == 'sn':
         log('Estimating detection limit using S/N vs magnitude method')
         mag0 = photometry.get_detection_limit_sn(
-            obj['mag_calib'], 1 / obj['mag_calib_err'], sn=sn, verbose=verbose
+            obj['mag_calib'], 1 / obj['magerr'], sn=sn, verbose=verbose
         )
     elif method == 'bg':
         log('Estimating detection limit using background noise method')
