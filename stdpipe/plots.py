@@ -546,7 +546,9 @@ def plot_photometric_match(
     return ax
 
 
-def plot_detection_limit(obj, sn=5, mag_name=None, ax=None):
+def plot_detection_limit(
+    obj, sn=5, mag_name=None, obj_col_mag='mag_calib', obj_col_mag_err='magerr', ax=None
+):
     """
     Plot the details of detection limit estimation
 
@@ -559,8 +561,8 @@ def plot_detection_limit(obj, sn=5, mag_name=None, ax=None):
     if ax is None:
         ax = plt.gca()
 
-    mag = obj['mag_calib']
-    mag_sn = 1 / obj['mag_calib_err']
+    mag = obj[obj_col_mag]
+    mag_sn = 1 / obj[obj_col_mag_err]
 
     ax.plot(
         mag, mag_sn, '.', alpha=(0.2 if len(mag_sn) > 1000 else 0.4), label='Objects'
