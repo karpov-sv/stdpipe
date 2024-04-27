@@ -605,7 +605,9 @@ def plot_detection_limit(
     ax.set_ylabel('Signal / Noise')
 
 
-def plot_mag_histogram(obj, cat=None, cat_col_mag=None, sn=None, ax=None):
+def plot_mag_histogram(
+        obj, cat=None, cat_col_mag=None, sn=None, obj_col_mag='mag_calib', obj_col_mag_err='magerr', ax=None
+):
     """
     Plot the histogram of calibrated magnitudes for detected objects,
     and optionally the catalogue.
@@ -620,8 +622,9 @@ def plot_mag_histogram(obj, cat=None, cat_col_mag=None, sn=None, ax=None):
     if ax is None:
         ax = plt.gca()
 
-    mag = obj['mag_calib']
-    magerr = obj['mag_calib_err']
+    mag = obj[obj_col_mag]
+    mag_sn = 1 / obj[obj_col_mag_err]
+
     idx = obj['flags'] == 0
 
     vmin = np.nanmin(mag)
@@ -680,9 +683,6 @@ def plot_mag_histogram(obj, cat=None, cat_col_mag=None, sn=None, ax=None):
         ax.set_xlabel('Magnitude')
 
     if sn:
-        mag = obj['mag_calib']
-        mag_sn = 1 / obj['mag_calib_err']
-
         mag0 = photometry.get_detection_limit_sn(mag, mag_sn, sn=sn)
         if mag0 is not None:
             ax.axvline(mag0, ls=':', color='red', alpha=0.3, label=f"S/N={sn}")
