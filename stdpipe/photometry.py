@@ -953,8 +953,10 @@ def match(
         if get_err:
             # It follows the implementation from https://github.com/statsmodels/statsmodels/blob/081fc6e85868308aa7489ae1b23f6e72f5662799/statsmodels/base/model.py#L1383
             # FIXME: crashes on large numbers of stars?..
-            # err = np.sqrt(np.dot(X, np.dot(C.cov_params()[0:X.shape[1], 0:X.shape[1]], np.transpose(X))).diagonal())
-            err = np.zeros_like(x)
+            if len(x) < 5000:
+                err = np.sqrt(np.dot(X, np.dot(C.cov_params()[0:X.shape[1], 0:X.shape[1]], np.transpose(X))).diagonal())
+            else:
+                err = np.zeros_like(x)
             if add_intrinsic_rms:
                 err = np.hypot(err, intrinsic_rms)
             return err
