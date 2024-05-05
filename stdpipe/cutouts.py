@@ -231,6 +231,8 @@ def write_cutout(cutout, filename):
             data = Time(data).to_value('fits')
         elif np.isreal(data) and np.isnan(data):
             data = 'NaN'
+        elif np.isreal(data) and not np.isfinite(data):
+            data = 'Inf'
 
         hdu.header[_] = data
 
@@ -301,6 +303,8 @@ def load_cutout(filename):
             data = Time(data)
         elif data == 'NaN':
             data = np.nan
+        elif data == 'Inf':
+            data = np.inf
 
         cutout['meta'][name] = data
 
