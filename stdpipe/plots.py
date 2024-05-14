@@ -194,6 +194,8 @@ def plot_cutout(
     mark_r=5.0,
     mark_color='red',
     mark_lw=2,
+    mark_ra=None,
+    mark_dec=None,
     show_title=True,
     title=None,
     additional_title=None,
@@ -212,6 +214,8 @@ def plot_cutout(
     :param mark_r: Radius of the overlay mark in cutout coordinates in pixels, optional
     :param mark_color: Color of the overlay mark, optional
     :param mark_lw: Line width of the overlay mark, optional
+    :param mark_ra: Sky coordinate of the overlay mark, overrides `mark_x` and `mark_y`, optional
+    :param mark_dec: Sky coordinate of the overlay mark, overrides `mark_x` and `mark_y`, optional
     :param show_title: Show title over cutout. Defaults to True.
     :param title: The title to show above the cutouts, optional. If not provided, the title will be constructed from various pieces of cutout metadata, plus the contents of `additoonal_title` field, if provided
     :param additional_title: Additional text to append to automatically generated title of the cutout figure.
@@ -252,6 +256,9 @@ def plot_cutout(
 
             imshow(cutout[name], ax=ax, **params)
             ax.set_title(name.upper())
+
+            if mark_ra is not None and mark_dec is not None and cutout.get('wcs'):
+                mark_x,mark_y = cutout['wcs'].all_world2pix(mark_ra, mark_dec, 0)
 
             if mark_x is not None and mark_y is not None:
                 ax.add_artist(
