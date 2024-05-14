@@ -91,18 +91,12 @@ def get_cutout(
     image,
     candidate,
     radius,
-    mask=None,
-    background=None,
-    diff=None,
-    template=None,
-    convolved=None,
-    err=None,
-    footprint=None,
     header=None,
     wcs=None,
     time=None,
     filename=None,
     name=None,
+    **kwargs
 ):
     """Create the cutout from one or more image planes based on the candidate object.
 
@@ -114,24 +108,18 @@ def get_cutout(
     :param image: The science image for `image` plane of the cutout
     :param candidate: The candidate object that should at least contain `x` and `y` fields
     :param radius: Cutout radius in pixels. Cutout will have a square shape with :code:`2*ceil(radius) + 1` width
-    :param mask: The mask image for `mask` plane of the cutout, optional
-    :param background: The background for `background` plane of the cutout, optional
-    :param diff: Difference image for `diff` plane of the cutout, optional
-    :param template: Template image for `template` plane of the cutout, optional
-    :param convolved: Convolved template image for `convolved` plane of the cutout, optional
-    :param err: Noise model image for `err` plane of the cutout, optional
-    :param footprint: Candidate footprint (boolean) image for `footprint` plane of the cutout, optional
     :param header: The header for original image. It will be copied to `header` field of the cutout and modified accordingly to properly represent the shape and WCS of the cutout. Optional
     :param wcs: WCS for the original image. Will be copied to `wcs` field of the cutout with appropriate adjustment of the center so that it properly represents the astrometric solution on the cutout. Takes precedence over `header` parameter in defining cutout WCS. Optional
     :param time: Time (:class:`astropy.time.Time` or :class:`datetime.datetime` or a string representation compatible with them) of the original image acquisition, to be copied to `time` field of the cutout. Optional
     :param filename: Filename of the original image, to be stored in `filename` field of the cutout. Optional
     :param name: The object name, to be stored in the `name` field of the cutout. Optional
+    :param \**kwargs: All additional keyword arguments are interpreted as additional image planes (e.g. mask, diff, template etc).
     :returns: Cutout structure as described below.
 
     Cutout is represented by a dictionary with at least the following fields:
 
     - `image` - primary image plane, centered on the candidate position
-    - `mask`, `background`, `diff`, `template`, `convolved`, `err`, `footprint` - corresponding secondary image planes, if provided as parameters to the routine
+    - `mask`, `background`, `diff`, `template`, `convolved`, `err`, `footprint`, etc - corresponding secondary image planes, if provided as parameters to the routine
     - `header` - header of the original image modified to properly represent the cutout WCS, if provided as a parameter to the routine
     - `wcs` - WCS solution for the original image, modified to properly represent the cutout WCS, if provided as a parameter to the routine
     - `meta` - dictionary of additional metadata for the cutout. It will be populated with all fields of the candidate object, plus additionally:
@@ -154,6 +142,10 @@ def get_cutout(
     if wcs is not None:
         cutout['wcs'] = wcs
 
+        # Let's update header info with this WCS
+        astrometry.clear_wcs(crophead, remove_underscored=True, remove_history=True)
+        crophead += wcs.to_header(relax=True)
+
     if crophead is not None:
         cutout['header'] = crophead
 
@@ -162,26 +154,9 @@ def get_cutout(
             cutout['wcs'] = wcs
 
     # Image planes
-    if mask is not None:
-        cutout['mask'] = crop_image_centered(mask, x0, y0, radius)
-
-    if background is not None:
-        cutout['background'] = crop_image_centered(background, x0, y0, radius)
-
-    if diff is not None:
-        cutout['diff'] = crop_image_centered(diff, x0, y0, radius)
-
-    if template is not None:
-        cutout['template'] = crop_image_centered(template, x0, y0, radius)
-
-    if convolved is not None:
-        cutout['convolved'] = crop_image_centered(convolved, x0, y0, radius)
-
-    if err is not None:
-        cutout['err'] = crop_image_centered(err, x0, y0, radius)
-
-    if footprint is not None:
-        cutout['footprint'] = crop_image_centered(footprint, x0, y0, radius)
+    for pname,plane in kwargs.items():
+        if plane is not None and np.ndim(plane) == 2:
+            cutout[pname] = crop_image_centered(plane, x0, y0, radius)
 
     # Metadata
     for _ in candidate.keys():
@@ -260,18 +235,8 @@ def write_cutout(cutout, filename):
     hdus.append(hdu)
 
     # Store imaging data to named extensions
-    for _ in [
-        'image',
-        'template',
-        'convolved',
-        'diff',
-        'adjusted',
-        'mask',
-        'err',
-        'background',
-        'footprint',
-    ]:
-        if _ in cutout:
+    for _ in cutout.keys():
+        if _ not in ['meta', 'header', 'wcs'] and np.ndim(cutout[_]) == 2:
             data = cutout[_]
 
             if data.dtype == bool:
@@ -321,6 +286,9 @@ def load_cutout(filename):
             cutout[name] = cutout[name].astype(bool)
 
     hdus.close()
+
+    if cutout['header']:
+        cutout['wcs'] = WCS(cutout['header'])
 
     return cutout
 
