@@ -406,6 +406,9 @@ def get_objects_sextractor(
     if mask is None:
         # Create minimal mask
         mask = ~np.isfinite(image)
+    else:
+        # Ensure the mask is boolean array
+        mask = mask.astype(bool)
 
     if mask_to_nans:
         image = image.copy()
@@ -1078,6 +1081,8 @@ def measure_objects(
     # Ensure that the mask is defined
     if mask is None:
         mask = mask0
+    else:
+        mask = mask.astype(bool)
 
     if bg is None or err is None or get_bg:
         log('Estimating global background with %dx%d mesh' % (bg_size, bg_size))
