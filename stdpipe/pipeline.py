@@ -264,6 +264,7 @@ def filter_transient_candidates(
     obj,
     sr=None,
     pixscale=None,
+    fwhm=None,
     time=None,
     obj_col_ra='ra',
     obj_col_dec='dec',
@@ -299,7 +300,8 @@ def filter_transient_candidates(
     :param obj_col_ra: Column name for object Right Ascension
     :param obj_col_dec: Column name for object Declination
     :param sr: Matching radius in degrees
-    :param pixscale: Pixel scale. If provided, and `sr` is not specified, the latter will be set to half median of FWHMs of objects
+    :param pixscale: Pixel scale. If provided, and `sr` is not specified, the latter will be set to half FWHM
+    :param fwhm: FWHM value in pixels. If not set, will be estimated as a median of FWHMs of all unflagged objects
     :param time: Time corresponding to the object observations, as :class:`astropy.time.Time` or :class:`datetime.datetime` object.
     :param cat: Input reference catalogue, as :class:`astropy.table.Table` or similar object. Optional
     :param cat_col_ra: Column name for catalogue Right Ascension
@@ -323,10 +325,15 @@ def filter_transient_candidates(
         else lambda *args, **kwargs: None
     )
 
+    if fwhm is None:
+        idx = obj['flags'] == 0
+        idx &= obj['magerr'] < 0.05 # S/N > 20
+        fwhm = np.median(obj['fwhm'][idx])
+
     if sr is None:
         if pixscale is not None:
             # Matching radius of half FWHM
-            sr = np.median(obj['fwhm'] * pixscale) / 2
+            sr = np.median(fwhm * pixscale) / 2
         else:
             # Fallback value of 1 arcsec, should be sensible for most catalogues
             sr = 1 / 3600
@@ -355,11 +362,12 @@ def filter_transient_candidates(
     # Object flags
     if flagged:
         # Filter out flagged objects (saturated, cosmics, blends, etc)
-        cand_idx &= (obj['flags'] & flagmask) == 0
+        idx = (obj['flags'] & flagmask) == 0
 
         if remove == False:
-            obj_in['candidate_flagged'] = (obj['flags'] & flagmask) > 0
+            obj_in['candidate_flagged'] = ~idx
 
+        cand_idx &= idx
         log(np.sum(cand_idx), 'of them are unflagged')
 
     # Reference catalogue
@@ -390,7 +398,7 @@ def filter_transient_candidates(
             break
 
         xcat = catalogs.xmatch_objects(
-            obj[cand_idx],
+            obj[cand_idx][[col_id, obj_col_ra, obj_col_dec]],
             catname,
             sr,
             col_ra=obj_col_ra,
