@@ -410,7 +410,7 @@ def get_objects_sextractor(
         # Ensure the mask is boolean array
         mask = mask.astype(bool)
 
-    if mask_to_nans:
+    if mask_to_nans and isinstance(image, np.floating):
         image = image.copy()
         image[mask] = np.nan
 
