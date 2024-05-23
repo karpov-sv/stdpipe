@@ -347,7 +347,7 @@ def get_objects_sextractor(
     :param err: Image noise map as a NumPy array, optional
     :param thresh: Detection threshold, in sigmas above local background, to be used for `DETECT_THRESH` parameter of SExtractor call
     :param aper: Circular aperture radius in pixels, to be used for flux measurement. May also be list - then flux will be measured for all apertures from that list.
-    :param r0: Smoothing kernel size (sigma) to be used for improving object detection
+    :param r0: Smoothing kernel size (sigma, or FWHM/2.355) to be used for improving object detection
     :param gain: Image gain, e/ADU
     :param edge: Reject all detected objects closer to image edge than this parameter
     :param minarea: Minimal number of pixels in the object to be considered a detection (`DETECT_MINAREA` parameter of SExtractor)
@@ -515,7 +515,7 @@ def get_objects_sextractor(
     if not r0:
         opts['FILTER'] = 'N'
     else:
-        kernel = make_kernel(r0, ext=1.0)
+        kernel = make_kernel(r0, ext=2.0)
         kernelname = os.path.join(workdir, 'kernel.txt')
         np.savetxt(
             kernelname,
