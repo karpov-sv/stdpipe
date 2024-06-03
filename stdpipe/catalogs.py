@@ -30,8 +30,8 @@ catalogs = {
     'usnob1': {'vizier': 'I/284/out', 'name': 'USNO-B1'},
     'gsc': {'vizier': 'I/271/out', 'name': 'GSC 2.2'},
     'skymapper': {
-        'vizier': 'II/358/smss',
-        'name': 'SkyMapper DR1.1',
+        'vizier': 'II/379/smssdr4',
+        'name': 'SkyMapper DR4',
         'extra': [
             '_RAJ2000',
             '_DEJ2000',
