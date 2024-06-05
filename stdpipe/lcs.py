@@ -158,16 +158,16 @@ class LCs:
                                     self.lcs[_] = []
                                 self.lcs[_].append(__)
 
-            if i % N == 0 and verbose is not None:
+            if i % N == 0 and verbose == True:
                 sys.stdout.write("\r %d points - %d lcs" % (i, len(self.lcs['x'])))
                 sys.stdout.flush()
 
-        if verbose is not None:
+        if verbose == True:
             sys.stdout.write("\n")
             sys.stdout.flush()
 
         for _ in self.lcs.keys():
-            if isinstance(self.lcs[_], list):
+            if isinstance(self.lcs[_], list) and _ not in ['ids']:
                 self.lcs[_] = np.array(self.lcs[_])
 
         self.lcs['ra'], self.lcs['dec'] = astrometry.xyztoradec(
