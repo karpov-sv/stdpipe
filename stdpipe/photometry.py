@@ -1086,14 +1086,9 @@ def measure_objects(
 
     if bg is None or err is None or get_bg:
         log('Estimating global background with %dx%d mesh' % (bg_size, bg_size))
-        try:
-            bg_est = photutils.Background2D(
-                image1, bg_size, mask=mask | mask0, exclude_percentile=10
-            )
-        except ValueError:
-            bg_est = photutils.Background2D(
-                image1, bg_size, mask=mask | mask0, exclude_percentile=30
-            )
+        bg_est = photutils.Background2D(
+            image1, bg_size, mask=mask | mask0, exclude_percentile=90
+        )
 
     if bg is None:
         log(
