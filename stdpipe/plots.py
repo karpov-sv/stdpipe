@@ -37,6 +37,7 @@ def colorbar(obj=None, ax=None, size="5%", pad=0.1):
 def imshow(
     image,
     qq=None,
+    mask=None,
     show_colorbar=True,
     show_axis=True,
     stretch='linear',
@@ -47,6 +48,7 @@ def imshow(
 
     :param image: Numpy 2d array to display
     :param qq: two-element tuple (or list) with quantiles that define lower and upper limits for image intensity normalization. Default is `[0.5, 99.5]`. Will be superseded by manually provided `vmin` and `vmax` arguments.
+    :param mask: Mask to exclude image regions from intensity normalization, optional
     :param show_colorbar: Whether to show a colorbar alongside the image
     :param show_axis: Whether to show the axes around the image
     :param stretch: Image intensity stretching mode - e.g. `linear`, `log`, `asinh`, or anything else supported by Astropy visualization layer
@@ -59,6 +61,9 @@ def imshow(
 
     image = image.astype(np.double)
     good_idx = np.isfinite(image)
+
+    if mask is not None:
+        good_idx &= ~mask
 
     if np.sum(good_idx):
         if qq is None and 'vmin' not in kwargs and 'vmax' not in kwargs:
