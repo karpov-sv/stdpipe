@@ -230,7 +230,7 @@ def plot_cutout(
 
     curplot = 1
 
-    nplots = len(planes)
+    nplots = len([_ for _ in planes if _ in cutout])
 
     if fig is None:
         fig = plt.figure(figsize=[nplots * 4, 4 + 1.0], dpi=75, tight_layout=True)
