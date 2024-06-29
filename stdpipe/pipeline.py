@@ -277,6 +277,7 @@ def filter_transient_candidates(
     flagged=True,
     flagmask=0xFF00,
     col_id=None,
+    vizier_checker_fn=None,
     get_candidates=True,
     remove=True,
     verbose=False,
@@ -312,6 +313,7 @@ def filter_transient_candidates(
     :param flagged: Whether to filter out flagged objects, keeping only the ones with :code:`(obj['flags'] & flagmask) == 0`
     :param flagmask: The mask to be used for filtering of flagged objects. Will be ANDed with object flags, so should have a bit set for every relevant mask bit
     :param col_id: Column name for some unique identifier that should not appear twice in the object list. If not specified, new column `stdpipe_id` with unique integer identifiers will be created automatically
+    :param vizier_checker_fn: Function to check whether the cross-matched Vizier catalogue entries satisfy some additional conditions to be considered true matches. Signature should be :code:`fn(obj, xcat, catname)`, with passed `obj` having the same shape and order as `xcat` returned by cross-match, and should return boolean array of the same shape. Optional
     :param get_candidates: Whether to return the list of candidates, or (if :code:`get_candidates=False`) just a boolean mask of objects surviving the filters
     :param remove: Whether to remove the filtered entries from the returned list. If not, a number of additional columns (all having names `candidate_*`) will be added for every filter used, with `True` set if the filter matches the object. Finally, the boolean column `candidate_good` will have `True` for the objects surviving all the filters
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
@@ -405,6 +407,12 @@ def filter_transient_candidates(
             col_dec=obj_col_dec,
         )
         if xcat is not None and len(xcat):
+            if callable(vizier_checker_fn):
+                # Pass matched results through user-supplied checker
+                xobj = obj[[np.where(obj[col_id] == _)[0][0] for _ in xcat[col_id]]]
+                xidx = vizier_checker_fn(xobj, xcat, catname)
+                xcat = xcat[xidx]
+
             cand_idx &= ~np.in1d(obj[col_id], xcat[col_id])
 
             if remove == False:
