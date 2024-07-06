@@ -559,7 +559,7 @@ def plot_photometric_match(
 
 
 def plot_detection_limit(
-    obj, sn=5, mag_name=None, obj_col_mag='mag_calib', obj_col_mag_err='magerr', ax=None
+    obj, sn=5, mag_name=None, obj_col_mag='mag_calib', obj_col_mag_err='magerr', show_local=True, ax=None
 ):
     """
     Plot the details of detection limit estimation
@@ -567,6 +567,7 @@ def plot_detection_limit(
     :param obj: astropy.table.Table with calibrated object detections.
     :param sn: S/N value corresponding to the detection limit.
     :param mag_name: User-readable name for the magnitude.
+    :param show_local: If set, also shows the distribution of local detection limits
     :param ax: Matplotlib Axes object to be used for plotting, optional.
     :returns: None
     """
@@ -594,7 +595,7 @@ def plot_detection_limit(
         ax.set_title("Cannot estimate detection limit")
 
     # Local bg rms detection limit
-    if 'bg_fluxerr' in obj.colnames:
+    if show_local and 'bg_fluxerr' in obj.colnames:
         fluxerr = obj['bg_fluxerr']
         zero = obj['mag_calib'] - obj['mag']
         maglim = -2.5 * np.log10(sn * fluxerr) + zero
