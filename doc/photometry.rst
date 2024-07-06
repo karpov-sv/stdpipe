@@ -29,9 +29,9 @@ Zero point :math:`ZP` is a spatially varying polynomial with the degree controll
 Additive flux term is defined by linearizing the additional flux in every photometric aperture (e.g. due to incorrect background level determination) and has a form
 
 .. math::
-   {\rm additive} = -2.5/\log(10)/10^{-0.4\cdot{\rm Instrumental}} \cdot {\rm bg_corr}(x, y, {\rm bg\_order})
+   {\rm additive} = -2.5/\log(10)/10^{-0.4\cdot{\rm Instrumental}} \cdot {\rm bg_{corr}}(x, y, {\rm bg\_order})
 
-where :math:`{\rm bg_corr}` is a flux correction inside the aperture. This term is also spatially dependent, and is controlled by `bg_order` parameter. If :code:`bg_order=None`, the fitting for this term is disabled.
+where :math:`{\rm bg_{corr}}` is a flux correction inside the aperture. This term is also spatially dependent, and is controlled by `bg_order` parameter. If :code:`bg_order=None`, the fitting for this term is disabled.
 
 The calibration routine performs an iterative weighted linear least square (or robust if :code:`robust=True`) fitting with rejection of pairs deviating too much (more than `threshold` sigmas) from the model. Optional intrinsic scatter (specified through `max_intrinsic_rms` parameter) may also be fitted for, and may help accounting for the effects of e.g. multiplicative noise (flatfielding, subpixel sensitivity variations, etc).
 
