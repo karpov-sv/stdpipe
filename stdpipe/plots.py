@@ -619,7 +619,7 @@ def plot_detection_limit(
 
 
 def plot_mag_histogram(
-        obj, cat=None, cat_col_mag=None, sn=None, obj_col_mag='mag_calib', obj_col_mag_err='magerr', ax=None
+    obj, cat=None, cat_col_mag=None, sn=None, obj_col_mag='mag_calib', obj_col_mag_err='magerr', accept_flags=0, ax=None
 ):
     """
     Plot the histogram of calibrated magnitudes for detected objects,
@@ -629,6 +629,7 @@ def plot_mag_histogram(
     :param cat: astropy.table.Table with catalogue stars
     :param cat_col_mag: Column name of a magnitude inside `cat`
     :param sn: If set - S/N value corresponding to the detection limit to overplot
+    :param accept_flags: Bitmask for acceptable object flags to be shown as unflagged
     :param ax: Matplotlib Axes object to be used for plotting, optional
     :returns: None
     """
@@ -638,7 +639,7 @@ def plot_mag_histogram(
     mag = obj[obj_col_mag]
     mag_sn = 1 / obj[obj_col_mag_err]
 
-    idx = obj['flags'] == 0
+    idx = (obj['flags'] & ~accept_flags) == 0
 
     vmin = np.nanmin(mag)
     vmax = np.nanmax(mag)

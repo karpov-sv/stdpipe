@@ -749,7 +749,7 @@ def match(
     :param bg_order: Order of additive flux term spatial polynomial (None to disable this term in the model)
     :param threshold: Rejection threshold (relative to magnitude errors) for object-catalogue pair to be rejected from the fit
     :param niter: Number of iterations for the fitting
-    :param accept_flags: Bitmask for acceptable object flags. Objects having any other
+    :param accept_flags: Bitmask for acceptable object flags. Objects having any other bits set will be excluded from the model
     :param cat_saturation: Saturation level for the catalogue - stars brighter than this magnitude will be excluded from the fit
     :param max_intrinsic_rms: Maximal intrinsic RMS to use during the fitting. If set to 0, no intrinsic scatter is included in the noise model.
     :param sn: Minimal acceptable signal to noise ratio (1/obj_magerr) for the objects to be included in the fit
