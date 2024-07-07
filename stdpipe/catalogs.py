@@ -592,7 +592,7 @@ def get_cat_vizier(
         log("Converting the catalogue Sloan magnitudes to Pan-STARRS ones")
 
         # umag, gmag, rmag, imag and zmag are Sloan ugriz magnitudes! Let's get PS1 ones instead
-        # Fits are based on clean Landolt sample from https://arxiv.org/pdf/1203.0297.pdf
+        # Fits are based on clean Landolt sample from https://arxiv.org/pdf/2205.06186
         pg = [-0.030414391501015867, -0.09960002492299584, -0.002910024005294562]
         pr = [-0.009566553708653305, 0.014924591443344211, -0.003928147919030857]
         pi = [-0.010802807724098494, 0.01124900218746879, 0.01274293783734852]
