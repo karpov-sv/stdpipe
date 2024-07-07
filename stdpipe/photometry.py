@@ -1089,17 +1089,21 @@ def measure_objects(
         bg_est = photutils.Background2D(
             image1, bg_size, mask=mask | mask0, exclude_percentile=90
         )
+    else:
+        bg_est = None
 
     if bg is None:
         log(
-            'Subtracting global background: median %.1f rms %.2f'
-            % (np.median(bg_est.background), np.std(bg_est.background))
+            'Subtracting global background: median %.1f rms %.2f' % (
+                np.median(bg_est.background), np.std(bg_est.background)
+            )
         )
         image1 -= bg_est.background
     else:
         log(
-            'Subtracting user-provided background: median %.1f rms %.2f'
-            % (np.median(bg), np.std(bg))
+            'Subtracting user-provided background: median %.1f rms %.2f' % (
+                np.median(bg), np.std(bg)
+            )
         )
         image1 -= bg
 
@@ -1107,8 +1111,7 @@ def measure_objects(
 
     if err is None:
         log(
-            'Using global background noise map: median %.1f rms %.2f + gain %.1f'
-            % (
+            'Using global background noise map: median %.1f rms %.2f + gain %.1f' % (
                 np.median(bg_est.background_rms),
                 np.std(bg_est.background_rms),
                 gain if gain else np.inf,
@@ -1119,8 +1122,9 @@ def measure_objects(
             err = calc_total_error(image1, err, gain)
     else:
         log(
-            'Using user-provided noise map: median %.1f rms %.2f'
-            % (np.median(err), np.std(err))
+            'Using user-provided noise map: median %.1f rms %.2f' % (
+                np.median(err), np.std(err)
+            )
         )
 
     if fwhm is not None and fwhm > 0:
@@ -1148,13 +1152,21 @@ def measure_objects(
         if vals is None or np.any(vals):
             obj['flags'][i] |= 0x200
 
+    # Position-dependent background flux error from global background model, if available
+    obj['bg_fluxerr'] = 0.0  # Local background flux error inside the aperture
+    if bg_est is not None:
+        bgrms2 = bg_est.background_rms**2
+        res = photutils.aperture_photometry(bgrms2, apertures)
+        obj['bg_fluxerr'] = np.sqrt(res['aperture_sum'])
+
     # Local background
     if bkgann is not None and len(bkgann) == 2:
         if fwhm is not None and fwhm > 0:
             bkgann = [_ * fwhm for _ in bkgann]
         log(
-            'Using local background annulus between %.1f and %.1f pixels'
-            % (bkgann[0], bkgann[1])
+            'Using local background annulus between %.1f and %.1f pixels' % (
+                bkgann[0], bkgann[1]
+            )
         )
 
         bg_apertures = photutils.CircularAnnulus(
@@ -1163,10 +1175,8 @@ def measure_objects(
         image_ones = np.ones_like(image1)
         res_area = photutils.aperture_photometry(image_ones, apertures, mask=mask0)
 
-        obj[
-            'bg_local'
-        ] = 0.0  # Dedicated column for local background on top of global estimation
-        obj['bg_fluxerr'] = 0.0  # Local background flux error inside the aperture
+        obj['bg_local'] = 0.0  # Dedicated column for local background on top of global estimation
+        # obj['bg_fluxerr'] = 0.0  # Local background flux error inside the aperture
 
         for row, area, bg_mask in zip(
             obj, res_area, bg_apertures.to_mask(method='center')
@@ -1192,12 +1202,12 @@ def measure_objects(
                 # Rough estimation of bg_est error as rms/sqrt(N)
                 row['fluxerr'] = np.hypot(
                     row['fluxerr'],
-                    bg_stats[2]
-                    / np.sqrt(np.sum(mask_vals == 0))
-                    * area['aperture_sum'],
+                    bg_stats[2] / np.sqrt(np.sum(mask_vals == 0)) * area['aperture_sum'],
                 )
                 row['bg_local'] = local_bg_est
-                row['bg_fluxerr'] = bg_stats[2] * np.sqrt(area['aperture_sum'])
+
+                if bg_est is None:
+                    row['bg_fluxerr'] = bg_stats[2] * np.sqrt(area['aperture_sum'])
             else:
                 # Flag the values where local bg estimation failed
                 row['flags'] |= 0x400
