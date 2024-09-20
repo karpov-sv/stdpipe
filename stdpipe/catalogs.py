@@ -46,8 +46,8 @@ catalogs = {
     'vsx': {'vizier': 'B/vsx/vsx', 'name': 'AAVSO VSX'},
     'apass': {'vizier': 'II/336/apass9', 'name': 'APASS DR9'},
     'sdss': {
-        'vizier': 'V/147/sdss12',
-        'name': 'SDSS DR12',
+        'vizier': 'V/154/sdss16',
+        'name': 'SDSS DR16',
         'extra': ['_RAJ2000', '_DEJ2000'],
     },
     'atlas': {
@@ -82,7 +82,7 @@ def get_cat_vizier(
     -  skymapper - SkyMapper DR1.1
     -  vsx - AAVSO Variable Stars Index
     -  apass - AAVSO APASS DR9
-    -  sdss - SDSS DR12
+    -  sdss - SDSS DR16
     -  atlas - ATLAS-RefCat2, compilative all-sky reference catalogue with uniform zero-points in Pan-STARRS-like bands. We augment it with Johnson-Cousins B, V, R and I magnitudes the same way as Pan-STARRS.
     -  usnob1 - USNO-B1
     -  gsc - Guide Star Catalogue 2.2
@@ -605,6 +605,16 @@ def get_cat_vizier(
         cat['rmag'] = cat['r_SDSS'] + np.polyval(pr, cat['g_SDSS'] - cat['r_SDSS'])
         cat['imag'] = cat['i_SDSS'] + np.polyval(pi, cat['g_SDSS'] - cat['r_SDSS'])
         cat['zmag'] = cat['z_SDSS'] + np.polyval(pz, cat['g_SDSS'] - cat['r_SDSS'])
+
+    elif catalog == 'sdss':
+        log("Converting the catalogue Sloan magnitudes to AB ones")
+
+        # Zero point biases from https://www.sdss4.org/dr16/algorithms/fluxcal/#SDSStoAB
+        cat['umag'] -= 0.04
+        cat['zmag'] += 0.02
+
+        for _ in ['u', 'g', 'r', 'i', 'z']:
+            cat[_ + '_SDSS'] = cat[_ + 'mag']
 
     return cat
 
