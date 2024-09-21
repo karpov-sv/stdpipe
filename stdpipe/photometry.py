@@ -1137,6 +1137,8 @@ def measure_objects(
 
     if centroid_iter:
         box_size = int(np.ceil(aper))
+        if box_size % 2 == 0:
+            box_size += 1
         log('Using centroiding routine with %d iterations within %dx%d box' % (centroid_iter, box_size, box_size))
         # Keep original pixel positions
         obj['x_orig'] = obj['x']
