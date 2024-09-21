@@ -1029,6 +1029,7 @@ def measure_objects(
     gain=None,
     bg_size=64,
     sn=None,
+    centroid_iter=0,
     keep_negative=True,
     get_bg=False,
     verbose=False,
@@ -1053,6 +1054,7 @@ def measure_objects(
     :param gain: Image gain, e/ADU, used to build image noise model
     :param bg_size: Background grid size in pixels
     :param sn: Minimal S/N ratio for the object to be considered good. If set, all measurements with magnitude errors exceeding 1/SN will be discarded
+    :param centroid_iter: Number of centroiding iterations to run before photometry. If non-zero, will try to improve the aperture placement by finding the centroid of pixels inside the aperture.
     :param keep_negative: If not set, measurements with negative fluxes will be discarded
     :param get_bg: If True, the routine will also return estimated background and background noise images
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
@@ -1132,6 +1134,22 @@ def measure_objects(
         aper *= fwhm
 
     log('Using aperture radius %.1f pixels' % aper)
+
+    if centroid_iter:
+        box_size = int(np.ceil(aper))
+        log('Using centroiding routine with %d iterations within %dx%d box' % (centroid_iter, box_size, box_size))
+        # Keep original pixel positions
+        obj['x_orig'] = obj['x']
+        obj['y_orig'] = obj['y']
+
+        for iter in range(centroid_iter):
+            obj['x'],obj['y'] = photutils.centroids.centroid_sources(
+                image1,
+                obj['x'],
+                obj['y'],
+                box_size=box_size,
+                mask=mask
+            )
 
     # FIXME: is there any better way to exclude some positions from photometry?..
     positions = [(_['x'], _['y']) if np.isfinite(_['x']) and np.isfinite(_['y']) else (-1000, -1000) for _ in obj]
