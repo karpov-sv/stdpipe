@@ -7,6 +7,7 @@ from matplotlib.patches import Circle
 from astropy.stats import mad_std
 from astropy.visualization import simple_norm, ImageNormalize
 from astropy.visualization.stretch import HistEqStretch
+from astropy.convolution import Gaussian2DKernel, convolve, convolve_fft
 
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.stats import binned_statistic_2d
@@ -41,6 +42,7 @@ def imshow(
     show_colorbar=True,
     show_axis=True,
     stretch='linear',
+    r0=None,
     ax=None,
     **kwargs,
 ):
@@ -52,6 +54,7 @@ def imshow(
     :param show_colorbar: Whether to show a colorbar alongside the image
     :param show_axis: Whether to show the axes around the image
     :param stretch: Image intensity stretching mode - e.g. `linear`, `log`, `asinh`, or anything else supported by Astropy visualization layer
+    :param r0: Smoothing kernel size (sigma) to be applied, optional
     :param ax: Matplotlib Axes object to be used for plotting, optional
     :param \**kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.imshow`
 
@@ -66,6 +69,11 @@ def imshow(
         good_idx &= ~mask
 
     if np.sum(good_idx):
+        if r0 is not None and r0 > 0:
+            # First smooth the image
+            kernel = Gaussian2DKernel(r0)
+            image = convolve(image, kernel, mask=mask, boundary='extend')
+
         if qq is None and 'vmin' not in kwargs and 'vmax' not in kwargs:
             # Sane defaults for quantiles if no manual limits provided
             qq = [0.5, 99.5]
@@ -201,6 +209,7 @@ def plot_cutout(
     mark_lw=2,
     mark_ra=None,
     mark_dec=None,
+    r0=None,
     show_title=True,
     title=None,
     additional_title=None,
@@ -221,6 +230,7 @@ def plot_cutout(
     :param mark_lw: Line width of the overlay mark, optional
     :param mark_ra: Sky coordinate of the overlay mark, overrides `mark_x` and `mark_y`, optional
     :param mark_dec: Sky coordinate of the overlay mark, overrides `mark_x` and `mark_y`, optional
+    :param r0: Smoothing kernel size (sigma) to be applied to the image and template planes, optional
     :param show_title: Show title over cutout. Defaults to True.
     :param title: The title to show above the cutouts, optional. If not provided, the title will be constructed from various pieces of cutout metadata, plus the contents of `additoonal_title` field, if provided
     :param additional_title: Additional text to append to automatically generated title of the cutout figure.
@@ -251,6 +261,7 @@ def plot_cutout(
                 'stretch': 'asinh'
                 if name in ['image', 'template', 'convolved']
                 else 'linear',
+                'r0': r0 if name in ['image', 'template'] else None,
                 # 'qq': [0.5, 100] if name in ['image', 'template', 'convolved'] else [0.5, 99.5],
                 'cmap': 'Blues_r',
                 'show_colorbar': False,
