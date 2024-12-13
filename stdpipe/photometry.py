@@ -1155,9 +1155,9 @@ def measure_objects(
 
     # FIXME: is there any better way to exclude some positions from photometry?..
     positions = [(_['x'], _['y']) if np.isfinite(_['x']) and np.isfinite(_['y']) else (-1000, -1000) for _ in obj]
-    apertures = photutils.CircularAperture(positions, r=aper)
+    apertures = photutils.aperture.CircularAperture(positions, r=aper)
     # Use just a minimal mask here so that the flux from 'soft-masked' (e.g. saturated) pixels is still counted
-    res = photutils.aperture_photometry(image1, apertures, error=err, mask=mask0)
+    res = photutils.aperture.aperture_photometry(image1, apertures, error=err, mask=mask0)
 
     obj['flux'] = res['aperture_sum']
     obj['fluxerr'] = res['aperture_sum_err']
@@ -1176,7 +1176,7 @@ def measure_objects(
     obj['bg_fluxerr'] = 0.0  # Local background flux error inside the aperture
     if bg_est is not None:
         bgrms2 = bg_est.background_rms**2
-        res = photutils.aperture_photometry(bgrms2, apertures)
+        res = photutils.aperture.aperture_photometry(bgrms2, apertures)
         obj['bg_fluxerr'] = np.sqrt(res['aperture_sum'])
 
     # Local background
@@ -1189,11 +1189,11 @@ def measure_objects(
             )
         )
 
-        bg_apertures = photutils.CircularAnnulus(
+        bg_apertures = photutils.aperture.CircularAnnulus(
             positions, r_in=bkgann[0], r_out=bkgann[1]
         )
         image_ones = np.ones_like(image1)
-        res_area = photutils.aperture_photometry(image_ones, apertures, mask=mask0)
+        res_area = photutils.aperture.aperture_photometry(image_ones, apertures, mask=mask0)
 
         obj['bg_local'] = 0.0  # Dedicated column for local background on top of global estimation
         # obj['bg_fluxerr'] = 0.0  # Local background flux error inside the aperture
