@@ -1008,7 +1008,7 @@ def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kw
 
         back, backrms = bg.back(), bg.rms()
     else:  # photutils
-        bg = photutils.Background2D(image, size, mask=mask, **kwargs)
+        bg = photutils.background.Background2D(image, size, mask=mask, **kwargs)
         back, backrms = bg.background, bg.background_rms
 
     if get_rms:
@@ -1088,7 +1088,7 @@ def measure_objects(
 
     if bg is None or err is None or get_bg:
         log('Estimating global background with %dx%d mesh' % (bg_size, bg_size))
-        bg_est = photutils.Background2D(
+        bg_est = photutils.background.Background2D(
             image1, bg_size, mask=mask | mask0, exclude_percentile=90
         )
     else:
