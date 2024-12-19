@@ -144,6 +144,11 @@ def get_obs_time(
                 time = Time(time, format='unix')
 
         else:
+            if isinstance(time, str):
+                # Special case where some telescope used '-' for time separation instead of ISO ':'
+                m=re.fullmatch(r"(\d\d\d\d-\d\d-\d\dT\d\d)-(\d\d)-(\d\d(?:\.\d{1,6})?)", time.strip())
+                if m:
+                    time = ":".join(m.groups())
             time = Time(time)
 
         log('Time parsed as:', time.iso)

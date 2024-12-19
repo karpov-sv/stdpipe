@@ -20,6 +20,8 @@ from astropy.wcs import FITSFixedWarning
 
 import sep
 import photutils
+import photutils.background
+import photutils.aperture
 from photutils.utils import calc_total_error
 
 import statsmodels.api as sm
