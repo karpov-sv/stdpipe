@@ -169,7 +169,7 @@ def get_obs_time(
         log('Loading FITS header from', filename)
         header = fits.getheader(filename)
 
-    for dkey in ['DATE-OBS', 'DATE', 'TIME-OBS', 'UT', 'MJD', 'JD']:
+    for dkey in ['DATE-OBS', 'DATEOBS', 'DATE', 'TIME-OBS', 'TIMEOBS', 'UT', 'MJD', 'JD']:
         if dkey in header:
             log('Found ' + dkey + ':', header[dkey])
             # First try to parse standard ISO time
@@ -178,7 +178,7 @@ def get_obs_time(
             except:
                 log('Could not parse ' + dkey + ' using Astropy parser')
 
-            for tkey in ['TIME-OBS', 'UT']:
+            for tkey in ['TIME-OBS', 'TIMEOBS', 'UT']:
                 if tkey in header:
                     log('Found ' + tkey + ':', header[tkey])
                     try:
