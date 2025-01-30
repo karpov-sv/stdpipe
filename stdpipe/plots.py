@@ -261,7 +261,7 @@ def plot_cutout(
                 'stretch': 'asinh'
                 if name in ['image', 'template', 'convolved']
                 else 'linear',
-                'r0': r0 if name in ['image', 'template'] else None,
+                'r0': r0 if name in ['image', 'template', 'diff'] else None,
                 # 'qq': [0.5, 100] if name in ['image', 'template', 'convolved'] else [0.5, 99.5],
                 'cmap': 'Blues_r',
                 'show_colorbar': False,
