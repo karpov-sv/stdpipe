@@ -53,7 +53,7 @@ def tnsResolve(name='AT2023lxx'):
         if reverse:
             params.update({'reverse': True})
 
-        r = requests.post("https://fink-portal.org/api/v1/resolver", json=params)
+        r = requests.post("https://api.fink-portal.org/api/v1/resolver", json=params)
 
         res = json.loads(r.content)
         if res:
