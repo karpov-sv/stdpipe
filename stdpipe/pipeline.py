@@ -275,7 +275,7 @@ def filter_transient_candidates(
     skybot=True,
     ned=False,
     flagged=True,
-    flagmask=0xFF00,
+    flagmask=0x7F00,
     col_id=None,
     vizier_checker_fn=None,
     get_candidates=True,
