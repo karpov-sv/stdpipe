@@ -22,6 +22,7 @@ import sep
 import photutils
 import photutils.background
 import photutils.aperture
+import photutils.centroids
 from photutils.utils import calc_total_error
 
 import statsmodels.api as sm
@@ -703,6 +704,32 @@ def get_intrinsic_scatter(y, yerr, min=0, max=None):
     return C.x[2]
 
 
+def format_color_term(color_term, name=None, color_name=None, fmt='.2f'):
+    result = []
+
+    if color_term is None:
+        return format(0.0, fmt)
+
+    if name is not None:
+        result += [name]
+
+    if isinstance(color_term, float) or isinstance(color_term, int):
+        # Scalar?..
+        color_term = [color_term]
+
+    # Here we assume it is a list
+    for i,val in enumerate(color_term):
+        if color_name is not None:
+            sign = '-' if val > 0 else '+' # Reverse signs!!!
+            sval = format(np.abs(val), fmt)
+            deg = '^%d' % (i + 1) if i > 0 else ''
+            result += [sign + ' ' + sval + ' (' + color_name + ')' + deg]
+        else:
+            result += [format(val, fmt)]
+
+    return " ".join(result)
+
+
 def match(
     obj_ra,
     obj_dec,
@@ -729,6 +756,7 @@ def match(
     robust=True,
     scale_noise=False,
     use_color=True,
+    force_color_term=None,
 ):
     """Low-level photometric matching routine.
 
@@ -758,7 +786,8 @@ def match(
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
     :param robust: Whether to use robust least squares fitting routine instead of weighted least squares
     :param scale_noise: Whether to re-scale the noise model (object and catalogue magnitude errors) to match actual scatter of the data points or not. Intrinsic scatter term is not being scaled this way.
-    :param use_color: Whether to use catalogue color for deriving the color term.
+    :param use_color: Whether to use catalogue color for deriving the color term. If integer, it determines the color term order.
+    :param force_color_term: Do not fit for the color term, but use this fixed value instead.
     :returns: The dictionary with photometric results, as described below.
 
     The results of photometric matching are returned in a dictionary with the following fields:
@@ -844,8 +873,14 @@ def match(
     if cat_color is not None:
         ccolor = np.ma.filled(cat_color[cidx], fill_value=np.nan)
         if use_color:
-            X += make_series(ccolor, x, y, order=0)
-            log('Using color term')
+            for _ in range(int(use_color)):
+                X += make_series(ccolor**(_ + 1), x, y, order=0)
+
+            log('Using color term of order', int(use_color))
+        elif force_color_term is not None:
+            for i,val in enumerate(np.atleast_1d(force_color_term)):
+                cmag -= val * ccolor**(i + 1)
+            log('Using fixed color term', format_color_term(force_color_term))
     else:
         ccolor = np.zeros_like(cmag)
 
@@ -968,12 +1003,20 @@ def match(
         else:
             return np.sum(X * C.params[0 : X.shape[1]], axis=1)
 
-    if cat_color is not None and use_color:
-        X = make_series(order=spatial_order)
-        if bg_order is not None:
-            X += make_series(order=bg_order)
-        color_term = C.params[len(X) :][0]
-        log('Color term is %.2f' % color_term)
+    if cat_color is not None and (use_color or force_color_term is not None):
+        if use_color:
+            X = make_series(order=spatial_order)
+            if bg_order is not None:
+                X += make_series(order=bg_order)
+
+            color_term = list(C.params[len(X) :][:int(use_color)])
+            if len(color_term) == 1:
+                color_term = color_term[0]
+
+            log('Color term is', format_color_term(color_term))
+        elif force_color_term is not None:
+            color_term = force_color_term
+            log('Color term (fixed) is', format_color_term(color_term))
     else:
         color_term = None
 

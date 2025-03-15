@@ -304,11 +304,9 @@ def plot_cutout(
                     and 'mag_color_term' in cutout['meta']
                     and cutout['meta']['mag_color_term'] is not None
                 ):
-                    sign = '-' if cutout['meta']['mag_color_term'] > 0 else '+'
-                    title += ' %s %.2f (%s)' % (
-                        sign,
-                        np.abs(cutout['meta']['mag_color_term']),
-                        cutout['meta']['mag_color_name'],
+                    title += ' ' + photometry.format_color_term(
+                        cutout['meta']['mag_color_term'],
+                        color_name=cutout['meta']['mag_color_name'],
                     )
 
             if 'mag_limit' in cutout['meta']:
@@ -366,12 +364,12 @@ def plot_photometric_match(
         and 'color_term' in m.keys()
         and m['color_term'] is not None
     ):
-        sign = '-' if m['color_term'] > 0 else '+'
-        model_str += ' %s %.2f (%s - %s)' % (
-            sign,
-            np.abs(m['color_term']),
-            m['cat_col_mag1'],
-            m['cat_col_mag2'],
+        model_str += ' ' + photometry.format_color_term(
+            m['color_term'],
+            color_name='%s - %s' % (
+                m['cat_col_mag1'],
+                m['cat_col_mag2'],
+            ),
         )
 
     model_str += ' + ZP'
@@ -506,7 +504,7 @@ def plot_photometric_match(
         )
         ax.set_ylabel('Instrumental - Model')
 
-        ax.set_title('color term = %.2f' % (m['color_term'] or 0.0))
+        ax.set_title('color term = ' + photometry.format_color_term(m['color_term']))
 
         ax.text(0.02, 0.05, model_str, transform=ax.transAxes)
 
