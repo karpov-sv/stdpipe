@@ -206,7 +206,7 @@ def write_cutout(cutout, filename):
             data = Time(data).to_value('fits')
         elif not np.isscalar(data):
             # NumPy arrays and like
-            data = repr(data)
+            data = repr(np.ma.filled(data))
         elif np.isreal(data) and np.isnan(data):
             data = 'NaN'
         elif np.isreal(data) and not np.isfinite(data):
