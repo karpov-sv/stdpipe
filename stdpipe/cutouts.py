@@ -204,6 +204,9 @@ def write_cutout(cutout, filename):
             data = None
         elif type(data) == Time or type(data) == datetime.datetime:
             data = Time(data).to_value('fits')
+        elif not np.isscalar(data):
+            # NumPy arrays and like
+            data = repr(data)
         elif np.isreal(data) and np.isnan(data):
             data = 'NaN'
         elif np.isreal(data) and not np.isfinite(data):
@@ -270,6 +273,10 @@ def load_cutout(filename):
             data = np.nan
         elif data == 'Inf':
             data = np.inf
+        elif isinstance(data, str) and data.startswith('array('):
+            # FIXME: any safer way to convert it back to array?..
+            array = np.array
+            data = eval(data)
 
         cutout['meta'][name] = data
 
