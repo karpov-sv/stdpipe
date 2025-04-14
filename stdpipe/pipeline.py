@@ -614,11 +614,11 @@ def calibrate_photometry(
 
         if update:
             obj['mag_calib'] = obj[obj_col_mag] + m['zero_fn'](
-                obj['x'], obj['y'], obj['mag']
+                obj[obj_col_x], obj[obj_col_y], obj[obj_col_mag]
             )
             obj['mag_calib_err'] = np.hypot(
                 obj[obj_col_mag_err],
-                m['zero_fn'](obj['x'], obj['y'], obj['mag'], get_err=True),
+                m['zero_fn'](obj[obj_col_x], obj[obj_col_y], obj[obj_col_mag], get_err=True),
             )
     else:
         log('Photometric calibration failed')
