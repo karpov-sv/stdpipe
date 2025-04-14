@@ -746,6 +746,7 @@ def match(
     obj_y=None,
     spatial_order=0,
     bg_order=None,
+    nonlin=False,
     threshold=5.0,
     niter=10,
     accept_flags=0,
@@ -777,6 +778,7 @@ def match(
     :param obj_y: Array of `y` coordinates of objects on the image, optional
     :param spatial_order: Order of zero point spatial polynomial (0 for constant).
     :param bg_order: Order of additive flux term spatial polynomial (None to disable this term in the model)
+    :param nonlin: Whether to fit for simple non-linearity, optional
     :param threshold: Rejection threshold (relative to magnitude errors) for object-catalogue pair to be rejected from the fit
     :param niter: Number of iterations for the fitting
     :param accept_flags: Bitmask for acceptable object flags. Objects having any other bits set will be excluded from the model
@@ -865,6 +867,11 @@ def match(
         X += make_series(-2.5 / np.log(10) / 10 ** (-0.4 * omag), x, y, order=bg_order)
         log('Adjusting background level using polynomial with bg_order =', bg_order)
 
+    if nonlin:
+        # Non-linearity
+        X += make_series(omag, x, y, order=0)
+        log('Fitting for simple non-linearity')
+
     if robust:
         log('Using robust fitting')
     else:
@@ -873,6 +880,7 @@ def match(
     if cat_color is not None:
         ccolor = np.ma.filled(cat_color[cidx], fill_value=np.nan)
         if use_color:
+            pos_color = len(X)
             for _ in range(int(use_color)):
                 X += make_series(ccolor**(_ + 1), x, y, order=0)
 
@@ -985,8 +993,11 @@ def match(
 
         if bg_order is not None and mag is not None:
             X += make_series(
-                -2.5 / np.log(10) / 10 ** (-0.4 * mag), x, y, order=bg_order
+                -2.5 / np.log(10) / 10 ** (-0.4 * np.ma.filled(mag, np.nan)), x, y, order=bg_order
             )
+
+        if nonlin and mag is not None:
+            X += make_series(np.ma.filled(mag, np.nan), x, y, order=0)
 
         X = np.vstack(X).T
 
@@ -1005,11 +1016,7 @@ def match(
 
     if cat_color is not None and (use_color or force_color_term is not None):
         if use_color:
-            X = make_series(order=spatial_order)
-            if bg_order is not None:
-                X += make_series(order=bg_order)
-
-            color_term = list(C.params[len(X) :][:int(use_color)])
+            color_term = list(C.params[pos_color:][:int(use_color)])
             if len(color_term) == 1:
                 color_term = color_term[0]
 
