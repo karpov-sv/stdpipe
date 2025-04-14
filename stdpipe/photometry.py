@@ -869,6 +869,7 @@ def match(
 
     if nonlin:
         # Non-linearity
+        pos_nonlin = len(X)
         X += make_series(omag, x, y, order=0)
         log('Fitting for simple non-linearity')
 
@@ -981,6 +982,9 @@ def match(
     log(np.sum(idx), 'good matches')
     if max_intrinsic_rms > 0:
         log('Intrinsic scatter is %.2f' % intrinsic_rms)
+
+    if nonlin:
+        log('Non-linearity term is %.3f' % C.params[pos_nonlin])
 
     # Export the model
     def zero_fn(xx, yy, mag=None, get_err=False, add_intrinsic_rms=False):
