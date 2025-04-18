@@ -205,6 +205,8 @@ def plot_cutout(
     mark_x=None,
     mark_y=None,
     mark_r=5.0,
+    mark_r2=None,
+    mark_r3=None,
     mark_color='red',
     mark_lw=2,
     mark_ra=None,
@@ -287,6 +289,20 @@ def plot_cutout(
                         lw=mark_lw,
                     )
                 )
+
+                for _ in [mark_r2, mark_r3]:
+                    if _ is not None:
+                        ax.add_artist(
+                            Circle(
+                                (mark_x, mark_y),
+                                _,
+                                edgecolor=mark_color,
+                                facecolor='none',
+                                ls='--',
+                                lw=mark_lw/2,
+                            )
+                        )
+
 
             if curplot > nplots:
                 break
