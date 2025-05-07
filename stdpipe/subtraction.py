@@ -236,7 +236,7 @@ def run_hotpants(
             # smooth = convolve(smooth, kernel, mask=mask, preserve_nan=True)
             smooth[mask] = bg.back()[mask]
             serr = np.abs((smooth - bg.back()))
-            if image_gain is not None:
+            if image_gain is not None and image_gain:
                 serr /= image_gain
             err = np.sqrt(err ** 2 + serr)  # Contribution from the sources
             # err[mask] = 1/_nan
@@ -263,7 +263,7 @@ def run_hotpants(
             # smooth = convolve(smooth, kernel, mask=template_mask, preserve_nan=True)
             smooth[template_mask] = bg.back()[template_mask]
             serr = np.abs((smooth - bg.back()))
-            if template_gain is not None:
+            if template_gain is not None and template_gain:
                 serr /= template_gain
             template_err = np.sqrt(
                 template_err ** 2 + serr
