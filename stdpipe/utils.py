@@ -346,3 +346,16 @@ def file_write(filename, contents=None, append=False):
     with open(filename, 'a' if append else 'w') as f:
         if contents is not None:
             f.write(contents)
+
+
+# Simple reading of data from file
+def file_read(filename, contents=None):
+    """
+    Simple utility for reading some contents from file.
+    """
+
+    if os.path.exists(filename):
+        with open(filename, 'r') as f:
+            return f.read()
+
+    return None
