@@ -62,6 +62,11 @@ Install conda astropy dependencies
 
    conda install -c astropy astroquery
 
+Depending on your operating system and availability of pre-compiled Python packages for it, you may also need to have basic development environment (C/C++ compiler etc) installed, either inside the environment or in the base system. E.g. on Ubuntu or Debian it may be installed with
+
+.. prompt:: bash
+
+   sudo apt install gcc
 
 STDPipe installation
 --------------------
@@ -142,7 +147,13 @@ HOTPANTS image subtraction package cannot presently (as far as I know) be instal
 
    If HOTPANTS compilation fails for you on the linking stage with a number of :code:`multiple definition of` error messages - that's a `known bug <https://github.com/acbecker/hotpants/issues/5>`__ related to some recent changes in GCC compiler defaults. You may easily fix it by editing the :file:`Makefile` and adding :code:`-fcommon` switch among the others in the `COPTS` options (line `30 <https://github.com/acbecker/hotpants/blob/master/Makefile#L30>`__ at the moment of writing).
 
-We have a dedicated script `install_hotpants.sh` that may be used to do it automatically - it will grab the sources, patch it to fix the problem described above, compile, and install the `hotpants` binary to `/usr/local/bin/`. If it fails at any step, you may try to manually fix the issues (the code should be in `/tmp/hotpants` folder) and continue installing it.
+We have a dedicated script `install_hotpants.sh` that may be used to do it automatically - it will grab the sources, patch it to fix the problem described above, compile, and install the `hotpants` binary to `/usr/local/bin/`. If it fails at any step, you may try to manually fix the issues (the code should be in `/tmp/hotpants` folder) and continue installing it. It may fail e.g. due to missing development environment (compiler/linker/utilities etc), or missing dependencies - it may be installed according to standard recipes for your operating system. E.g. on Ubuntu or Debian it may be done as
+
+.. prompt:: bash
+
+   sudo apt install gcc make libcfitsio-dev
+
+To be able to install the compiled binary to `/usr/local/bin` the script should be run with administrator permissions, e.g. using `sudo`. Otherwise, you may run it from normal user and then manually copy the compiled binary (it will be at `/tmp/hotpants/hotpants`) there later.
 
 Ubuntu
 ^^^^^^
