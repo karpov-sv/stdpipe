@@ -293,6 +293,21 @@ def run_hotpants(
                 2.0 * sigma_match,
             ]
 
+        elif image_fwhm < template_fwhm:
+            sigma_match = np.sqrt(template_fwhm ** 2 - image_fwhm ** 2) / 2.35
+            sigma_match = max(1.0, sigma_match)
+            params['ng'] = [
+                3,
+                6,
+                0.5 * sigma_match,
+                4,
+                1.0 * sigma_match,
+                2,
+                2.0 * sigma_match,
+            ]
+            # TODO: switch to convolve-image mode?..
+
+
     if image_fwhm is not None:
         # Logic from https://arxiv.org/pdf/1608.01006.pdf suggests 2.5 and 6 here
         params['r'] = int(np.ceil(image_fwhm * rel_r))
