@@ -523,7 +523,7 @@ def get_objects_sextractor(
         np.savetxt(
             kernelname,
             kernel / np.sum(kernel),
-            fmt=b'%.6f',
+            fmt='%.6f',
             header='CONV NORM',
             comments='',
         )
