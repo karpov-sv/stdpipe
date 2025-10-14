@@ -443,6 +443,20 @@ def get_cat_vizier(
                 -0.0020460270205769305
             ]
         )
+        py1,py2 = (
+            [
+                0.038781034592287725,
+                -0.11040188064275973,
+                0.08235396198116865,
+                0.006980454415779221
+            ],
+            [
+                -0.0649739656901001,
+                0.205320995228645,
+                -0.28233276303592,
+                0.006980454415779424
+            ]
+        )
 
         cat['gmag'] = (
             cat['gPSF']
@@ -464,9 +478,15 @@ def get_cat_vizier(
             + np.polyval(pz1, cat['gPSF'] - cat['rPSF'])
             + np.polyval(pz2, cat['rPSF'] - cat['iPSF'])
         )
+        cat['ymag'] = (
+            cat['zPSF']
+            + np.polyval(py1, cat['gPSF'] - cat['rPSF'])
+            + np.polyval(py2, cat['rPSF'] - cat['iPSF'])
+        )
 
         for _ in ['g', 'r', 'i', 'z']:
             cat['e_' + _ + 'mag'] = cat['e_' + _ + 'PSF']
+        cat['e_ymag'] = cat['e_zPSF']
 
         log("Augmenting the catalogue with Johnson-Cousins photometry")
 
