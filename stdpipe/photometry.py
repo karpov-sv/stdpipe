@@ -1147,16 +1147,18 @@ def measure_objects(
         bg_est = photutils.background.Background2D(
             image1, bg_size, mask=mask | mask0, exclude_percentile=90
         )
+        bg_est_bg = bg_est.background
+        bg_est_rms = bg_est.background_rms
     else:
         bg_est = None
 
     if bg is None:
         log(
             'Subtracting global background: median %.1f rms %.2f' % (
-                np.median(bg_est.background), np.std(bg_est.background)
+                np.median(bg_est_bg), np.std(bg_est_bg)
             )
         )
-        image1 -= bg_est.background
+        image1 -= bg_est_bg
     else:
         log(
             'Subtracting user-provided background: median %.1f rms %.2f' % (
@@ -1170,12 +1172,12 @@ def measure_objects(
     if err is None:
         log(
             'Using global background noise map: median %.1f rms %.2f + gain %.1f' % (
-                np.median(bg_est.background_rms),
-                np.std(bg_est.background_rms),
+                np.median(bg_est_rms),
+                np.std(bg_est_rms),
                 gain if gain else np.inf,
             )
         )
-        err = bg_est.background_rms
+        err = bg_est_rms
         if gain:
             err = calc_total_error(image1, err, gain)
     else:
@@ -1231,8 +1233,7 @@ def measure_objects(
     # Position-dependent background flux error from global background model, if available
     obj['bg_fluxerr'] = 0.0  # Local background flux error inside the aperture
     if bg_est is not None:
-        bgrms2 = bg_est.background_rms**2
-        res = photutils.aperture.aperture_photometry(bgrms2, apertures)
+        res = photutils.aperture.aperture_photometry(bg_est_rms**2, apertures)
         obj['bg_fluxerr'] = np.sqrt(res['aperture_sum'])
 
     # Local background
@@ -1245,48 +1246,25 @@ def measure_objects(
             )
         )
 
-        bg_apertures = photutils.aperture.CircularAnnulus(
-            positions, r_in=bkgann[0], r_out=bkgann[1]
-        )
+        # Aperture areas
         image_ones = np.ones_like(image1)
         res_area = photutils.aperture.aperture_photometry(image_ones, apertures, mask=mask0)
 
-        obj['bg_local'] = 0.0  # Dedicated column for local background on top of global estimation
-        # obj['bg_fluxerr'] = 0.0  # Local background flux error inside the aperture
+        # Local background
+        lbg = photutils.background.LocalBackground(
+            bkgann[0], bkgann[1],
+            bkg_estimator=photutils.background.ModeEstimatorBackground(),
+        )
 
-        for row, area, bg_mask in zip(
-            obj, res_area, bg_apertures.to_mask(method='center')
-        ):
-            bg_overlap = bg_mask.multiply(image1)
-            mask_overlap = bg_mask.multiply(mask | mask0)
+        # Dedicated column for local background on top of global estimation
+        obj['bg_local'] = lbg(image1, obj['x'], obj['y'], mask=mask)
 
-            if bg_overlap is None or mask_overlap is None:
-                # Flag the values where the annulus is completely outside the image
-                row['flags'] |= 0x400
-                continue
+        # Sanitize and flag the values where local bg estimation failed
+        idx = ~np.isfinite(obj['bg_local'])
+        obj['bg_local'][idx] = 0
+        obj['flags'][idx] |= 0x400
 
-            bg_vals = bg_overlap[bg_mask.data > 0]
-            mask_vals = mask_overlap[bg_mask.data > 0]
-
-            if np.sum(mask_vals == 0) > 0:
-                # Mean, Median and Std, all sigma-clipped
-                bg_stats = sigma_clipped_stats(bg_vals, mask=mask_vals, stdfunc=mad_std)
-                # SExtractor-like background estimation: 3*median - 2*mean
-                local_bg_est = 3.0 * bg_stats[1] - 2.0 * bg_stats[0]
-
-                row['flux'] -= local_bg_est * area['aperture_sum']
-                # Rough estimation of bg_est error as rms/sqrt(N)
-                row['fluxerr'] = np.hypot(
-                    row['fluxerr'],
-                    bg_stats[2] / np.sqrt(np.sum(mask_vals == 0)) * area['aperture_sum'],
-                )
-                row['bg_local'] = local_bg_est
-
-                if bg_est is None:
-                    row['bg_fluxerr'] = bg_stats[2] * np.sqrt(area['aperture_sum'])
-            else:
-                # Flag the values where local bg estimation failed
-                row['flags'] |= 0x400
+        obj['flux'] -= obj['bg_local'] * res_area['aperture_sum']
 
     idx = obj['flux'] > 0
     for _ in ['mag', 'magerr']:
@@ -1312,7 +1290,7 @@ def measure_objects(
         obj = obj[idx]
 
     if get_bg:
-        return obj, bg_est.background, err
+        return obj, bg_est_bg, err
     else:
         return obj
 

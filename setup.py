@@ -13,7 +13,7 @@ requirements = [
     'astroquery>0.4.1',
     'sep',
     'astroscrappy',
-    'photutils',
+    'photutils>1.9',
     'statsmodels',
     'tqdm',
     'regions',
