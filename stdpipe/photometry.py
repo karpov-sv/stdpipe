@@ -1224,11 +1224,8 @@ def measure_objects(
         obj['flags'] = 0
 
     # Check whether some aperture pixels are masked, and set the flags for that
-    for i, a in enumerate(apertures):
-        am = a.to_mask(method='center')
-        vals = am.multiply(mask | mask0)
-        if vals is None or np.any(vals):
-            obj['flags'][i] |= 0x200
+    mres = photutils.aperture.aperture_photometry(mask | mask0, apertures, method='center')
+    obj['flags'][mres['aperture_sum'] > 0] |= 0x200
 
     # Position-dependent background flux error from global background model, if available
     obj['bg_fluxerr'] = 0.0  # Local background flux error inside the aperture
