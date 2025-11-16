@@ -331,52 +331,43 @@ def blind_match_objects(
 
     opts.update(extra)
 
-    # Build the command line
-    command = binname + ' ' + shlex.quote(objname) + ' ' + utils.format_long_opts(opts)
-    if not verbose:
-        command += ' > /dev/null 2>/dev/null'
-    log('Will run first iteration of Astrometry.Net like that:')
-    log(command)
-
-    res = os.system(command)
-
     wcs = None
-    if res == 0 and os.path.exists(wcsname):
-        log('Successfully run first iteration')
-        shutil.move(wcsname, tmpname)
 
-        opts['verify'] = tmpname
-        command = (
-            binname + ' ' + shlex.quote(objname) + ' ' + utils.format_long_opts(opts)
-        )
+    for iter in range(2):
+        if os.path.exists(wcsname):
+            shutil.move(wcsname, tmpname)
+            opts['verify'] = tmpname
+
+        # Build the command line
+        command = binname + ' ' + shlex.quote(objname) + ' ' + utils.format_long_opts(opts)
         if not verbose:
             command += ' > /dev/null 2>/dev/null'
-        log('Will run second iteration of Astrometry.Net like that:')
+        log('Will run iteration %d of Astrometry.Net like that:' % (iter,))
         log(command)
 
         res = os.system(command)
 
         if res == 0 and os.path.exists(wcsname):
-            log('Successfully run second iteration')
-            header = fits.getheader(wcsname)
-            wcs = WCS(header)
-
-            ra0, dec0, sr0 = get_frame_center(wcs=wcs, width=width, height=height)
-            pixscale = get_pixscale(wcs=wcs)
-
-            log(
-                'Got WCS solution with center at %.4f %.4f radius %.2f deg and pixel scale %.2f arcsec/pix'
-                % (ra0, dec0, sr0, pixscale * 3600)
-            )
-
-            if update and wcs:
-                obj['ra'], obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
+            log('Successfully run iteration %d' % (iter,))
 
         else:
             log('Error %s running Astrometry.Net' % res)
 
-    else:
-        log('Error %s running Astrometry.Net' % res)
+
+    if res == 0 and os.path.exists(wcsname):
+        header = fits.getheader(wcsname)
+        wcs = WCS(header)
+
+        ra0, dec0, sr0 = get_frame_center(wcs=wcs, width=width, height=height)
+        pixscale = get_pixscale(wcs=wcs)
+
+        log(
+            'Got WCS solution with center at %.4f %.4f radius %.2f deg and pixel scale %.2f arcsec/pix'
+            % (ra0, dec0, sr0, pixscale * 3600)
+        )
+
+        if update and wcs:
+            obj['ra'], obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
 
     if _workdir is None:
         shutil.rmtree(workdir)
