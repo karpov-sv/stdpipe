@@ -299,6 +299,7 @@ def blind_match_objects(
         'sort-column': 'FLUX',
         'width': width,
         'height': height,
+        'crpix-center': True,
         #
         'overwrite': True,
         'no-plots': True,
@@ -309,7 +310,7 @@ def blind_match_objects(
     if config is not None:
         opts['config'] = config
 
-    if order is not None:
+    if order is not None and order > 0:
         opts['tweak-order'] = order
     else:
         opts['no-tweak'] = True
