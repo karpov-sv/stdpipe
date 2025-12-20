@@ -1,7 +1,6 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 import psycopg2, psycopg2.extras
-import datetime
 
 import numpy as np
 
@@ -43,6 +42,8 @@ class DB:
         psycopg2.extras.register_default_jsonb(self.conn)
         # FIXME: the following adapter is registered globally!
         psycopg2.extensions.register_adapter(dict, psycopg2.extras.Json)
+        psycopg2.extensions.register_adapter(np.float32, psycopg2.extensions.AsIs)
+        psycopg2.extensions.register_adapter(np.float64, psycopg2.extensions.AsIs)
 
         self.connstring = connstring
         self.readonly = readonly
