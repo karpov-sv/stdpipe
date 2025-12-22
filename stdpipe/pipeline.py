@@ -159,7 +159,7 @@ def refine_astrometry(
     :param method: May be either 'scamp' or 'astropy' or 'astrometrynet'
     :param update: If set, the object list will be updated in-place to contain correct `ra` and `dec` sky coordinates
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :param \**kwargs: All other parameters will be directly passed to :func:`~stdpipe.astrometry.refine_wcs_scamp`
+    :param \\**kwargs: All other parameters will be directly passed to :func:`~stdpipe.astrometry.refine_wcs_scamp`
     :returns: Refined astrometric solution
 
     """
@@ -542,7 +542,7 @@ def calibrate_photometry(
     :param cat_col_dec: Column name for catalogue Declination
     :param update: If True, `mag_calib` and `mag_calib_err` columns with calibrated magnitude (without color term) and its error will be added to the object table
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
-    :param \**kwargs: The rest of keyword arguments will be directly passed to :func:`stdpipe.photometry.match`.
+    :param \\**kwargs: The rest of keyword arguments will be directly passed to :func:`stdpipe.photometry.match`.
     :returns: The dictionary with photometric results, as returned by :func:`stdpipe.photometry.match`.
 
     """
@@ -856,6 +856,10 @@ def split_image(
     nx=1,
     ny=None,
     overlap=0,
+    xmin=None,
+    xmax=None,
+    ymin=None,
+    ymax=None,
     get_index=False,
     get_origin=False,
     verbose=False,
@@ -876,14 +880,18 @@ def split_image(
     to avoid detecting the same object twice.
 
     :param image: Image to split
-    :param \*args: Set of additional images, headers, WCS solutions, or tables to split
+    :param \\*args: Set of additional images, headers, WCS solutions, or tables to split
     :param nx: Number of sub-images in `x` direction
     :param ny: Number of sub-images in `y` direction
     :param overlap: If set, defines how much sub-images will overlap, in pixels.
+    :param xmin: If set, defines the image sub-region for splitting, otherwise 0
+    :param xmax: If set, defines the image sub-region for splitting, otherwise image.shape[1]
+    :param ymin: If set, defines the image sub-region for splitting, otherwise 0
+    :param ymax: If set, defines the image sub-region for splitting, otherwise image.shape[0]
     :param get_index: If set, also returns the number of current sub-image, starting from zero
     :param get_origin: If set, also return the sub-image origin pixel coordinates
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
-    :param \**kwargs: Set of images, headers, WCS solutions, or tables to split
+    :param \\**kwargs: Set of images, headers, WCS solutions, or tables to split
     :returns: Every concesutive call to the generator will return the list of cropped objects corresponding to the next sub-image, as well as some sub-image metadata.
 
     The returned list is constructed from the following elements:
@@ -905,23 +913,47 @@ def split_image(
     if not ny:
         ny = nx
 
-    dx, dy = int(np.floor(image.shape[1] / nx)), int(np.floor(image.shape[0] / ny))
+    # Sub-region to split
+    if xmin is None:
+        xmin = 0
+    else:
+        xmin = max(0, xmin)
+
+    if xmax is None:
+        xmax = image.shape[1]
+    else:
+        xmax = min(image.shape[1], xmax)
+
+    if ymin is None:
+        ymin = 0
+    else:
+        ymin = max(0, ymin)
+
+    if ymax is None:
+        ymax = image.shape[0]
+    else:
+        ymax = min(image.shape[0], ymax)
+
+    width = xmax - xmin
+    height = ymax - ymin
+
+    dx, dy = int(np.floor(width / nx)), int(np.floor(height / ny))
 
     log(
         'Will split the image (%dx%d) into %dx%d pieces with %dx%d pixels size and %d pix overlap'
-        % (image.shape[1], image.shape[0], nx, ny, dx, dy, overlap)
+        % (width, height, nx, ny, dx, dy, overlap)
     )
 
     for i, (x0, y0) in enumerate(
         itertools.product(
-            range(0, image.shape[1] - dx + 1, dx), range(0, image.shape[0] - dy + 1, dy)
+            range(xmin, xmax - dx + 1, dx), range(ymin, ymax - dy + 1, dy)
         )
     ):
         # Make some overlap
         x1 = max(0, x0 - overlap)
         y1 = max(0, y0 - overlap)
-        dx1 = min(x0 - x1 + dx + overlap, image.shape[1] - x1)
-        dy1 = min(y0 - y1 + dy + overlap, image.shape[0] - y1)
+        dx1 = min(x0 - x1 + dx + overlap, xmax - x1)
+        dy1 = min(y0 - y1 + dy + overlap, ymax - y1)
 
         result = split_sub_fn(
             x1,
@@ -965,14 +997,14 @@ def get_subimage_centered(
     position exactly at the center).
 
     :param image: Image to crop
-    :param \*args: Set of additional images, headers, WCS solutions, or tables to split
+    :param \\*args: Set of additional images, headers, WCS solutions, or tables to split
     :param x0: Pixel `x` coordinate of the cropped image center in the original image
     :param y0: Pixel `y` coordinate of the cropped image center in the original image
     :param width: Pixel width of the sub-image
     :param height: Pixel height of the sub-image, optional. If not provided, assumed to be equal to `width`
     :param get_origin: If set, also return the sub-image origin pixel coordinates
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
-    :param \**kwargs: Set of images, headers, WCS solutions, or tables to split
+    :param \\**kwargs: Set of images, headers, WCS solutions, or tables to split
     :returns: list of cropped objects corresponding to the sub-image, as well as some sub-image metadata.
 
     The returned list is constructed from the following elements:
