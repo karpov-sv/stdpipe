@@ -359,3 +359,16 @@ def file_read(filename, contents=None):
             return f.read()
 
     return None
+
+
+# Writing of FITS-compressed files
+def fits_write(filename, image, header=None, compress=False):
+    """
+    Store image with or without header to FITS file, with or without compression
+    """
+    if compress:
+        hdu = fits.CompImageHDU(image, header)
+    else:
+        hdu = fits.PrimaryHDU(image, header)
+
+    hdu.writeto(filename, overwrite=True)
