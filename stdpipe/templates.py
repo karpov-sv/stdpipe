@@ -653,7 +653,7 @@ def get_survey_image(
     :param _tmpdir: If specified, all temporary files will be created in a dedicated directory (that will be deleted after running the executable) inside this path.
     :param _workdir: If specified, all temporary files will be created in this directory, and will be kept intact after running SWarp. May be used for debugging exact inputs and outputs of the executable. Optional
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :param \**kwargs: The rest of parameters will be directly passed to :func:`stdpipe.templates.reproject_swarp`
+    :param \\**kwargs: The rest of parameters will be directly passed to :func:`stdpipe.templates.reproject_swarp`
     :returns: Returns the image re-projected onto requested pixel grid
 
     """
@@ -718,7 +718,7 @@ def get_survey_image_and_mask(band='r', **kwargs):
     Uses :func:`stdpipe.templates.get_ps1_image` to do the job
 
     :param band: Photometric band (one of `g`, `r`, `i`, `z`, or `y`)
-    :param \**kwargs: The rest of parameters will be directly passed to :func:`stdpipe.templates.get_survey_image`
+    :param \\**kwargs: The rest of parameters will be directly passed to :func:`stdpipe.templates.get_survey_image`
     :returns: Image and mask
 
     """

@@ -56,7 +56,7 @@ def imshow(
     :param stretch: Image intensity stretching mode - e.g. `linear`, `log`, `asinh`, or anything else supported by Astropy visualization layer
     :param r0: Smoothing kernel size (sigma) to be applied, optional
     :param ax: Matplotlib Axes object to be used for plotting, optional
-    :param \**kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.imshow`
+    :param \\**kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.imshow`
 
     """
     if ax is None:
@@ -157,7 +157,7 @@ def binned_map(
     :param show_dots: Whether to overlay the positions of data points onto the plot
     :param range: Data range as [[xmin, xmax], [ymin, ymax]]
     :param ax: Matplotlib Axes object to be used for plotting, optional
-    :param \**kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.imshow`
+    :param \\**kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.imshow`
     :returns: None
 
     """
@@ -236,7 +236,7 @@ def plot_cutout(
     :param show_title: Show title over cutout. Defaults to True.
     :param title: The title to show above the cutouts, optional. If not provided, the title will be constructed from various pieces of cutout metadata, plus the contents of `additoonal_title` field, if provided
     :param additional_title: Additional text to append to automatically generated title of the cutout figure.
-    :param \**kwargs: All additional parameters will be directly passed to :func:`stdpipe.plots.imshow` calls on individual images
+    :param \\**kwargs: All additional parameters will be directly passed to :func:`stdpipe.plots.imshow` calls on individual images
 
     """
 
@@ -329,7 +329,7 @@ def plot_cutout(
                 title += ' : limit %.2f' % cutout['meta']['mag_limit']
 
             if 'mag_calib' in cutout['meta']:
-                title += ' : mag = %.2f $\pm$ %.2f' % (
+                title += ' : mag = %.2f $\\pm$ %.2f' % (
                     cutout['meta'].get('mag_calib', np.nan),
                     cutout['meta'].get(
                         'mag_calib_err', cutout['meta'].get('magerr', np.nan)
@@ -364,7 +364,7 @@ def plot_photometric_match(
     :param mode: plotting mode - one of `mag`, `color`, `zero`, `model`, `residuals`, or `dist`
     :param show_masked: Whether to show masked objects
     :param show_final: Whether to additionally highlight the objects used for the final fit, i.e. not rejected during iterative thresholding
-    :param \**kwargs: the rest of parameters will be directly passed to :func:`stdpipe.plots.binned_map` when applicable.
+    :param \\**kwargs: the rest of parameters will be directly passed to :func:`stdpipe.plots.binned_map` when applicable.
     :returns: None
 
     """
@@ -749,7 +749,7 @@ def figure_saver(filename=None, show=False, tight_layout=True, **kwargs):
     :param filename: Name of a file where to store the image. May be in any format supported by Matplotlib
     :param show: Whether to also display the figure inside Jupuyter notebook
     :param tight_layout: Whether to call :code:`fig.tight_layout()` on the figure before saving/displaying it
-    :param \**kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.Figure`
+    :param \\**kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.Figure`
 
     """
 

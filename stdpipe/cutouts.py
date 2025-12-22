@@ -113,7 +113,7 @@ def get_cutout(
     :param time: Time (:class:`astropy.time.Time` or :class:`datetime.datetime` or a string representation compatible with them) of the original image acquisition, to be copied to `time` field of the cutout. Optional
     :param filename: Filename of the original image, to be stored in `filename` field of the cutout. Optional
     :param name: The object name, to be stored in the `name` field of the cutout. Optional
-    :param \**kwargs: All additional keyword arguments are interpreted as additional image planes (e.g. mask, diff, template etc).
+    :param \\**kwargs: All additional keyword arguments are interpreted as additional image planes (e.g. mask, diff, template etc).
     :returns: Cutout structure as described below.
 
     Cutout is represented by a dictionary with at least the following fields:
