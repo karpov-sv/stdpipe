@@ -1,0 +1,14 @@
+# Testing dependencies for STDPipe
+
+# Core testing framework
+pytest>=6.0
+pytest-cov>=2.10  # Coverage reporting
+pytest-xdist>=2.0  # Parallel test execution
+
+# Mocking and fixtures
+pytest-mock>=3.0
+pytest-timeout>=2.0  # Timeout for slow tests
+
+# Additional utilities
+pytest-benchmark>=3.4  # Performance benchmarking (optional)
+hypothesis>=6.0  # Property-based testing (optional)
