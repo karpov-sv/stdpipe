@@ -14,7 +14,7 @@ from astropy.time import Time
 from scipy.stats import chi2
 
 from scipy.optimize import minimize
-from scipy.ndimage.interpolation import shift
+from scipy.ndimage import shift
 
 from . import utils
 from . import astrometry
