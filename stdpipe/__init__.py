@@ -5,3 +5,5 @@ STDPipe - Simple Transient Detection Pipeline.
 detection related tasks, intended for quick and easy implementation of custom
 pipelines, as well as for interactive data analysis.
 """
+
+__version__ = "0.2.5"

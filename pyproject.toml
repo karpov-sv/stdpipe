@@ -1,0 +1,267 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stdpipe"
+version = "0.2.5"
+description = "Simple Transient Detection Pipeline"
+readme = "README.md"
+license = {file = "LICENSE.md"}
+authors = [
+    {name = "Sergey Karpov", email = "karpov.sv@gmail.com"}
+]
+maintainers = [
+    {name = "Sergey Karpov", email = "karpov.sv@gmail.com"}
+]
+keywords = [
+    "astronomy",
+    "astrophysics",
+    "transients",
+    "photometry",
+    "astrometry",
+    "image-processing",
+    "pipeline"
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+requires-python = ">=3.8"
+
+# Core dependencies
+dependencies = [
+    "numpy",
+    "scipy",
+    "astropy>=4.1",
+    "matplotlib",
+    "astroquery>0.4.1",
+    "sep",
+    "astroscrappy",
+    "photutils>1.9",
+    "statsmodels",
+    "tqdm",
+    "regions",
+    "python-dateutil",
+    "requests",
+    "sip_tpv @ git+https://github.com/pmvreeswijk/sip_tpv.git",
+    "pyfftw",
+]
+
+[project.optional-dependencies]
+# Development dependencies
+dev = [
+    "pytest>=6.0",
+    "pytest-cov>=2.10",
+    "pytest-xdist>=2.0",
+    "pytest-mock>=3.0",
+    "pytest-timeout>=2.0",
+    "pytest-benchmark>=3.4",
+    "hypothesis>=6.0",
+]
+
+# Documentation dependencies
+docs = [
+    "sphinx>=4.0",
+    "sphinx-rtd-theme",
+    "sphinx-math-dollar",
+    "numpydoc",
+    "myst-parser",
+    "sphinxcontrib-apidoc",
+    "sphinx-prompt",
+]
+
+# All optional dependencies
+all = [
+    "stdpipe[dev,docs]",
+]
+
+[project.urls]
+Homepage = "https://github.com/karpov-sv/stdpipe"
+Documentation = "https://stdpipe.readthedocs.io/"
+Repository = "https://github.com/karpov-sv/stdpipe"
+"Bug Tracker" = "https://github.com/karpov-sv/stdpipe/issues"
+Changelog = "https://github.com/karpov-sv/stdpipe/commits/master"
+
+# ============================================================================
+# Tool configurations
+# ============================================================================
+
+[tool.setuptools]
+zip-safe = false
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["stdpipe*"]
+exclude = ["tests*", "docs*", "notebooks*", "build*", "dist*"]
+
+[tool.setuptools.package-data]
+stdpipe = ["data/*"]
+
+# ============================================================================
+# pytest configuration
+# ============================================================================
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--showlocals",
+    "-ra",
+]
+markers = [
+    "unit: Unit tests that don't require external dependencies",
+    "integration: Integration tests that may require external tools",
+    "slow: Tests that take significant time to run",
+    "requires_sextractor: Tests requiring SExtractor to be installed",
+    "requires_scamp: Tests requiring SCAMP to be installed",
+    "requires_psfex: Tests requiring PSFEx to be installed",
+    "requires_hotpants: Tests requiring HOTPANTS to be installed",
+    "requires_astrometry_net: Tests requiring Astrometry.Net to be installed",
+    "requires_network: Tests that require network access",
+]
+filterwarnings = [
+    "ignore::FutureWarning",
+    "ignore::DeprecationWarning:astropy.*",
+    "ignore::astropy.wcs.FITSFixedWarning",
+]
+
+# ============================================================================
+# coverage configuration
+# ============================================================================
+
+[tool.coverage.run]
+source = ["stdpipe"]
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "setup.py",
+    "*/flycheck_*.py",
+]
+parallel = true
+branch = true
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+# ============================================================================
+# Black code formatter
+# ============================================================================
+
+[tool.black]
+line-length = 100
+target-version = ["py38", "py39", "py310", "py311", "py312"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+    \.git
+  | \.venv
+  | build
+  | dist
+  | __pycache__
+  | \.pytest_cache
+  | \.eggs
+)/
+'''
+
+# ============================================================================
+# isort import sorter
+# ============================================================================
+
+[tool.isort]
+profile = "black"
+line_length = 100
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+ensure_newline_before_comments = true
+skip_glob = ["*/flycheck_*.py"]
+
+# ============================================================================
+# ruff linter (modern alternative to flake8)
+# ============================================================================
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+extend-exclude = [
+    "flycheck_*.py",
+    "__pycache__",
+    ".pytest_cache",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "SIM",  # flake8-simplify
+]
+ignore = [
+    "E501",   # line too long (handled by black)
+    "B008",   # do not perform function calls in argument defaults
+    "C901",   # function is too complex
+    "N803",   # argument name should be lowercase (conflicts with astronomical conventions)
+    "N806",   # variable in function should be lowercase (conflicts with astronomical conventions)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]  # Unused imports in __init__.py
+"tests/*" = ["F401", "F811"]  # Unused imports and redefinitions in tests
+
+# ============================================================================
+# mypy type checker
+# ============================================================================
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false  # Start lenient, can tighten later
+ignore_missing_imports = true
+exclude = [
+    "tests/",
+    "docs/",
+    "build/",
+    "dist/",
+]

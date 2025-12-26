@@ -1,37 +1,24 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
+"""
+Minimal setup.py for backward compatibility.
 
-from setuptools import setup, find_packages
+Modern configuration is in pyproject.toml.
+This file is kept for backward compatibility with older pip versions
+and tools that don't yet support PEP 517/518.
 
-__version__ = '0.2.4'
+For development installation:
+    pip install -e .
 
-requirements = [
-    'numpy',
-    'scipy',
-    'astropy>=4.1',
-    'matplotlib',
-    'astroquery>0.4.1',
-    'sep',
-    'astroscrappy',
-    'photutils>1.9',
-    'statsmodels',
-    'tqdm',
-    'regions',
-    'python-dateutil',
-    'requests',
-    'sip_tpv',
-    'pyfftw',
-]
+For installation with optional dependencies:
+    pip install -e ".[dev]"
+    pip install -e ".[docs]"
+    pip install -e ".[all]"
+"""
 
-setup(
-    name='stdpipe',
-    version=__version__,
-    description='Simple Transient Detection Pipeline',
-    author='Sergey Karpov',
-    author_email='karpov.sv@gmail.com',
-    url='https://github.com/karpov-sv/stdpipe',
-    install_requires=requirements,
-    packages=['stdpipe'],
-    package_data={'stdpipe':['data/*']},
-    include_package_data=True,
-)
+from setuptools import setup
+
+# All configuration is in pyproject.toml
+# This setup.py is just for backward compatibility
+if __name__ == "__main__":
+    setup()
