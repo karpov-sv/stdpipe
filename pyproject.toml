@@ -55,7 +55,8 @@ dependencies = [
     "regions",
     "python-dateutil",
     "requests",
-    "sip_tpv @ git+https://github.com/pmvreeswijk/sip_tpv.git",
+    # "sip_tpv @ git+https://github.com/pmvreeswijk/sip_tpv.git",
+    "sip_tpv",
     "pyfftw",
 ]
 
