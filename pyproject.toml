@@ -136,6 +136,7 @@ markers = [
     "requires_psfex: Tests requiring PSFEx to be installed",
     "requires_hotpants: Tests requiring HOTPANTS to be installed",
     "requires_astrometry_net: Tests requiring Astrometry.Net to be installed",
+    "requires_pyraf: Tests requiring PyRAF/IRAF to be installed",
     "requires_network: Tests that require network access",
 ]
 filterwarnings = [

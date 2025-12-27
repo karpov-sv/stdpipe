@@ -237,6 +237,16 @@ def has_astrometry_net():
     return shutil.which('solve-field') is not None
 
 
+@pytest.fixture
+def has_pyraf():
+    """Check if PyRAF is available."""
+    try:
+        import pyraf
+        return True
+    except ImportError:
+        return False
+
+
 # ============================================================================
 # pytest configuration hooks
 # ============================================================================
@@ -245,6 +255,9 @@ def pytest_configure(config):
     """Configure pytest with custom settings."""
     config.addinivalue_line(
         "markers", "unit: mark test as a unit test"
+    )
+    config.addinivalue_line(
+        "markers", "requires_pyraf: mark test as requiring PyRAF/IRAF"
     )
 
 
@@ -271,3 +284,60 @@ def pytest_collection_modifyitems(config, items):
         if "requires_astrometry_net" in item.keywords:
             if not shutil.which('solve-field'):
                 item.add_marker(pytest.mark.skip(reason="Astrometry.Net not available"))
+
+        if "requires_pyraf" in item.keywords:
+            try:
+                import importlib.util
+                spec = importlib.util.find_spec("pyraf")
+                if spec is None:
+                    item.add_marker(pytest.mark.skip(reason="PyRAF not available"))
+            except (ImportError, ValueError):
+                item.add_marker(pytest.mark.skip(reason="PyRAF not available"))
+
+
+# ============================================================================
+# PyRAF Test Fixtures
+# ============================================================================
+
+@pytest.fixture(scope="session", autouse=True)
+def initialize_pyraf_once():
+    """
+    Initialize PyRAF once at the start of the test session.
+
+    This avoids the issue where IRAF initialization during test collection
+    conflicts with pytest's stdin/stdout capturing.
+    """
+    try:
+        # Check if pyraf is available
+        import importlib.util
+        spec = importlib.util.find_spec("pyraf")
+        if spec is not None:
+            # Import and initialize pyraf once, outside of captured output
+            import sys
+            from io import StringIO
+
+            # Temporarily redirect stdout/stderr to avoid pytest capture conflicts
+            old_stdout = sys.stdout
+            old_stderr = sys.stderr
+            old_stdin = sys.stdin
+
+            try:
+                sys.stdout = StringIO()
+                sys.stderr = StringIO()
+                # IRAF needs a real stdin, not pytest's capture
+                import os
+                sys.stdin = open(os.devnull, 'r')
+
+                from pyraf import iraf
+                # IRAF is now initialized
+
+            finally:
+                sys.stdout = old_stdout
+                sys.stderr = old_stderr
+                if sys.stdin != old_stdin:
+                    sys.stdin.close()
+                sys.stdin = old_stdin
+
+    except Exception:
+        # If initialization fails, tests will be skipped anyway
+        pass
