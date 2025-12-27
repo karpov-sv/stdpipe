@@ -853,6 +853,7 @@ def match(
         x0, y0 = np.mean(obj_x[oidx]), np.mean(obj_y[oidx])
         ox, oy = obj_x[oidx], obj_y[oidx]
         x, y = obj_x[oidx] - x0, obj_y[oidx] - y0
+        x, y = [np.ma.filled(_, fill_value=np.nan) for _ in (x, y)]
     else:
         x0, y0 = 0, 0
         ox, oy = np.zeros_like(omag), np.zeros_like(omag)
@@ -993,11 +994,16 @@ def match(
         else:
             x, y = np.zeros_like(omag), np.zeros_like(omag)
 
+        # Ensure we do not have MaskedColumns
+        x, y = [np.ma.filled(_, fill_value=np.nan) for _ in (x, y)]
+        if mag is not None:
+            mag = np.ma.filled(mag, np.nan)
+
         X = make_series(1.0, x, y, order=spatial_order)
 
         if bg_order is not None and mag is not None:
             X += make_series(
-                -2.5 / np.log(10) / 10 ** (-0.4 * np.ma.filled(mag, np.nan)), x, y, order=bg_order
+                -2.5 / np.log(10) / 10 ** (-0.4 * mag), x, y, order=bg_order
             )
 
         if nonlin and mag is not None:
