@@ -9,8 +9,11 @@ import numpy as np
 
 from astropy.io import fits
 from astropy.table import Table
+from astropy.nddata import NDData
 
 from scipy import ndimage
+
+import photutils.psf
 
 from . import photometry
 from . import utils
@@ -457,3 +460,127 @@ def place_psf_stamp(image, psf, x0, y0, flux=1, gain=None):
 
     # Add the stamp to the image!
     image[y1[idx], x1[idx]] += stamp[y[idx], x[idx]]
+
+
+def create_psf_model(image, obj=None, fwhm=None, size=25, mask=None,
+                     oversampling=2, get_raw=False, verbose=False):
+    """
+    Create an empirical PSF (ePSF) model from stars in the image using photutils.
+
+    This function builds an effective PSF by combining postage stamps of
+    isolated stars in the image. This is useful when you don't have a
+    PSFEx model or want a purely empirical PSF.
+
+    The returned dictionary structure is compatible with PSFEx output from
+    :func:`stdpipe.psf.run_psfex` and can be used with the same evaluation
+    functions like :func:`stdpipe.psf.get_psf_stamp`.
+
+    :param image: Input image as a NumPy array, must be background subtracted
+    :param obj: Table of star positions. If None, stars will be detected automatically. Should have 'x', 'y' columns and optionally 'flux'.
+    :param fwhm: Approximate FWHM of stars in pixels. If None, will be estimated.
+    :param size: Size of cutouts to extract around stars (should be odd)
+    :param mask: Image mask as a boolean array (True values will be masked), optional
+    :param oversampling: Oversampling factor for the ePSF (default: 2)
+    :param get_raw: If True, returns raw EPSFImage object
+    :param verbose: Whether to show verbose messages
+    :returns: Dictionary with PSFEx-compatible structure containing the ePSF model
+
+    """
+
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
+
+    if size % 2 == 0:
+        size += 1  # Make sure size is odd
+
+    # Detect stars if not provided
+    if obj is None:
+        log('Detecting stars for ePSF building')
+        obj = photometry.get_objects_sep(
+            image,
+            mask=mask,
+            thresh=5.0,
+            aper=3.0,
+            verbose=verbose
+        )
+
+        # Select isolated, bright, non-saturated stars
+        # Simple selection: median flux and not too crowded
+        if len(obj) == 0:
+            raise ValueError("No stars detected for ePSF building")
+
+        flux_median = np.median(obj['flux'])
+        flux_std = np.std(obj['flux'])
+
+        # Select stars with flux within reasonable range
+        idx = (obj['flux'] > flux_median) & (obj['flux'] < flux_median + 3*flux_std)
+        # Remove edge objects
+        edge = size
+        idx &= (obj['x'] > edge) & (obj['x'] < image.shape[1] - edge)
+        idx &= (obj['y'] > edge) & (obj['y'] < image.shape[0] - edge)
+        # Remove flagged objects
+        if 'flags' in obj.colnames:
+            idx &= obj['flags'] == 0
+
+        obj = obj[idx]
+        log('Selected %d stars for ePSF building' % len(obj))
+
+    if fwhm is None:
+        if 'fwhm' in obj.colnames:
+            fwhm = np.median(obj['fwhm'])
+            log('Using median FWHM: %.2f pixels' % fwhm)
+        else:
+            fwhm = 3.0
+            log('FWHM not available, using default: %.2f pixels' % fwhm)
+
+    # Extract cutouts
+    log('Extracting %dx%d cutouts around %d stars' % (size, size, len(obj)))
+
+    nddata = NDData(data=image, mask=mask)
+
+    # Extract stars using photutils
+    stars = photutils.psf.extract_stars(nddata, Table({'x': obj['x'], 'y': obj['y']}), size=size)
+
+    # Build ePSF
+    log('Building ePSF model with oversampling=%d' % oversampling)
+    epsf_builder = photutils.psf.EPSFBuilder(
+        oversampling=oversampling,
+        maxiters=10,
+        progress_bar=verbose
+    )
+
+    epsf, fitted_stars = epsf_builder(stars)
+
+    log('ePSF building complete. PSF shape: %s' % str(epsf.data.shape))
+
+    if get_raw:
+        return epsf
+
+    # Build PSFEx-compatible structure
+    psf_data = epsf.data
+
+    # Reshape to (ncoeffs, height, width) format
+    # ePSF is position-invariant, so ncoeffs=1
+    if psf_data.ndim == 2:
+        psf_data = psf_data[np.newaxis, :, :]  # Add coefficient dimension
+
+    psf = {
+        'width': psf_data.shape[2],
+        'height': psf_data.shape[1],
+        'fwhm': fwhm,
+        'sampling': 1.0 / oversampling,  # PSFEx convention: < 1 means supersampled
+        'ncoeffs': 1,
+        'degree': 0,  # Constant PSF (no position dependence)
+        'x0': 0,
+        'y0': 0,
+        'sx': 1,
+        'sy': 1,
+        'data': psf_data,
+        'oversampling': oversampling,  # Keep for reference
+        'type': 'epsf',  # Identify PSF type
+    }
+
+    return psf
