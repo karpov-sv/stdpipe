@@ -41,6 +41,7 @@ extensions = [
     "sphinx.ext.autosectionlabel",
     "sphinx.ext.viewcode",
     "sphinx-prompt",
+    "numpydoc",
 ]
 
 mathjax_config = {
