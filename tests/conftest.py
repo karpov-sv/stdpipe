@@ -13,7 +13,7 @@ from pathlib import Path
 
 from astropy.io import fits
 from astropy.wcs import WCS
-from astropy.table import Table
+from astropy.table import Table, MaskedColumn
 from astropy.coordinates import SkyCoord
 import astropy.units as u
 
@@ -175,6 +175,40 @@ def detected_objects():
     objects['mag_err'] = 2.5 / np.log(10) * objects['flux_err'] / objects['flux']
     objects['flags'] = [0, 0, 0, 0]
     objects['fwhm'] = [3.0, 3.2, 2.8, 3.1]
+    return objects
+
+
+@pytest.fixture
+def detected_objects_masked():
+    """Create a table with MaskedColumns mimicking SEP/SExtractor output.
+
+    This fixture tests handling of astropy MaskedColumn inputs.
+    The last object has masked (invalid) coordinates to test edge cases.
+    Uses the same 4 source positions as detected_objects, with the 4th masked.
+    """
+    objects = Table()
+
+    # Create MaskedColumns - last entry is masked (invalid)
+    objects['x'] = MaskedColumn([50.0, 120.0, 200.0, 80.0],
+                                 mask=[False, False, False, True])
+    objects['y'] = MaskedColumn([50.0, 80.0, 150.0, 200.0],
+                                 mask=[False, False, False, True])
+    objects['flux'] = MaskedColumn([10000.0, 8000.0, 12000.0, 6000.0],
+                                    mask=[False, False, False, True])
+    objects['flux_err'] = MaskedColumn([100.0, 120.0, 150.0, 200.0],
+                                        mask=[False, False, False, True])
+
+    # Compute derived columns (these will also be MaskedColumns)
+    flux_vals = np.array([10000.0, 8000.0, 12000.0, 6000.0])
+    flux_err_vals = np.array([100.0, 120.0, 150.0, 200.0])
+    mag_vals = 25 - 2.5 * np.log10(flux_vals)
+    mag_err_vals = 2.5 / np.log(10) * flux_err_vals / flux_vals
+
+    objects['mag'] = MaskedColumn(mag_vals, mask=[False, False, False, True])
+    objects['mag_err'] = MaskedColumn(mag_err_vals, mask=[False, False, False, True])
+    objects['flags'] = MaskedColumn([0, 0, 0, 0], mask=[False, False, False, False])
+    objects['fwhm'] = MaskedColumn([3.0, 3.2, 2.8, 3.1], mask=[False, False, False, True])
+
     return objects
 
 
