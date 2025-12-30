@@ -121,10 +121,135 @@ The complete example of detection efficiency analysis may be seen in the `corres
 .. autofunction:: stdpipe.pipeline.place_random_stars
    :noindex:
 
-PSF photometry in SExtractor
-----------------------------
+PSF photometry with photutils
+------------------------------
 
-Derived PSF models may also be used for performing PSF photometry in SExtractor.
+*STDPipe* provides PSF fitting photometry using the photutils library as an alternative
+to SExtractor. This approach is pure Python, more flexible, and works with various PSF
+models including PSFEx, Gaussian, and empirical ePSF.
+
+The :func:`stdpipe.photometry_psf.measure_objects_psf` function performs PSF photometry
+at the positions of already detected objects. It supports:
+
+- Multiple PSF model types (PSFEx, Gaussian, empirical ePSF)
+- Position-dependent PSF for wide-field images
+- Grouped fitting for crowded fields
+- Comprehensive quality metrics
+
+.. code-block:: python
+
+   from stdpipe import photometry, photometry_psf, psf
+
+   # Detect objects
+   obj = photometry.get_objects_sep(image, mask=mask, thresh=3.0)
+
+   # Build PSF model
+   psf_model = psf.run_psfex(image, mask=mask, order=1, verbose=True)
+
+   # Perform PSF photometry
+   obj_psf = photometry_psf.measure_objects_psf(
+       obj, image,
+       psf=psf_model,
+       mask=mask,
+       verbose=True
+   )
+
+The output table includes fitted positions (`x_psf`, `y_psf`), fluxes (`flux`, `fluxerr`),
+magnitudes (`mag`, `magerr`), and quality metrics:
+
+- `qfit_psf` - Fit quality (0 = good, higher values indicate poor fits)
+- `cfit_psf` - Central pixel fit quality
+- `flags_psf` - Photutils fit flags
+- `npix_psf` - Number of unmasked pixels used in fit
+- `reduced_chi2_psf` - Reduced chi-squared (photutils >= 2.3.0)
+
+.. autofunction:: stdpipe.photometry_psf.measure_objects_psf
+   :noindex:
+
+
+Position-dependent PSF
+^^^^^^^^^^^^^^^^^^^^^^
+
+For wide-field images where the PSF varies across the field, enable position-dependent
+evaluation of PSFEx polynomial models:
+
+.. code-block:: python
+
+   # Build PSF model with spatial variation (order > 0)
+   psf_model = psf.run_psfex(image, mask=mask, order=2, verbose=True)
+
+   # Use position-dependent PSF
+   obj_psf = photometry_psf.measure_objects_psf(
+       obj, image,
+       psf=psf_model,
+       use_position_dependent_psf=True,  # Evaluate PSF at each position
+       verbose=True
+   )
+
+This evaluates the PSFEx polynomial (constant, linear, quadratic terms) at each
+source position for more accurate photometry in fields with PSF gradients.
+
+
+Grouped PSF fitting for crowded fields
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+In crowded fields with overlapping sources, grouped fitting simultaneously fits
+nearby sources to reduce contamination:
+
+.. code-block:: python
+
+   obj_psf = photometry_psf.measure_objects_psf(
+       obj, image,
+       psf=psf_model,
+       group_sources=True,      # Enable grouped fitting
+       grouper_radius=10.0,     # Group sources within 10 pixels
+       verbose=True
+   )
+
+   # Check grouping results
+   print(f"Grouped {len(np.unique(obj_psf['group_id']))} groups")
+
+This is slower but more accurate when sources are close together.
+
+
+Building empirical PSF models
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+When PSFEx is not available or you want a purely empirical PSF, use
+:func:`stdpipe.psf.create_psf_model` to build an ePSF from stars in your image:
+
+.. code-block:: python
+
+   from stdpipe import psf
+
+   # Create empirical PSF from stars in the image
+   epsf_model = psf.create_psf_model(
+       image,
+       mask=mask,
+       fwhm=3.0,        # Approximate FWHM
+       size=25,         # Cutout size
+       oversampling=2,  # ePSF oversampling factor
+       verbose=True
+   )
+
+   # Use it just like a PSFEx model
+   obj_psf = photometry_psf.measure_objects_psf(
+       obj, image,
+       psf=epsf_model,
+       verbose=True
+   )
+
+The ePSF model is built by combining postage stamps of isolated stars and returns
+a PSFEx-compatible dictionary structure that works with all PSF functions.
+
+.. autofunction:: stdpipe.psf.create_psf_model
+   :noindex:
+
+PSF photometry in SExtractor (alternative)
+-------------------------------------------
+
+As an alternative to the photutils-based approach described above, derived PSF models
+may also be used for performing PSF photometry in SExtractor.
 
 As currently *STDPipe* lacks the routine for saving PSF models back to FITS files, in order to use PSF photometry you will need to pass `psffile` argument to :func:`stdpipe.psf.run_psfex` in order to directly store the produced PSF model into the file. Then, this file may be used in SExtractor by passing its path as a `psf` argument into :func:`stdpipe.photometry.get_objects_sextractor`. It will then produce the list of detected objects having a set of additional measured parameters including `flux_psf`, `fluxerr_psf`, `mag_psf`, `magerr_psf` - they correspond to the flux derived from fitting the objects with the PSF model.
 

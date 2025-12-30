@@ -68,3 +68,8 @@ We also have a convenience function for plotting the images of 2d histograms of 
 
 .. autofunction:: stdpipe.plots.binned_map
    :noindex:
+
+There is also an (a bit experimental) version of this function that adaptively bins the data to achieve more uniform distribution of points over bins, based on `PowerBin <https://pypi.org/project/powerbin/>`_ package.
+
+.. autofunction:: stdpipe.plots.adaptive_binned_map
+   :noindex:

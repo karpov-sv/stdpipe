@@ -3,7 +3,7 @@ Installation
 
 *STDpipe* is available at https://github.com/karpov-sv/stdpipe and is mirrored at https://gitlab.in2p3.fr/icare/stdpipe.
 
-In order to use it, you will need a working Python (>=3.6) installation, as well as a number of additional Python libraries and external packages. Below you will find some basic instructions how to set it up (using Anaconda environment as an example, but you may use any other as well) if you do not have it already.
+In order to use it, you will need a working Python (>=3.8) installation, as well as a number of additional Python libraries and external packages. Below you will find some basic instructions how to set it up (using Anaconda environment as an example, but you may use any other as well) if you do not have it already.
 
 Preparing the environment (optional)
 ------------------------------------
@@ -89,14 +89,6 @@ Use the command below to install the rest of dependencies and the package itself
 
    python -m pip install -e .
 
-.. note::
-
-   Alternative installation command (try it if the one above fails - they use slightly different strategies of installing the dependencies, so results may really vary!) would be
-
-   .. prompt:: bash
-
-      python setup.py develop
-
 Keeping up to date
 ^^^^^^^^^^^^^^^^^^
 
@@ -107,7 +99,6 @@ As the code base in the repository evolves fast -- new features are being added,
 .. prompt:: bash
 
    git pull
-
 
 Quick testing the installation
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -126,6 +117,37 @@ NOTE (Okay, last one!): if everything is ok, it's the end of the installation. B
 those with their given commands, or by using pip directly. In case modules like photutils and statsmodels are needed, don't hesitate to do it with pip (normally it shouldn't happen), but some modules may not install correctly in case of disturbance.
 
 This instruction page will likely cover the issues you might face during your installation. However, please open `issues on GitHub <https://github.com/karpov-sv/stdpipe/issues>`_ if there appear to be unresolvable conflicts.
+
+Running tests
+^^^^^^^^^^^^^
+
+Another way to verify your installation is to run the test suite. This requires installing development dependencies:
+
+.. prompt:: bash
+
+   python -m pip install -e ".[dev]"
+
+Run all tests:
+
+.. prompt:: bash
+
+   pytest
+
+Run only fast unit tests:
+
+.. prompt:: bash
+
+   pytest -m unit
+
+Run with verbose output:
+
+.. prompt:: bash
+
+   pytest -v
+
+The test suite includes 200+ tests covering core functionality. Some tests requiring external tools (SExtractor, HOTPANTS, etc.) will be automatically skipped if those tools are not installed.
+
+See :file:`pyproject.toml` for full test configuration and available test markers.
 
 Installation of external packages
 ---------------------------------

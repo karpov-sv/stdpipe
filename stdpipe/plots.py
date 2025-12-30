@@ -60,7 +60,7 @@ def imshow(
     :param mask: Mask to exclude image regions from intensity normalization, optional
     :param show_colorbar: Whether to show a colorbar alongside the image
     :param show_axis: Whether to show the axes around the image
-    :param stretch: Image intensity stretching mode - e.g. `linear`, `log`, `asinh`, or anything else supported by Astropy visualization layer
+    :param stretch: Image intensity stretching mode - e.g. `linear`, `log`, `asinh`, `histeq` or anything else supported by Astropy visualization layer
     :param r0: Smoothing kernel size (sigma) to be applied, optional
     :param ax: Matplotlib Axes object to be used for plotting, optional
     :param \\**kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.imshow`
