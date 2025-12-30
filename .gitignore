@@ -35,6 +35,7 @@ env/
 *~
 .dir-locals.el
 flycheck_*.py
+*#
 
 # Testing
 .pytest_cache/
@@ -54,6 +55,7 @@ docs/_build/
 docs/_static/
 docs/_templates/
 doc/_build/
+doc/api/
 .readthedocs.yaml.1
 
 # Jupyter
@@ -83,3 +85,4 @@ backup/
 *.orig
 
 test_data/
+pyraf/
