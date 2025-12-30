@@ -214,6 +214,48 @@ class TestMeasureObjectsPSF:
         if 'reduced_chi2_psf' in result.colnames:
             assert result['reduced_chi2_psf'].dtype in [np.float32, np.float64]
 
+    @pytest.mark.unit
+    def test_measure_objects_psf_with_masked_columns(self, image_with_sources, detected_objects_masked):
+        """Test PSF photometry handles MaskedColumn x/y/flux inputs.
+
+        This test verifies that measure_objects_psf doesn't crash when given
+        an astropy table with MaskedColumn instead of regular Column.
+        """
+        result = photometry_psf.measure_objects_psf(
+            detected_objects_masked,
+            image_with_sources,
+            fwhm=3.0,
+            verbose=False
+        )
+
+        assert isinstance(result, Table)
+        # Should return same number of objects
+        assert len(result) == len(detected_objects_masked)
+
+        # Should have expected columns
+        assert 'flux' in result.colnames
+        assert 'x_psf' in result.colnames
+        assert 'y_psf' in result.colnames
+
+        # Unmasked objects (first 3) should have some valid results
+        valid_count = np.sum(np.isfinite(result['flux'][:3]))
+        assert valid_count > 0
+
+    @pytest.mark.unit
+    def test_measure_objects_psf_grouped_with_masked_columns(self, image_with_sources, detected_objects_masked):
+        """Test grouped PSF photometry handles MaskedColumn inputs."""
+        result = photometry_psf.measure_objects_psf(
+            detected_objects_masked,
+            image_with_sources,
+            fwhm=3.0,
+            group_sources=True,
+            grouper_radius=10.0,
+            verbose=False
+        )
+
+        assert isinstance(result, Table)
+        assert len(result) == len(detected_objects_masked)
+
 
 class TestCreatePSFModel:
     """Test empirical PSF model creation."""

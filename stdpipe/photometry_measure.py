@@ -15,7 +15,7 @@ import photutils.centroids
 import photutils.psf
 from photutils.utils import calc_total_error
 
-from stdpipe import psf as psf_module
+# Note: psf module imported lazily in functions to avoid circular dependency
 
 
 def _get_psf_stamp_at_position(psf, x, y, stamp_size=None):
@@ -28,7 +28,8 @@ def _get_psf_stamp_at_position(psf, x, y, stamp_size=None):
     :returns: Normalized PSF stamp, stamp size
     """
     if isinstance(psf, dict):
-        # PSFEx or ePSF model
+        # PSFEx or ePSF model - lazy import to avoid circular dependency
+        from stdpipe import psf as psf_module
         psf_stamp = psf_module.get_psf_stamp(psf, x=x, y=y, normalize=True)
     else:
         # Gaussian PSF - create stamp from FWHM
@@ -262,7 +263,8 @@ def _optimal_extraction(image, err, x, y, psf, bg_local=None, mask=None, radius=
     """
     # Get PSF stamp at object position
     if isinstance(psf, dict):
-        # PSFEx or ePSF model
+        # PSFEx or ePSF model - lazy import to avoid circular dependency
+        from stdpipe import psf as psf_module
         psf_stamp = psf_module.get_psf_stamp(psf, x=x, y=y, normalize=True)
     else:
         # Gaussian PSF - create stamp from FWHM
@@ -419,12 +421,13 @@ def measure_objects(
 
     # Ensure that the mask is defined
     if mask is None:
-        mask = mask0
+        # mask = mask0
+        mask = np.zeros(image.shape, dtype=bool)
     else:
-        mask = mask.astype(bool)
+        mask = np.array(mask).astype(bool)
 
     if bg is None or err is None or get_bg:
-        log('Estimating global background with %dx%d mesh' % (bg_size, bg_size))
+        log('Estimating global background with %dx%d grid' % (bg_size, bg_size))
         bg_est = photutils.background.Background2D(
             image1, bg_size, mask=mask | mask0, exclude_percentile=90
         )

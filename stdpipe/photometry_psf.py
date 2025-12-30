@@ -243,26 +243,34 @@ def measure_objects_psf(
     log('Using fitting region size: %d pixels' % fit_size)
 
     # Prepare initial positions table
+    # Convert MaskedColumns to regular arrays, replacing masked values with NaN
     init_params = Table()
-    init_params['x'] = obj['x']
-    init_params['y'] = obj['y']
+    init_params['x'] = np.ma.filled(np.asarray(obj['x']), fill_value=np.nan)
+    init_params['y'] = np.ma.filled(np.asarray(obj['y']), fill_value=np.nan)
+
+    # Track which positions are valid (not NaN/masked)
+    valid_pos = np.isfinite(init_params['x']) & np.isfinite(init_params['y'])
 
     # Add initial flux guesses if available
     if 'flux' in obj.colnames:
-        init_params['flux'] = obj['flux']
+        init_params['flux'] = np.ma.filled(np.asarray(obj['flux']), fill_value=np.nan)
     else:
         # Estimate initial flux from image at positions
         init_params['flux'] = 1000.0  # Default initial guess
 
-    # Create apertures for fitting regions
+    # Create apertures for fitting regions using safe positions
+    # Replace NaN with dummy positions (will be filtered out later)
+    x_safe = np.where(valid_pos, init_params['x'], 0.0)
+    y_safe = np.where(valid_pos, init_params['y'], 0.0)
+
     if fit_shape == 'circular':
         fit_apertures = photutils.aperture.CircularAperture(
-            list(zip(init_params['x'], init_params['y'])),
+            list(zip(x_safe, y_safe)),
             r=fit_size / 2
         )
     else:  # 'square'
         fit_apertures = photutils.aperture.RectangularAperture(
-            list(zip(init_params['x'], init_params['y'])),
+            list(zip(x_safe, y_safe)),
             w=fit_size,
             h=fit_size,
             theta=0
@@ -279,8 +287,13 @@ def measure_objects_psf(
         log('Using grouped PSF fitting with grouper radius %.1f pixels' % grouper_radius)
         grouper = photutils.psf.SourceGrouper(min_separation=grouper_radius)
 
+    # Check for invalid positions (from masked columns)
+    n_invalid = np.sum(~valid_pos)
+    if n_invalid > 0:
+        log('Found %d objects with invalid (masked/NaN) positions, will be skipped' % n_invalid)
+
     # Perform PSF photometry
-    log('Performing PSF photometry on %d objects' % len(obj))
+    log('Performing PSF photometry on %d objects (%d valid)' % (len(obj), np.sum(valid_pos)))
     log('Settings: %d iterations, recentroid=%s, grouped=%s, position_dependent=%s' % (maxiters, recentroid, group_sources, psf_is_position_dependent))
 
     # Handle position-dependent PSF separately
@@ -306,10 +319,17 @@ def measure_objects_psf(
         # Process objects individually or in small groups
         # For each object, evaluate PSF at its position
         for i in range(len(obj)):
+            # Skip invalid positions (masked/NaN)
+            if not valid_pos[i]:
+                obj['flux'][i] = np.nan
+                obj['fluxerr'][i] = np.nan
+                obj['flags'][i] |= 0x1000
+                continue
+
             try:
                 # Get object position
-                x_pos = obj['x'][i]
-                y_pos = obj['y'][i]
+                x_pos = float(init_params['x'][i])
+                y_pos = float(init_params['y'][i])
 
                 # Evaluate PSF at this position using dict-based PSF
                 psf_image = psf_module.get_supersampled_psf_stamp(
@@ -380,67 +400,79 @@ def measure_objects_psf(
 
     else:
         # Standard (non-position-dependent) PSF photometry
-        try:
-            # Set up photometry object
-            phot_obj = photutils.psf.PSFPhotometry(
-                psf_model=psf_model,
-                fit_shape=fit_size,
-                finder=None,  # We already have positions
-                grouper=grouper,  # Group nearby sources if requested
-                fitter=LevMarLSQFitter(),  # Levenberg-Marquardt fitter from astropy
-                aperture_radius=fit_size / 2
-            )
+        # Initialize output columns with NaN (for invalid positions)
+        obj['flux'] = np.nan
+        obj['fluxerr'] = np.nan
+        obj['x_psf'] = np.ma.filled(np.asarray(obj['x']), fill_value=np.nan)
+        obj['y_psf'] = np.ma.filled(np.asarray(obj['y']), fill_value=np.nan)
+        obj['qfit_psf'] = np.nan
+        obj['cfit_psf'] = np.nan
+        obj['flags_psf'] = 0
+        obj['npix_psf'] = 0
+        obj['reduced_chi2_psf'] = np.nan
+        if 'flags' not in obj.keys():
+            obj['flags'] = 0
 
-            # Do the photometry - photutils 2.x API
-            result = phot_obj(
-                image1,
-                mask=mask,
-                error=err,
-                init_params=init_params
-            )
+        # Mark invalid positions as failed
+        obj['flags'][~valid_pos] |= 0x1000
 
-            # Extract results
-            obj['flux'] = result['flux_fit']
-            obj['fluxerr'] = result['flux_err']
-            obj['x_psf'] = result['x_fit']
-            obj['y_psf'] = result['y_fit']
+        # Only proceed if there are valid positions
+        if np.sum(valid_pos) > 0:
+            try:
+                # Filter init_params to valid positions only
+                init_params_valid = init_params[valid_pos]
 
-            # Extract quality of fit columns if available
-            if 'qfit' in result.colnames:
-                obj['qfit_psf'] = result['qfit']
-            if 'cfit' in result.colnames:
-                obj['cfit_psf'] = result['cfit']
-            if 'flags' in result.colnames:
-                obj['flags_psf'] = result['flags']
-            if 'npixfit' in result.colnames:
-                obj['npix_psf'] = result['npixfit']
-            if 'reduced_chi2' in result.colnames:
-                # Available in photutils >= 2.3.0
-                obj['reduced_chi2_psf'] = result['reduced_chi2']
+                # Set up photometry object
+                phot_obj = photutils.psf.PSFPhotometry(
+                    psf_model=psf_model,
+                    fit_shape=fit_size,
+                    finder=None,  # We already have positions
+                    grouper=grouper,  # Group nearby sources if requested
+                    fitter=LevMarLSQFitter(),  # Levenberg-Marquardt fitter from astropy
+                    aperture_radius=fit_size / 2
+                )
 
-            # Calculate quality flags for backward compatibility
-            if 'flags' not in obj.keys():
-                obj['flags'] = 0
+                # Do the photometry - photutils 2.x API
+                result = phot_obj(
+                    image1,
+                    mask=mask,
+                    error=err,
+                    init_params=init_params_valid
+                )
 
-            # Flag objects where fit failed (NaN values)
-            bad_idx = ~np.isfinite(obj['flux'])
-            obj['flags'][bad_idx] |= 0x1000  # PSF fit failed
+                # Map results back to full array
+                obj['flux'][valid_pos] = result['flux_fit']
+                obj['fluxerr'][valid_pos] = result['flux_err']
+                obj['x_psf'][valid_pos] = result['x_fit']
+                obj['y_psf'][valid_pos] = result['y_fit']
 
-            # Flag objects where position moved significantly (>1 pixel)
-            if recentroid:
-                moved_idx = np.sqrt((obj['x_psf'] - obj['x'])**2 + (obj['y_psf'] - obj['y'])**2) > 1.0
-                obj['flags'][moved_idx] |= 0x2000  # Large centroid shift
+                # Extract quality of fit columns if available
+                if 'qfit' in result.colnames:
+                    obj['qfit_psf'][valid_pos] = result['qfit']
+                if 'cfit' in result.colnames:
+                    obj['cfit_psf'][valid_pos] = result['cfit']
+                if 'flags' in result.colnames:
+                    obj['flags_psf'][valid_pos] = result['flags']
+                if 'npixfit' in result.colnames:
+                    obj['npix_psf'][valid_pos] = result['npixfit']
+                if 'reduced_chi2' in result.colnames:
+                    # Available in photutils >= 2.3.0
+                    obj['reduced_chi2_psf'][valid_pos] = result['reduced_chi2']
 
-        except Exception as e:
-            log('PSF photometry failed: %s' % str(e))
-            log('Falling back to NaN values')
-            obj['flux'] = np.nan
-            obj['fluxerr'] = np.nan
-            obj['x_psf'] = obj['x']
-            obj['y_psf'] = obj['y']
-            if 'flags' not in obj.keys():
-                obj['flags'] = 0
-            obj['flags'] |= 0x1000
+                # Flag objects where fit failed (NaN values)
+                bad_idx = valid_pos & ~np.isfinite(obj['flux'])
+                obj['flags'][bad_idx] |= 0x1000  # PSF fit failed
+
+                # Flag objects where position moved significantly (>1 pixel)
+                if recentroid:
+                    moved_idx = valid_pos & (np.sqrt((obj['x_psf'] - init_params['x'])**2 +
+                                                      (obj['y_psf'] - init_params['y'])**2) > 1.0)
+                    obj['flags'][moved_idx] |= 0x2000  # Large centroid shift
+
+            except Exception as e:
+                log('PSF photometry failed: %s' % str(e))
+                log('Falling back to NaN values')
+                obj['flags'][valid_pos] |= 0x1000
 
     # Compute magnitudes
     idx = obj['flux'] > 0
