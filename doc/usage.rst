@@ -46,6 +46,7 @@ Data processing
    catalogs
    astrometry
    photometry
+   flags
    subtraction
    transients
    cutouts
@@ -108,3 +109,5 @@ For some examples of actual usage of *STDPipe* routines we encourage you to chec
 We also have the `tutorial on injection of simulated stars <https://github.com/karpov-sv/stdpipe/blob/master/notebooks/simulated_stars.ipynb>`__ into the image and simple analysis of object detection efficiency.
 
 `One more tutorial <https://github.com/karpov-sv/stdpipe/blob/master/notebooks/image_stacking.ipynb>`__ shows how to do a simple image co-addition (stacking) with astrometric alignment.
+
+The *STDPipe* routines are also being heavily used as a processing backend for the `STDWeb (Simple Transient Detection for the Web) <https://github.com/karpov-sv/stdweb>`__  web application providing a convenient interactive environment for photometry and transient detection.

@@ -4,7 +4,13 @@ Object detection and measurement
 Detecting objects on the image
 ------------------------------
 
-*STDPipe* currently contains two functions for detecting objects on the image, one based on external `SExtractor <https://github.com/astromatic/sextractor>`_ binary (:func:`stdpipe.photometry.get_objects_sextractor`), other - on Python `SEP <https://github.com/kbarbary/sep>`_ library (:func:`stdpipe.photometry.get_objects_sextractor`). They have mostly identical signatures and arguments, but differ in minor details like meaning of returned detection flags etc.
+*STDPipe* provides three functions for detecting objects on the image:
+
+- :func:`stdpipe.photometry.get_objects_sextractor` - based on external `SExtractor <https://github.com/astromatic/sextractor>`_ binary
+- :func:`stdpipe.photometry.get_objects_sep` - based on Python `SEP <https://github.com/kbarbary/sep>`_ library
+- :func:`stdpipe.photometry.get_objects_photutils` - based on `photutils <https://photutils.readthedocs.io/>`_ library (pure Python, no compiled dependencies)
+
+The first two have mostly identical signatures and arguments, but differ in minor details like meaning of returned detection flags etc.
 
 The detection in both cases is based on building the noise model through (grid-based) background and background rms estimation, and then extracting the groups of connected pixels above some pre-defined threshold. Optionally, before the thresholding, the image may be smoothed with some small kernel in order to improve the detection of fainter objects. We recommend checking the `SExtractor documentation <https://sextractor.readthedocs.io/>`_ to better understand the concepts of it.
 
@@ -86,19 +92,114 @@ Finally, using SExtractor star/galaxy separators - `CLASS_STAR` and `SPREAD_MODE
 .. autofunction:: stdpipe.photometry.get_objects_sep
    :noindex:
 
-More accurate photometric measurements
---------------------------------------
 
-The photometric measurements returned by the routines above are sometimes not the best ones you may extract from the image. E.g. they are based on globally estimated background model (built as a low-resolution spatial map and then intepolated to original pixels, see `here <https://sextractor.readthedocs.io/en/latest/Background.html>`_). On a rapidly varying backgrounds, you may expect better results from locally estimated background - e.g using local annuli around every object and sigma-clipped averages of pixel values inside them. We have a function :func:`stdpipe.photometry.measure_objects` that tries to compute it.
+Detection using photutils
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The :func:`~stdpipe.photometry.get_objects_photutils` function provides a pure-Python alternative using the `photutils <https://photutils.readthedocs.io/>`_ library. It offers three detection algorithms:
+
+- **segmentation** (default) - Image segmentation with connected pixels above threshold. Supports optional multi-level deblending for crowded fields.
+- **dao** - DAOStarFinder algorithm using Gaussian convolution, optimized for stellar fields with known FWHM.
+- **iraf** - IRAFStarFinder, similar to DAOStarFinder but with IRAF-compatible behavior.
+
+The segmentation method with deblending is particularly useful for crowded fields where sources overlap:
 
 .. code-block:: python
 
-   # We will pass this FWHM to measurement function so that aperture and
-   # background radii will be relative to it.
+   # Detect objects using photutils segmentation with deblending
+   obj = photometry.get_objects_photutils(image, mask=mask, thresh=3.0,
+                method='segmentation', deblend=True, aper=3.0, edge=10)
+   print(len(obj), 'objects detected')
+
+   # For stellar fields, DAOStarFinder may be faster
+   obj = photometry.get_objects_photutils(image, mask=mask, thresh=5.0,
+                method='dao', fwhm=3.0, aper=3.0)
+
+.. autofunction:: stdpipe.photometry.get_objects_photutils
+   :noindex:
+
+
+More accurate photometric measurements
+--------------------------------------
+
+The photometric measurements returned by detection routines are sometimes not optimal. The :func:`stdpipe.photometry.measure_objects` function provides several improvements:
+
+- **Local background estimation** using annuli around each object instead of global background model
+- **Centroiding** to refine object positions before measurement
+- **Optimal extraction** (Naylor 1998) for ~10% S/N improvement on point sources
+- **Grouped fitting** for crowded fields with overlapping PSFs
+
+
+Local background estimation
+^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The detection routines use a globally estimated background model (built as a low-resolution spatial map and then interpolated to original pixels, see `here <https://sextractor.readthedocs.io/en/latest/Background.html>`_). On rapidly varying backgrounds, you may expect better results from locally estimated background using annuli around every object:
+
+.. code-block:: python
+
+   # We will pass FWHM so that aperture and background radii are relative to it
    # We will also reject all objects with measured S/N < 5
    obj = photometry.measure_objects(obj, image, mask=mask, fwhm=fwhm, gain=gain,
                 aper=1.0, bkgann=[5, 7], sn=5, verbose=True)
    print(len(obj), 'objects properly measured')
+
+
+Centroiding
+^^^^^^^^^^^
+
+You can refine object positions before photometry using iterative centroiding. This improves aperture placement, especially when initial positions from detection are approximate:
+
+.. code-block:: python
+
+   # Refine positions with 3 centroiding iterations before aperture photometry
+   obj = photometry.measure_objects(obj, image, mask=mask, fwhm=fwhm,
+                aper=1.0, centroid_iter=3, verbose=True)
+
+   # Original positions are stored in x_orig, y_orig columns
+   print('Position shift:', np.median(np.hypot(obj['x'] - obj['x_orig'],
+                                                obj['y'] - obj['y_orig'])))
+
+
+Optimal extraction
+^^^^^^^^^^^^^^^^^^
+
+For point sources, optimal extraction (`Naylor 1998 <https://ui.adsabs.harvard.edu/abs/1998MNRAS.296..339N>`_) provides ~10% improvement in signal-to-noise ratio by using PSF-weighted photometry instead of simple aperture sums:
+
+.. code-block:: python
+
+   # Use optimal extraction with Gaussian PSF based on FWHM
+   obj = photometry.measure_objects(obj, image, mask=mask,
+                fwhm=fwhm, aper=1.5, optimal=True, verbose=True)
+
+   # Or provide a PSF model from PSFEx for better accuracy
+   psf_model = psf.run_psfex(image, mask=mask, gain=gain)
+   obj = photometry.measure_objects(obj, image, mask=mask,
+                psf=psf_model, aper=1.5, optimal=True, verbose=True)
+
+Optimal extraction adds quality metrics to the output:
+
+- ``chi2_optimal`` - chi-squared of the fit (lower is better)
+- ``norm_optimal`` - PSF normalization factor (should be ~1 for point sources)
+- ``npix_optimal`` - number of unmasked pixels used in the fit
+
+
+Grouped optimal extraction for crowded fields
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+In crowded fields where source PSFs overlap, grouped optimal extraction simultaneously fits fluxes for nearby sources using weighted least squares. This properly accounts for flux sharing between overlapping PSFs:
+
+.. code-block:: python
+
+   # Grouped extraction - sources within 2*FWHM are fitted together
+   obj = photometry.measure_objects(obj, image, mask=mask,
+                fwhm=fwhm, aper=1.5, optimal=True,
+                group_sources=True, grouper_radius=2*fwhm,
+                verbose=True)
+
+   # Check group information
+   print('Sources in groups of 2+:', len(obj[obj['group_size'] > 1]))
+
+This adds ``group_id`` and ``group_size`` columns to identify which sources were fitted together.
 
 
 .. autofunction:: stdpipe.photometry.measure_objects
