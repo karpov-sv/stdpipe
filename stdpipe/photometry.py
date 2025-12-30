@@ -22,16 +22,11 @@ import sep
 import photutils
 import photutils.background
 import photutils.aperture
-import photutils.centroids
-from photutils.utils import calc_total_error
+import photutils.segmentation
+import photutils.detection
 
-import statsmodels.api as sm
-from scipy.optimize import minimize, least_squares, root_scalar
-
-from . import astrometry
-from . import photometry_model
+# Put these to common namespace
 from .photometry_model import match, make_sn_model, get_detection_limit_sn, format_color_term
-from . import photometry_measure
 from .photometry_measure import measure_objects
 
 try:
@@ -669,6 +664,665 @@ def get_objects_sextractor(
     return result
 
 
+def _empty_table(get_segmentation=False):
+    """
+    Return empty table with correct structure.
+
+    Parameters
+    ----------
+    get_segmentation : bool
+        If True, return tuple (table, None), otherwise just table
+
+    Returns
+    -------
+    table : astropy.table.Table
+        Empty table with standard columns
+    segm : None (optional)
+        None segmentation map if get_segmentation=True
+    """
+    obj = Table()
+    obj['x'] = []
+    obj['y'] = []
+    obj['flux'] = []
+    obj['fluxerr'] = []
+    obj['mag'] = []
+    obj['magerr'] = []
+    obj['fwhm'] = []
+    obj['a'] = []
+    obj['b'] = []
+    obj['theta'] = []
+    obj['bg'] = []
+    obj['flags'] = []
+    obj['xerr'] = []
+    obj['yerr'] = []
+
+    if get_segmentation:
+        return obj, None
+    else:
+        return obj
+
+
+class ConstantBackground:
+    def __init__(self, value, rms, shape):
+        self.background = np.full(shape, value)
+        self.background_rms = np.full(shape, rms)
+
+
+def get_value(val):
+    """Get array from either Quantity or ndarray"""
+    if hasattr(val, 'value'):
+        return val.value
+    else:
+        return np.asarray(val)
+
+
+def get_objects_photutils(
+    image,
+    header=None,
+    mask=None,
+    err=None,
+    # Detection parameters
+    thresh=2.0,
+    method='segmentation',
+    deblend=True,
+    minarea=5,
+    saturation=None,
+    # Segmentation-specific parameters
+    npixels=5,
+    nlevels=32,
+    contrast=0.001,
+    connectivity=8,
+    # StarFinder-specific parameters
+    fwhm=3.0,
+    sharplo=0.2,
+    sharphi=1.0,
+    roundlo=-1.0,
+    roundhi=1.0,
+    # Photometry parameters
+    aper=3.0,
+    bkgann=None,
+    # Background parameters
+    bg_size=64,
+    subtract_bg=True,
+    # Filtering parameters
+    edge=0,
+    sn=3.0,
+    # Output control
+    wcs=None,
+    get_segmentation=False,
+    verbose=False,
+    **kwargs
+):
+    """
+    Detect sources in image using photutils detection algorithms.
+
+    This function provides an alternative to get_objects_sep() using
+    photutils instead of SEP. It supports multiple detection methods
+    including segmentation-based detection with deblending and
+    point source detection using DAOStarFinder or IRAFStarFinder.
+
+    Parameters
+    ----------
+    image : numpy.ndarray
+        2D image array
+    header : astropy.io.fits.Header, optional
+        FITS header for WCS information
+    mask : numpy.ndarray, optional
+        Boolean mask (True = masked pixel)
+    err : numpy.ndarray, optional
+        Error/uncertainty map. If None, uses background RMS
+    thresh : float, optional
+        Detection threshold in sigma units (default: 2.0)
+    method : str, optional
+        Detection method: 'segmentation', 'dao', or 'iraf' (default: 'segmentation')
+    deblend : bool, optional
+        Apply deblending for segmentation method (default: True)
+    minarea : int, optional
+        Minimum source area in pixels (default: 5)
+    saturation : float, optional
+        Saturation threshold for flagging saturated sources. Sources with
+        peak pixel values exceeding this threshold will have flag 0x004 set.
+        If None (default), saturation detection is disabled.
+    npixels : int, optional
+        Minimum connected pixels for segmentation (default: 5)
+    nlevels : int, optional
+        Number of deblending levels (default: 32)
+    contrast : float, optional
+        Deblending contrast threshold (default: 0.001)
+    connectivity : int, optional
+        Pixel connectivity (4 or 8) for segmentation (default: 8)
+    fwhm : float, optional
+        FWHM for StarFinder methods in pixels (default: 3.0)
+    sharplo : float, optional
+        Lower sharpness bound for StarFinder (default: 0.2)
+    sharphi : float, optional
+        Upper sharpness bound for StarFinder (default: 1.0)
+    roundlo : float, optional
+        Lower roundness bound for StarFinder (default: -1.0)
+    roundhi : float, optional
+        Upper roundness bound for StarFinder (default: 1.0)
+    aper : float, optional
+        Aperture radius in pixels (default: 3.0)
+    bkgann : tuple, optional
+        Background annulus (inner, outer) radii in pixels
+    bg_size : int, optional
+        Background estimation box size (default: 64)
+    subtract_bg : bool, optional
+        Subtract background before detection (default: True)
+    edge : int, optional
+        Edge exclusion in pixels (default: 0)
+    sn : float, optional
+        Minimum S/N ratio (default: 3.0)
+    wcs : astropy.wcs.WCS, optional
+        WCS for coordinate conversion. If None, extracted from header
+    get_segmentation : bool, optional
+        Return segmentation map (only for method='segmentation') (default: False)
+    verbose : bool or callable, optional
+        Verbose output (default: False)
+    **kwargs
+        Additional parameters passed to photutils functions
+
+    Returns
+    -------
+    table : astropy.table.Table
+        Table of detected sources with columns:
+        - x, y: pixel coordinates (0-indexed)
+        - xerr, yerr: position errors
+        - flux, fluxerr: aperture flux and error
+        - mag, magerr: instrumental magnitude and error
+        - fwhm: FWHM estimate
+        - a, b: semi-major and semi-minor axes
+        - theta: position angle
+        - bg: local background
+        - flags: detection flags
+        - ra, dec: WCS coordinates (if WCS available)
+    segm : photutils.segmentation.SegmentationImage, optional
+        Segmentation map (only if get_segmentation=True and method='segmentation')
+
+    Notes
+    -----
+    The function follows the same workflow as get_objects_sep():
+    1. Validate inputs and create mask from NaNs
+    2. Estimate background using Background2D
+    3. Optionally subtract background
+    4. Detect sources using selected method
+    5. Measure aperture photometry
+    6. Apply quality filters
+    7. Add WCS coordinates if available
+    8. Return table with standard columns
+
+    Detection methods:
+    - 'segmentation': Uses detect_sources() with optional deblending.
+      Best for extended sources and crowded fields.
+    - 'dao': Uses DAOStarFinder for point sources.
+      Best for stellar fields with well-defined PSF.
+    - 'iraf': Uses IRAFStarFinder for IRAF-compatible detection.
+      Similar to 'dao' but with IRAF-style parameters.
+
+    Examples
+    --------
+    Basic segmentation detection:
+
+    >>> obj = get_objects_photutils(image, thresh=3.0, aper=5.0)
+
+    Segmentation with deblending:
+
+    >>> obj = get_objects_photutils(
+    ...     image, method='segmentation', deblend=True,
+    ...     nlevels=32, contrast=0.001
+    ... )
+
+    Point source detection:
+
+    >>> obj = get_objects_photutils(
+    ...     image, method='dao', fwhm=3.0, thresh=5.0
+    ... )
+
+    With background annulus:
+
+    >>> obj = get_objects_photutils(
+    ...     image, aper=5.0, bkgann=(10.0, 15.0)
+    ... )
+
+    Get segmentation map:
+
+    >>> obj, segm = get_objects_photutils(
+    ...     image, method='segmentation', get_segmentation=True
+    ... )
+    """
+    # Validate inputs
+    if image.ndim != 2:
+        raise ValueError("Image must be 2D array")
+
+    # Setup logging
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
+
+    # Create coverage map / soft mask from NaNs
+    mask0 = ~np.isfinite(image)
+
+    if mask is None:
+        mask = np.zeros(image.shape, dtype=bool)
+    else:
+        mask = np.array(mask).astype(bool)
+
+    # Saturation map
+    if saturation is not None:
+        log(f'Using saturation level {saturation:.2f}')
+
+        smask = image >= saturation
+
+        # Let's subtract saturation mask from user-provided one so that it does not prevent proper segmentation
+        mask = mask & (~smask)
+    else:
+        smask = np.zeros(image.shape, dtype=bool)
+
+    total_mask = mask | mask0 | smask
+
+    # Extract WCS from header if provided
+    if wcs is None and header is not None:
+        try:
+            wcs = WCS(header)
+            if not wcs.is_celestial:
+                wcs = None
+        except Exception:
+            wcs = None
+
+    # Estimate background using photutils
+    log(f'Estimating background with {bg_size}x{bg_size} grid')
+
+    try:
+        bkg = photutils.background.Background2D(
+            image,
+            box_size=bg_size,
+            mask=total_mask,
+            bkg_estimator=photutils.background.ModeEstimatorBackground(),
+            exclude_percentile=10
+        )
+    except Exception as e:
+        log(f'Warning: Background estimation failed: {e}')
+        # Fallback to simple median
+        bkg = ConstantBackground(
+            np.nanmedian(image[~total_mask]) if np.any(~total_mask) else 0.0,
+            np.nanstd(image[~total_mask]) if np.any(~total_mask) else 1.0,
+            image.shape
+        )
+
+    # These things are not cached internally, so let's avoid re-computing them
+    bkg_back = bkg.background
+    bkg_rms = bkg.background_rms
+
+    # Optionally subtract background
+    if subtract_bg:
+        image_bgsub = image - bkg.background
+        log(f'Subtracting background: median {np.nanmedian(bkg_back):.2f}, '
+            f'rms {np.nanmedian(bkg_rms):.2f}')
+    else:
+        image_bgsub = image.copy()
+
+    # Create or use error map
+    if err is None:
+        err = bkg_rms
+        log('Using background RMS as error map')
+    else:
+        log('Using provided error map')
+
+    # Initialize variables for different methods
+    segm = None
+    catalog = None
+    sources = None
+
+    # Source detection based on different methods
+    if method == 'segmentation':
+        # Detect sources via segmentation
+        threshold = thresh * err
+
+        log(f'Detecting sources with threshold {thresh} sigma, at least {npixels} pixels')
+        segm = photutils.segmentation.detect_sources(
+            image_bgsub,
+            threshold=threshold,
+            npixels=npixels,
+            connectivity=connectivity,
+            mask=mask0
+        )
+
+        if segm is None or segm.nlabels == 0:
+            log('No sources detected')
+            return _empty_table(get_segmentation)
+
+        log(f'Detected {segm.nlabels} initial segments')
+
+        # Optionally deblend sources
+        if deblend and segm.nlabels > 0:
+            log(f'Deblending with nlevels {nlevels}, contrast {contrast}')
+            try:
+                segm_deblend = photutils.segmentation.deblend_sources(
+                    image_bgsub,
+                    segm,
+                    npixels=npixels,
+                    nlevels=nlevels,
+                    contrast=contrast
+                )
+                segm = segm_deblend
+                log(f'Deblended to {segm.nlabels} sources')
+            except Exception as e:
+                log(f'Warning: Deblending failed: {e}')
+
+        # Extract source properties
+        catalog = photutils.segmentation.SourceCatalog(
+            image_bgsub,
+            segm,
+            error=err,
+            mask=mask0,
+            background=bkg_back if subtract_bg else None
+        )
+
+        # Convert to arrays (handle both Quantity and ndarray)
+        x = get_value(catalog.xcentroid)
+        y = get_value(catalog.ycentroid)
+        area = get_value(catalog.area)
+
+    elif method in ['dao', 'iraf']:
+        # Calculate threshold
+        threshold_value = thresh * np.nanmedian(err)
+
+        # Select appropriate finder
+        if method == 'dao':
+            log(f'Using DAOStarFinder with fwhm={fwhm}, threshold={thresh} sigma')
+            finder = photutils.detection.DAOStarFinder(
+                fwhm=fwhm,
+                threshold=threshold_value,
+                sharplo=sharplo,
+                sharphi=sharphi,
+                roundlo=roundlo,
+                roundhi=roundhi,
+                exclude_border=True
+            )
+        else:  # method == 'iraf'
+            log(f'Using IRAFStarFinder with fwhm={fwhm}, threshold={thresh} sigma')
+            finder = photutils.detection.IRAFStarFinder(
+                fwhm=fwhm,
+                threshold=threshold_value,
+                sharplo=sharplo,
+                sharphi=sharphi,
+                roundlo=roundlo,
+                roundhi=roundhi,
+                exclude_border=True
+            )
+
+        # Find sources
+        try:
+            sources = finder(image_bgsub, mask=mask | mask0 )
+        except Exception as e:
+            log(f'Warning: Source detection failed: {e}')
+            sources = None
+
+        if sources is None or len(sources) == 0:
+            log('No sources detected')
+            return _empty_table(get_segmentation=False)
+
+        log(f'Detected {len(sources)} sources')
+
+        # Extract positions (handle both Quantity and ndarray)
+        x = get_value(sources['xcentroid'])
+        y = get_value(sources['ycentroid'])
+        # StarFinder doesn't provide area, use approximate
+        area = np.full(len(sources), np.pi * (fwhm / 2)**2)
+
+    else:
+        raise ValueError(f"Unknown method: {method}. Use 'segmentation', 'dao', or 'iraf'")
+
+    # Aperture photometry
+    log(f'Performing aperture photometry with {aper} pixels aperture')
+
+    # Create apertures at detected positions
+    positions = np.column_stack([x, y])
+    apertures = photutils.aperture.CircularAperture(positions, r=aper)
+
+    # Optional background annulus
+    if bkgann is not None:
+        log(f'Using background annulus: {bkgann}')
+        bkg_apertures = photutils.aperture.CircularAnnulus(
+            positions,
+            r_in=bkgann[0],
+            r_out=bkgann[1]
+        )
+
+        # Measure background
+        bkg_phot = photutils.aperture.aperture_photometry(
+            image_bgsub,
+            bkg_apertures,
+            error=err,
+            mask=mask
+        )
+        bkg_mean = bkg_phot['aperture_sum'] / bkg_apertures.area
+
+        # Apply background correction to aperture
+        phot_table = photutils.aperture.aperture_photometry(
+            image_bgsub,
+            apertures,
+            error=err,
+            mask=mask
+        )
+
+        # Handle both Quantity and ndarray
+        aper_sum = get_value(phot_table['aperture_sum'])
+        aper_sum_err = get_value(phot_table['aperture_sum_err'])
+        bkg_mean_arr = get_value(bkg_mean)
+
+        flux = aper_sum - bkg_mean_arr * apertures.area
+        fluxerr = aper_sum_err
+    else:
+        # Simple aperture photometry
+        phot_table = photutils.aperture.aperture_photometry(
+            image_bgsub,
+            apertures,
+            error=err,
+            mask=mask
+        )
+
+        # Handle both Quantity and ndarray
+        flux = get_value(phot_table['aperture_sum'])
+        fluxerr = get_value(phot_table['aperture_sum_err'])
+
+    # Convert to magnitudes
+    with np.errstate(divide='ignore', invalid='ignore'):
+        mag = -2.5 * np.log10(flux)
+        magerr = 2.5 / np.log(10) * fluxerr / flux
+
+    # Build output table
+    obj = Table()
+    obj['x'] = x
+    obj['y'] = y
+    obj['flux'] = flux
+    obj['fluxerr'] = fluxerr
+    obj['mag'] = mag
+    obj['magerr'] = magerr
+    if segm is not None:
+        obj['label'] = catalog.labels
+
+    # Add shape parameters
+    if method == 'segmentation':
+        # Extract from catalog (handle both Quantity and ndarray)
+        semimajor = get_value(catalog.semimajor_sigma)
+        semiminor = get_value(catalog.semiminor_sigma)
+        orientation = get_value(catalog.orientation)
+
+        obj['a'] = semimajor * 2.355  # Convert sigma to FWHM
+        obj['b'] = semiminor * 2.355
+        obj['theta'] = orientation
+        obj['fwhm'] = (obj['a'] + obj['b']) / 2
+        obj['flags'] = np.zeros(len(obj), dtype=int)
+
+        # Set detection flags for segmentation method
+        try:
+            # 0x002: Deblended sources
+            if deblend and segm is not None and hasattr(segm, 'deblended_labels'):
+                deblended_labels = set(segm.deblended_labels)
+                obj['flags'][np.isin(obj['label'], deblended_labels)] |= 0x002
+
+            # 0x008: Footprint truncated at image boundary
+            bbox_xmin = get_value(catalog.bbox_xmin)
+            bbox_xmax = get_value(catalog.bbox_xmax)
+            bbox_ymin = get_value(catalog.bbox_ymin)
+            bbox_ymax = get_value(catalog.bbox_ymax)
+
+            for i in range(len(obj)):
+                if (bbox_xmin[i] == 0 or bbox_xmax[i] >= image.shape[1] or
+                    bbox_ymin[i] == 0 or bbox_ymax[i] >= image.shape[0]):
+                    obj['flags'][i] |= 0x008
+
+            # 0x004: Saturated sources (if saturation threshold provided)
+            if saturation is not None:
+                max_val = get_value(catalog.max_value)
+                obj['flags'][max_val >= saturation] |= 0x004
+
+        except Exception as e:
+            log(f'Warning: Flag detection failed for segmentation: {e}')
+
+    else:  # StarFinder
+        obj['fwhm'] = np.full(len(obj), fwhm)
+        obj['a'] = obj['fwhm']
+        obj['b'] = obj['fwhm']
+        obj['theta'] = np.zeros(len(obj))
+        obj['flags'] = np.zeros(len(obj), dtype=int)
+
+        # Set detection flags for StarFinder methods
+        try:
+            # 0x010: Poor quality metrics (sharpness/roundness near rejection thresholds)
+            margin = 0.1  # 10% margin from thresholds
+
+            if 'sharpness' in sources.colnames:
+                sharp = get_value(sources['sharpness'])
+                poor_sharp = (sharp < sharplo * (1 + margin)) | (sharp > sharphi * (1 - margin))
+                obj['flags'][poor_sharp] |= 0x010
+
+            if 'roundness1' in sources.colnames:
+                round1 = get_value(sources['roundness1'])
+                poor_round = (round1 < roundlo * (1 + margin)) | (round1 > roundhi * (1 - margin))
+                obj['flags'][poor_round] |= 0x010
+
+            # 0x008: Truncated at boundary (near edge, even though exclude_border=True)
+            near_edge = (x <= 1) | (x >= image.shape[1] - 2) | (y <= 1) | (y >= image.shape[0] - 2)
+            obj['flags'][near_edge] |= 0x008
+
+            # 0x004: Saturated sources
+            if saturation is not None and 'peak' in sources.colnames:
+                peak = get_value(sources['peak'])
+                obj['flags'][peak >= saturation] |= 0x004
+
+        except Exception as e:
+            log(f'Warning: Flag detection failed for StarFinder: {e}')
+
+    # 0x100: Masked pixels in footprint (both methods)
+    try:
+        if np.any(total_mask):
+            if method == 'segmentation':
+                # Use segmentation map
+                labels = list(set(segm.data[total_mask])) # footprints with masked pixels
+                obj['flags'][np.isin(obj['label'], labels)] |= 0x100
+            else:
+                # Check source apertures for masked pixels
+                positions = np.column_stack([obj['x'], obj['y']])
+                apertures = photutils.aperture.CircularAperture(positions, r=fwhm/2)
+                mres = aperture_photometry(mask.astype(int), apertures, method='center')
+                obj['flags'][mres['aperture_sum'] > 0] |= 0x100
+    except Exception as e:
+        log(f'Warning: Masked pixel detection failed: {e}')
+
+    # Add background at each source
+    if method == 'segmentation':
+        bg_at_centroid = get_value(catalog.background_centroid)
+        obj['bg'] = bg_at_centroid
+    else:
+        obj['bg'] = [
+            bkg_back[_y,_x]
+            if _x >= 0 and _x < image.shape[1] and _y >= 0 and _y < image.shape[0] else np.nan
+            for _x,_y in zip(obj['x'].astype(int),obj['y'].astype(int))
+        ]
+
+    # Add position errors (simple estimate based on S/N)
+    with np.errstate(divide='ignore', invalid='ignore'):
+        positional_error = 0.5 / (flux / fluxerr)
+        positional_error = np.clip(positional_error, 0.1, 5.0)
+
+    obj['xerr'] = positional_error
+    obj['yerr'] = positional_error
+
+    # Add metadata
+    obj.meta['aper'] = aper
+    if bkgann is not None:
+        obj.meta['bkgann'] = bkgann
+    obj.meta['method'] = method
+    obj.meta['thresh'] = thresh
+    if method == 'segmentation':
+        obj.meta['deblend'] = deblend
+
+    # Apply quality filters
+    log(f'Applying quality filters: edge={edge}, sn={sn}, minarea={minarea}')
+
+    # Edge filter
+    if edge > 0:
+        idx = (obj['x'] > edge) & (obj['x'] < image.shape[1] - edge)
+        idx &= (obj['y'] > edge) & (obj['y'] < image.shape[0] - edge)
+    else:
+        idx = np.ones(len(obj), dtype=bool)
+
+    # Area filter (for segmentation)
+    if method == 'segmentation':
+        idx &= area >= minarea
+
+    # S/N filter
+    if sn > 0:
+        with np.errstate(divide='ignore', invalid='ignore'):
+            obj_sn = flux / fluxerr
+        idx &= obj_sn > sn
+
+    # Positive flux filter
+    idx &= flux > 0
+
+    # Apply filters
+    n_before = len(obj)
+    obj = obj[idx]
+
+    # Update segmentation map if needed
+    if method == 'segmentation' and get_segmentation and segm is not None:
+        # Filter segmentation to keep only selected sources
+        # Note: This keeps the original segmentation but user can cross-reference with obj table
+        pass
+
+    log(f'Filtered {n_before} -> {len(obj)} sources')
+
+    # Sort by brightness (flux, descending)
+    if len(obj) > 0:
+        obj.sort('flux', reverse=True)
+
+    # Add RA/Dec if WCS available
+    if wcs is not None and wcs.has_celestial:
+        try:
+            coords = wcs.all_pix2world(obj['x'], obj['y'], 0)
+            obj['ra'] = coords[0]
+            obj['dec'] = coords[1]
+            log('Added WCS coordinates (RA, Dec)')
+        except Exception as e:
+            log(f'Warning: WCS conversion failed: {e}')
+
+    log(f'Returning {len(obj)} sources')
+
+    # Return results
+    if get_segmentation:
+        if method == 'segmentation':
+            return obj, segm.data
+        else:
+            log('Warning: get_segmentation=True but method is not segmentation')
+            return obj, None
+    else:
+        return obj
+
+
 def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kwargs):
     if method == 'sep':
         bg = sep.Background(image, mask=mask, bw=size, bh=size, **kwargs)
@@ -682,5 +1336,3 @@ def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kw
         return back, backrms
     else:
         return back
-
-
