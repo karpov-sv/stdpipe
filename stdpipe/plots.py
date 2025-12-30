@@ -10,14 +10,22 @@ from astropy.convolution import Gaussian2DKernel, convolve, convolve_fft
 
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.stats import binned_statistic_2d
+from scipy.spatial import Voronoi
 
 from . import photometry
+
+# Optional powerbin import
+try:
+    import powerbin
+    HAS_POWERBIN = True
+except ImportError:
+    HAS_POWERBIN = False
 
 
 def colorbar(obj=None, ax=None, size="5%", pad=0.1):
     should_restore = False
 
-    if obj is not None:
+    if ax is None and obj is not None:
         ax = obj.axes
     elif ax is None:
         ax = plt.gca()
@@ -194,6 +202,428 @@ def binned_map(
     if show_dots:
         ax.set_autoscale_on(False)
         ax.plot(x, y, '.', color=color, alpha=0.3)
+
+
+def _kdtree_adaptive_bins(x, y, target_count, data_range=None):
+    """
+    Create adaptive bins using recursive K-D tree splitting.
+
+    Recursively splits the data region into rectangular bins until each
+    bin contains approximately `target_count` points.
+
+    Parameters
+    ----------
+    x, y : array-like
+        Coordinates of data points
+    target_count : int
+        Target number of points per bin
+    data_range : list, optional
+        [[xmin, xmax], [ymin, ymax]] range for binning
+
+    Returns
+    -------
+    list of tuples
+        Each tuple contains (xmin, xmax, ymin, ymax, indices) where indices
+        is a boolean array selecting points in that bin.
+    """
+    x = np.asarray(x)
+    y = np.asarray(y)
+
+    if data_range is not None:
+        xmin, xmax = data_range[0]
+        ymin, ymax = data_range[1]
+    else:
+        xmin, xmax = np.min(x), np.max(x)
+        ymin, ymax = np.min(y), np.max(y)
+
+    bins = []
+
+    def _split_recursive(idx, xmin, xmax, ymin, ymax, depth=0):
+        """Recursively split region until target count reached."""
+        count = np.sum(idx)
+
+        # Stop splitting if we have few enough points or region is too small
+        if count <= target_count * 1.5 or count < 3:
+            if count > 0:
+                bins.append((xmin, xmax, ymin, ymax, idx.copy()))
+            return
+
+        # Alternate splitting direction based on depth, prefer longer dimension
+        width = xmax - xmin
+        height = ymax - ymin
+
+        if (depth % 2 == 0 and width >= height) or (depth % 2 == 1 and width > height):
+            # Split in x
+            x_in_region = x[idx]
+            mid = np.median(x_in_region)
+            left_idx = idx & (x <= mid)
+            right_idx = idx & (x > mid)
+
+            if np.sum(left_idx) > 0 and np.sum(right_idx) > 0:
+                _split_recursive(left_idx, xmin, mid, ymin, ymax, depth + 1)
+                _split_recursive(right_idx, mid, xmax, ymin, ymax, depth + 1)
+            else:
+                bins.append((xmin, xmax, ymin, ymax, idx.copy()))
+        else:
+            # Split in y
+            y_in_region = y[idx]
+            mid = np.median(y_in_region)
+            bottom_idx = idx & (y <= mid)
+            top_idx = idx & (y > mid)
+
+            if np.sum(bottom_idx) > 0 and np.sum(top_idx) > 0:
+                _split_recursive(bottom_idx, xmin, xmax, ymin, mid, depth + 1)
+                _split_recursive(top_idx, xmin, xmax, mid, ymax, depth + 1)
+            else:
+                bins.append((xmin, xmax, ymin, ymax, idx.copy()))
+
+    # Start with all points in the data range
+    initial_idx = (x >= xmin) & (x <= xmax) & (y >= ymin) & (y <= ymax)
+    _split_recursive(initial_idx, xmin, xmax, ymin, ymax)
+
+    return bins
+
+
+def _powerbin_adaptive_bins(x, y, target_count, data_range=None):
+    """
+    Create adaptive bins using PowerBin's centroidal power diagrams.
+
+    Parameters
+    ----------
+    x, y : array-like
+        Coordinates of data points
+    target_count : int
+        Target number of points per bin
+    data_range : list, optional
+        [[xmin, xmax], [ymin, ymax]] range for binning
+
+    Returns
+    -------
+    bin_numbers : ndarray
+        Bin assignment for each point
+    centroids : ndarray
+        Centroids of each bin (N_bins x 2)
+    """
+    if not HAS_POWERBIN:
+        raise ImportError("powerbin package is required for this method")
+
+    from powerbin import PowerBin
+
+    x = np.asarray(x)
+    y = np.asarray(y)
+
+    if data_range is not None:
+        xmin, xmax = data_range[0]
+        ymin, ymax = data_range[1]
+        mask = (x >= xmin) & (x <= xmax) & (y >= ymin) & (y <= ymax)
+        x_use = x[mask]
+        y_use = y[mask]
+    else:
+        x_use = x
+        y_use = y
+        mask = np.ones(len(x), dtype=bool)
+
+    n_points = len(x_use)
+    if n_points < 4:
+        # Not enough points for PowerBin
+        raise ValueError("Need at least 4 points for PowerBin")
+
+    # PowerBin expects xy coordinates and capacity per pixel
+    # For count-based binning, each pixel has capacity 1
+    xy = np.column_stack([x_use, y_use])
+    capacity = np.ones(n_points)  # Each point contributes 1 to capacity
+
+    # Run PowerBin - may fail for scattered (non-gridded) point data
+    try:
+        pb = PowerBin(
+            xy,
+            capacity_spec=capacity,
+            target_capacity=target_count,
+            verbose=1, maxiter=500
+        )
+        print(pb.bin_capacity)
+    except (IndexError, ValueError) as e:
+        raise RuntimeError(
+            f"PowerBin failed (may not work with scattered point data): {e}"
+        )
+
+    bin_numbers_subset = pb.bin_num  # Note: attribute is bin_num, not bin_number
+    centroids = pb.xybin  # 2D array of bin centroids
+
+    # Map back to full array if range was specified
+    if data_range is not None:
+        bin_numbers = np.full(len(x), -1)
+        bin_numbers[mask] = bin_numbers_subset
+    else:
+        bin_numbers = bin_numbers_subset
+
+    return bin_numbers, centroids
+
+
+def adaptive_binned_map(
+    x,
+    y,
+    value,
+    target_count=50,
+    target_sn=None,
+    err=None,
+    statistic='mean',
+    method='auto',
+    qq=[0.5, 97.5],
+    color=None,
+    show_colorbar=True,
+    show_axis=True,
+    show_dots=False,
+    show_edges=True,
+    ax=None,
+    range=None,
+    **kwargs,
+):
+    """Plots statistical estimators with adaptive binning based on data density.
+
+    Creates bins with variable sizes: sparse regions get larger bins, dense
+    regions get finer resolution. Bins are sized to contain approximately
+    `target_count` points each, or achieve `target_sn` signal-to-noise ratio.
+
+    :param x: Abscissae of the data points
+    :param y: Ordinates of the data points
+    :param value: Values of the data points
+    :param target_count: Target number of points per bin (default 50)
+    :param target_sn: Target signal-to-noise per bin (alternative to target_count)
+    :param err: Value error values for S/N calculation (required if target_sn is set)
+    :param statistic: Statistical estimator - 'mean', 'median', 'std', 'count', or callable
+    :param method: Binning method - 'auto', 'powerbin', or 'kdtree'
+    :param qq: Quantile range for color scaling, default [0.5, 97.5]
+    :param color: Color for data point overlay
+    :param show_colorbar: Whether to show colorbar
+    :param show_axis: Whether to show axes
+    :param show_dots: Whether to overlay data points
+    :param show_edges: Whether to show bin boundaries
+    :param ax: Matplotlib axes object
+    :param range: Data range as [[xmin, xmax], [ymin, ymax]]
+    :param \\**kwargs: Additional arguments passed to matplotlib
+    :returns: None
+
+    """
+    x = np.asarray(x)
+    y = np.asarray(y)
+    value = np.asarray(value)
+
+    if ax is None:
+        ax = plt.gca()
+
+    # Determine method
+    if method == 'auto':
+        method = 'powerbin' if HAS_POWERBIN else 'kdtree'
+
+    # Calculate target_count from target_sn if provided
+    if target_sn is not None:
+        if err is None:
+            raise ValueError("noise parameter required when using target_sn")
+        err = np.asarray(err)
+        # For S/N targeting, estimate how many points needed
+        # S/N ~ sqrt(N) * mean_signal / mean_noise for Poisson
+        mean_sn = np.nanmean(np.abs(value) / err)
+        if mean_sn > 0:
+            target_count = max(3, int((target_sn / mean_sn) ** 2))
+        else:
+            target_count = 50  # fallback
+
+    # Get statistic function
+    if callable(statistic):
+        stat_func = statistic
+    elif statistic == 'mean':
+        stat_func = np.nanmean
+    elif statistic == 'median':
+        stat_func = np.nanmedian
+    elif statistic == 'std':
+        stat_func = np.nanstd
+    elif statistic == 'count':
+        stat_func = lambda v: len(v)
+    else:
+        raise ValueError(f"Unknown statistic: {statistic}")
+
+    # Compute adaptive bins
+    powerbin_success = False
+    if method == 'powerbin':
+        if not HAS_POWERBIN:
+            raise ImportError(
+                "powerbin package required. Install with: pip install powerbin"
+            )
+
+        try:
+            bin_numbers, centroids = _powerbin_adaptive_bins(x, y, target_count, range)
+            powerbin_success = True
+        except RuntimeError:
+            # PowerBin failed (common with scattered point data), fall back to kdtree
+            pass
+
+        if powerbin_success:
+            # Compute statistic per bin
+            unique_bins = np.unique(bin_numbers[bin_numbers >= 0])
+            bin_values = []
+            for b in unique_bins:
+                mask = bin_numbers == b
+                bin_values.append(stat_func(value[mask]))
+            bin_values = np.array(bin_values)
+
+            # Create Voronoi diagram for visualization
+            if len(centroids) >= 4:
+                # Add corner points to bound the Voronoi diagram
+                if range is not None:
+                    xmin, xmax = range[0]
+                    ymin, ymax = range[1]
+                else:
+                    xmin, xmax = np.min(x), np.max(x)
+                    ymin, ymax = np.min(y), np.max(y)
+
+                # Pad to ensure all regions are finite
+                pad_x = (xmax - xmin) * 0.1
+                pad_y = (ymax - ymin) * 0.1
+                corners = np.array([
+                    [xmin - pad_x, ymin - pad_y],
+                    [xmin - pad_x, ymax + pad_y],
+                    [xmax + pad_x, ymin - pad_y],
+                    [xmax + pad_x, ymax + pad_y],
+                ])
+                all_centroids = np.vstack([centroids, corners])
+                vor = Voronoi(all_centroids)
+
+                # Compute vmin/vmax
+                finite_vals = bin_values[np.isfinite(bin_values)]
+                if len(finite_vals) > 0:
+                    vmin1, vmax1 = np.percentile(finite_vals, qq)
+                else:
+                    vmin1, vmax1 = 0, 1
+
+                if 'vmin' not in kwargs:
+                    kwargs['vmin'] = vmin1
+                if 'vmax' not in kwargs:
+                    kwargs['vmax'] = vmax1
+
+                # Get colormap
+                cmap = kwargs.pop('cmap', 'viridis')
+                if isinstance(cmap, str):
+                    cmap = plt.get_cmap(cmap)
+
+                norm = plt.Normalize(vmin=kwargs['vmin'], vmax=kwargs['vmax'])
+
+                # Draw Voronoi cells
+                from matplotlib.collections import PolyCollection
+
+                polygons = []
+                colors = []
+                for i, (b, val) in enumerate(zip(unique_bins, bin_values)):
+                    region_idx = vor.point_region[i]
+                    region = vor.regions[region_idx]
+                    if -1 not in region and len(region) > 0:
+                        polygon = [vor.vertices[j] for j in region]
+                        # Clip to data range
+                        polygon = np.array(polygon)
+                        polygon[:, 0] = np.clip(polygon[:, 0], xmin, xmax)
+                        polygon[:, 1] = np.clip(polygon[:, 1], ymin, ymax)
+                        polygons.append(polygon)
+                        colors.append(cmap(norm(val)) if np.isfinite(val) else (0.8, 0.8, 0.8, 1))
+
+                pc = PolyCollection(
+                    polygons,
+                    facecolors=colors,
+                    edgecolors=kwargs.pop('edgecolors', 'black') if show_edges else 'none',
+                    linewidths=kwargs.pop('linewidths', 0.5) if show_edges else 0,
+                )
+                ax.add_collection(pc)
+                ax.set_xlim(xmin, xmax)
+                ax.set_ylim(ymin, ymax)
+
+                if show_colorbar:
+                    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+                    sm.set_array([])
+                    # ax.get_figure().colorbar(sm, ax=ax)
+                    colorbar(sm, ax=ax)
+
+            else:
+                # Too few bins, will fall back to kdtree
+                powerbin_success = False
+
+    if method == 'kdtree' or (method == 'powerbin' and not powerbin_success):
+        bins_list = _kdtree_adaptive_bins(x, y, target_count, range)
+
+        # Compute statistic per bin
+        bin_values = []
+        for xmin_b, xmax_b, ymin_b, ymax_b, idx in bins_list:
+            bin_values.append(stat_func(value[idx]))
+        bin_values = np.array(bin_values)
+
+        # Compute vmin/vmax
+        finite_vals = bin_values[np.isfinite(bin_values)]
+        if len(finite_vals) > 0:
+            vmin1, vmax1 = np.percentile(finite_vals, qq)
+        else:
+            vmin1, vmax1 = 0, 1
+
+        if 'vmin' not in kwargs:
+            kwargs['vmin'] = vmin1
+        if 'vmax' not in kwargs:
+            kwargs['vmax'] = vmax1
+
+        # Get colormap
+        cmap = kwargs.pop('cmap', 'viridis')
+        if isinstance(cmap, str):
+            cmap = plt.get_cmap(cmap)
+
+        norm = plt.Normalize(vmin=kwargs['vmin'], vmax=kwargs['vmax'])
+
+        # Draw rectangles
+        from matplotlib.patches import Rectangle
+        from matplotlib.collections import PatchCollection
+
+        patches = []
+        colors = []
+        for i, (xmin_b, xmax_b, ymin_b, ymax_b, idx) in enumerate(bins_list):
+            rect = Rectangle(
+                (xmin_b, ymin_b),
+                xmax_b - xmin_b,
+                ymax_b - ymin_b,
+            )
+            patches.append(rect)
+            val = bin_values[i]
+            colors.append(cmap(norm(val)) if np.isfinite(val) else (0.8, 0.8, 0.8, 1))
+
+        pc = PatchCollection(
+            patches,
+            facecolors=colors,
+            edgecolors='black' if show_edges else 'none',
+            linewidths=0.5 if show_edges else 0,
+        )
+        ax.add_collection(pc)
+
+        # Set axis limits
+        if range is not None:
+            ax.set_xlim(range[0])
+            ax.set_ylim(range[1])
+        else:
+            ax.set_xlim(np.min(x), np.max(x))
+            ax.set_ylim(np.min(y), np.max(y))
+
+        if show_colorbar:
+            sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+            sm.set_array([])
+            # ax.get_figure().colorbar(sm, ax=ax)
+            colorbar(sm, ax=ax)
+
+
+    if not show_axis:
+        ax.set_axis_off()
+    else:
+        ax.set_axis_on()
+
+    if show_dots:
+        ax.set_autoscale_on(False)
+        ax.plot(x, y, '.', color=color, alpha=0.3)
+
+    ax.set_aspect(kwargs.get('aspect', 'auto'))
+    # if 'aspect' not in kwargs:
+    #     ax.set_aspect('auto')
 
 
 def plot_cutout(

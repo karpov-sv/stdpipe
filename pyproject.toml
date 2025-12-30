@@ -84,9 +84,14 @@ docs = [
     "sphinx-prompt",
 ]
 
+# Adaptive binning (Voronoi tessellation)
+adaptive = [
+    "powerbin",
+]
+
 # All optional dependencies
 all = [
-    "stdpipe[dev,docs]",
+    "stdpipe[dev,docs,adaptive]",
 ]
 
 [project.urls]
