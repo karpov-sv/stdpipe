@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stdpipe"
-version = "0.2.5"
+version = "0.3.0"
 description = "Simple Transient Detection Pipeline"
 readme = "README.md"
 license = {file = "LICENSE.md"}
