@@ -2,7 +2,6 @@
 Routines for object detection and photometry.
 """
 
-from __future__ import absolute_import, division, print_function, unicode_literals
 
 import os, shutil, tempfile, shlex
 import numpy as np

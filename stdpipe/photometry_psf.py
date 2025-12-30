@@ -6,7 +6,6 @@ photometry, which is more accurate for point sources especially in crowded
 fields or when PSF wings are significant.
 """
 
-from __future__ import absolute_import, division, print_function, unicode_literals
 
 import numpy as np
 from astropy.table import Table

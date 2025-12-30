@@ -5,7 +5,6 @@ This module provides photometry functionality compatible with stdpipe.photometry
 but using IRAF/DAOPHOT tasks for aperture photometry measurements.
 """
 
-from __future__ import absolute_import, division, print_function, unicode_literals
 
 import os
 import tempfile

@@ -2,7 +2,6 @@
 Module for cropping the images and creating image cutouts / postage stamps
 """
 
-from __future__ import absolute_import, division, print_function, unicode_literals
 
 import numpy as np
 import datetime

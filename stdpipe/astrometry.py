@@ -1,4 +1,3 @@
-from __future__ import absolute_import, division, print_function, unicode_literals
 
 import os, tempfile, shutil, shlex, re, warnings
 import numpy as np

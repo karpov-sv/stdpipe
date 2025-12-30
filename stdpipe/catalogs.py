@@ -2,7 +2,6 @@
 Module containing the routines for handling various online catalogues.
 """
 
-from __future__ import absolute_import, division, print_function, unicode_literals
 
 import os, posixpath, shutil, tempfile
 import numpy as np
