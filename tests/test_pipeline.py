@@ -664,5 +664,630 @@ class TestCalibratePhotometryMaskedColumns:
         assert result is not None
 
 
+# ============================================================================
+# calibrate_photometry zero_fn callable tests
+# ============================================================================
+
+class TestCalibratePhotometryZeroFn:
+    """Test the zero_fn callable returned by calibrate_photometry."""
+
+    # Basic Functionality Tests
+
+    @pytest.mark.unit
+    def test_zero_fn_exists_and_callable(self, detected_objects_with_radec, reference_catalog):
+        """Test that zero_fn exists in result and is callable."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            verbose=False
+        )
+
+        # zero_fn should exist
+        assert 'zero_fn' in result
+        assert result['zero_fn'] is not None
+
+        # Should be callable
+        assert callable(result['zero_fn'])
+
+        # Should work with basic call
+        zero_fn = result['zero_fn']
+        x_test = np.array([100, 150, 200])
+        y_test = np.array([100, 150, 200])
+
+        # Should not crash
+        zero_values = zero_fn(x_test, y_test)
+
+        # Should return array
+        assert isinstance(zero_values, np.ndarray)
+        assert len(zero_values) == 3
+
+    @pytest.mark.unit
+    def test_zero_fn_returns_array(self, detected_objects_with_radec, reference_catalog):
+        """Test that zero_fn returns array with correct shape."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+
+        # Test with arrays of different sizes
+        for n in [1, 5, 10]:
+            x_test = np.random.uniform(0, 256, n)
+            y_test = np.random.uniform(0, 256, n)
+
+            zero_values = zero_fn(x_test, y_test)
+
+            assert isinstance(zero_values, np.ndarray)
+            assert len(zero_values) == n
+
+    @pytest.mark.unit
+    def test_zero_fn_scalar_input(self, detected_objects_with_radec, reference_catalog):
+        """Test zero_fn with scalar inputs."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+
+        # Single scalar position
+        x_test = 100.0
+        y_test = 150.0
+
+        # Should work without crashing
+        zero_value = zero_fn(x_test, y_test)
+
+        # Should return array (even for scalar input)
+        assert isinstance(zero_value, (np.ndarray, float, np.floating))
+
+    @pytest.mark.unit
+    def test_zero_fn_none_coordinates(self, detected_objects_with_radec, reference_catalog):
+        """Test zero_fn with None coordinates uses defaults."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+
+        # Call with None coordinates
+        zero_values = zero_fn(None, None)
+
+        # Should return array (default positions)
+        assert isinstance(zero_values, np.ndarray)
+        # Length should match number of matched objects
+        assert len(zero_values) > 0
+
+    # Spatial Model Tests
+
+    @pytest.mark.unit
+    def test_zero_fn_spatial_order_0_constant(self, detected_objects_with_radec, reference_catalog):
+        """Test that spatial_order=0 produces constant zero-point."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            order=0,  # Constant zero-point
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+
+        # Test at different positions
+        positions = [
+            (10, 10),    # Corner
+            (128, 128),  # Center
+            (245, 245),  # Opposite corner
+            (10, 245),   # Another corner
+        ]
+
+        zero_points = [zero_fn(np.array([x]), np.array([y]))[0] for x, y in positions]
+
+        # All should be very close (constant model)
+        assert np.std(zero_points) < 0.01  # Very small variation
+
+    @pytest.mark.unit
+    def test_zero_fn_spatial_order_1_linear(self, detected_objects_with_radec, reference_catalog):
+        """Test that spatial_order=1 allows linear variation."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            order=1,  # Linear spatial variation
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+
+        # Test at different positions - should be able to vary
+        x_test = np.array([10, 128, 245])
+        y_test = np.array([10, 128, 245])
+
+        zero_values = zero_fn(x_test, y_test)
+
+        # Should return valid array
+        assert isinstance(zero_values, np.ndarray)
+        assert len(zero_values) == 3
+        # With linear model, values CAN vary (but don't have to if data doesn't require it)
+        # Just verify it works without crashing
+
+    @pytest.mark.unit
+    def test_zero_fn_spatial_order_2_quadratic(self, detected_objects_with_radec, reference_catalog):
+        """Test that spatial_order=2 works (quadratic variation)."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            order=2,  # Quadratic spatial variation
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+
+        # Test at grid of positions
+        x_test = np.array([10, 50, 100, 150, 200, 245])
+        y_test = np.array([10, 50, 100, 150, 200, 245])
+
+        zero_values = zero_fn(x_test, y_test)
+
+        # Should return valid array
+        assert isinstance(zero_values, np.ndarray)
+        assert len(zero_values) == 6
+
+    # Error Computation Tests
+
+    @pytest.mark.unit
+    def test_zero_fn_get_err_false(self, detected_objects_with_radec, reference_catalog):
+        """Test zero_fn with get_err=False returns zero-points."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+        x_test = np.array([100, 150, 200])
+        y_test = np.array([100, 150, 200])
+
+        # Get zero-points (default)
+        zero_values = zero_fn(x_test, y_test, get_err=False)
+
+        # Should return array of zero-points
+        assert isinstance(zero_values, np.ndarray)
+        assert len(zero_values) == 3
+
+        # Values should be in reasonable range for zero-points (not tiny error values)
+        # Typical zero-points are several magnitudes
+        assert np.all(np.abs(zero_values) < 100)  # Sanity check
+
+    @pytest.mark.unit
+    def test_zero_fn_get_err_true(self, detected_objects_with_radec, reference_catalog):
+        """Test zero_fn with get_err=True returns errors."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+        x_test = np.array([100, 150, 200])
+        y_test = np.array([100, 150, 200])
+
+        # Get errors
+        zero_errors = zero_fn(x_test, y_test, get_err=True, add_intrinsic_rms=False)
+
+        # Should return array of errors
+        assert isinstance(zero_errors, np.ndarray)
+        assert len(zero_errors) == 3
+
+        # Errors should be non-negative
+        assert np.all(zero_errors >= 0)
+
+    @pytest.mark.unit
+    def test_zero_fn_add_intrinsic_rms(self, detected_objects_with_radec, reference_catalog):
+        """Test zero_fn add_intrinsic_rms parameter."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+        x_test = np.array([100, 150, 200])
+        y_test = np.array([100, 150, 200])
+
+        # Get errors (statistical only)
+        zero_errors_stat = zero_fn(x_test, y_test, get_err=True, add_intrinsic_rms=False)
+
+        # Get errors (with intrinsic RMS)
+        zero_errors_total = zero_fn(x_test, y_test, get_err=True, add_intrinsic_rms=True)
+
+        # Both should be non-negative
+        assert np.all(zero_errors_stat >= 0)
+        assert np.all(zero_errors_total >= 0)
+
+        # Total errors >= statistical errors (due to added intrinsic RMS in quadrature)
+        assert np.all(zero_errors_total >= zero_errors_stat)
+
+        # If intrinsic_rms > 0, total should be strictly larger
+        if result['intrinsic_rms'] > 0:
+            assert np.all(zero_errors_total > zero_errors_stat)
+
+    @pytest.mark.unit
+    def test_zero_fn_err_large_input(self, detected_objects_with_radec, reference_catalog):
+        """Test zero_fn error computation with large input (>5000 positions)."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+
+        # Create large input (>5000 positions)
+        n = 6000
+        x_test = np.random.uniform(0, 256, n)
+        y_test = np.random.uniform(0, 256, n)
+
+        # Get errors - should return zeros for large input (performance limitation)
+        zero_errors = zero_fn(x_test, y_test, get_err=True)
+
+        # Should return array of zeros (per implementation in photometry_model.py line 369)
+        assert isinstance(zero_errors, np.ndarray)
+        assert len(zero_errors) == n
+        assert np.all(zero_errors == 0)
+
+    # Magnitude Dependence Tests
+
+    @pytest.mark.unit
+    def test_zero_fn_with_mag_parameter(self, detected_objects_with_radec, reference_catalog):
+        """Test zero_fn with mag parameter."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        # Use simple model first (mag is optional)
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            order=0,
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+        x_test = np.array([100, 150, 200])
+        y_test = np.array([100, 150, 200])
+        mag_test = np.array([15.0, 16.0, 17.0])
+
+        # Should work with mag parameter even when not required
+        zero_values = zero_fn(x_test, y_test, mag=mag_test)
+
+        assert isinstance(zero_values, np.ndarray)
+        assert len(zero_values) == 3
+
+    @pytest.mark.unit
+    def test_zero_fn_without_mag_when_not_required(self, detected_objects_with_radec, reference_catalog):
+        """Test zero_fn without mag when not required (simple model)."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        # Simple model: bg_order=None, nonlin=False (default)
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            order=0,
+            bg_order=None,
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+        x_test = np.array([100, 150, 200])
+        y_test = np.array([100, 150, 200])
+
+        # Should work without mag parameter
+        zero_values = zero_fn(x_test, y_test)
+
+        assert isinstance(zero_values, np.ndarray)
+        assert len(zero_values) == 3
+
+    @pytest.mark.unit
+    def test_zero_fn_mag_none_with_simple_model(self, detected_objects_with_radec, reference_catalog):
+        """Test zero_fn with mag=None explicitly."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            order=0,
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+        x_test = np.array([100, 150, 200])
+        y_test = np.array([100, 150, 200])
+
+        # Explicit mag=None should work
+        zero_values = zero_fn(x_test, y_test, mag=None)
+
+        assert isinstance(zero_values, np.ndarray)
+        assert len(zero_values) == 3
+
+    # Data Type Handling Tests
+
+    @pytest.mark.unit
+    def test_zero_fn_numpy_arrays(self, detected_objects_with_radec, reference_catalog):
+        """Test zero_fn with regular NumPy arrays."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+
+        # Regular NumPy arrays
+        x_test = np.array([100.0, 150.0, 200.0])
+        y_test = np.array([100.0, 150.0, 200.0])
+        mag_test = np.array([15.0, 16.0, 17.0])
+
+        # Should work fine
+        zero_values = zero_fn(x_test, y_test, mag=mag_test)
+
+        assert isinstance(zero_values, np.ndarray)
+        assert len(zero_values) == 3
+
+    @pytest.mark.unit
+    def test_zero_fn_masked_columns(self, detected_objects_with_radec, reference_catalog):
+        """Test zero_fn with MaskedColumn inputs."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+
+        # MaskedColumn inputs
+        from astropy.table import MaskedColumn
+        x_test = MaskedColumn([100.0, 150.0, 200.0], mask=[False, False, False])
+        y_test = MaskedColumn([100.0, 150.0, 200.0], mask=[False, False, False])
+        mag_test = MaskedColumn([15.0, 16.0, 17.0], mask=[False, False, False])
+
+        # Should handle MaskedColumns (converted to arrays internally)
+        zero_values = zero_fn(x_test, y_test, mag=mag_test)
+
+        assert isinstance(zero_values, np.ndarray)
+        assert len(zero_values) == 3
+
+    @pytest.mark.unit
+    def test_zero_fn_mixed_types(self, detected_objects_with_radec, reference_catalog):
+        """Test zero_fn with mixed scalar/array inputs."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+
+        # Mixed types - should handle gracefully or raise clear error
+        x_test = 100.0  # scalar
+        y_test = np.array([100.0, 150.0, 200.0])  # array
+
+        try:
+            # This might work (broadcasting) or might fail
+            zero_values = zero_fn(x_test, y_test)
+            # If it works, verify result
+            assert isinstance(zero_values, np.ndarray)
+        except (ValueError, IndexError):
+            # If it fails, that's also acceptable behavior
+            pass
+
+    # Integration Tests
+
+    @pytest.mark.unit
+    def test_zero_fn_calibrated_magnitudes_match(self, detected_objects_with_radec, reference_catalog):
+        """Test that zero_fn produces consistent calibrated magnitudes."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        # Get result with update=True
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            update=True,
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+
+        # Manually compute calibrated magnitudes using zero_fn
+        manual_calib = obj['mag'] + zero_fn(obj['x'], obj['y'], obj['mag'])
+
+        # Should match obj['mag_calib'] from calibrate_photometry
+        assert 'mag_calib' in obj.colnames
+
+        # Should be very close
+        np.testing.assert_allclose(manual_calib, obj['mag_calib'], rtol=1e-5)
+
+    @pytest.mark.unit
+    def test_zero_fn_consistency_across_calls(self, detected_objects_with_radec, reference_catalog):
+        """Test that zero_fn returns identical results across multiple calls."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+        x_test = np.array([100, 150, 200])
+        y_test = np.array([100, 150, 200])
+
+        # Call multiple times
+        zero_1 = zero_fn(x_test, y_test)
+        zero_2 = zero_fn(x_test, y_test)
+        zero_3 = zero_fn(x_test, y_test)
+
+        # Should be identical (deterministic)
+        np.testing.assert_array_equal(zero_1, zero_2)
+        np.testing.assert_array_equal(zero_2, zero_3)
+
+    @pytest.mark.unit
+    def test_zero_fn_at_calibration_star_positions(self, detected_objects_with_radec, reference_catalog):
+        """Test zero_fn at matched calibration star positions."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            order=0,  # Simple constant model for easier comparison
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+
+        # Get matched object positions
+        ox = result['ox']
+        oy = result['oy']
+
+        if len(ox) > 0:
+            # Compute zero-points at matched positions
+            zero_at_matched = zero_fn(ox, oy)
+
+            # These should be close to the empirical zero-points
+            # (zero_fn is fitted model of result['zero'])
+            empirical_zero = result['zero']
+
+            # Should be reasonably close (fitted model approximates data)
+            # Allow some deviation since it's a model fit
+            assert np.allclose(zero_at_matched, empirical_zero, atol=0.5)
+
+    # Edge Cases
+
+    @pytest.mark.unit
+    def test_zero_fn_single_position(self, detected_objects_with_radec, reference_catalog):
+        """Test zero_fn with single position."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+
+        # Single position as 1-element arrays
+        x_test = np.array([100.0])
+        y_test = np.array([150.0])
+
+        zero_value = zero_fn(x_test, y_test)
+
+        # Should return single-element array
+        assert isinstance(zero_value, np.ndarray)
+        assert len(zero_value) == 1
+
+    @pytest.mark.unit
+    def test_zero_fn_empty_arrays(self, detected_objects_with_radec, reference_catalog):
+        """Test zero_fn with empty arrays."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+
+        # Empty arrays
+        x_test = np.array([])
+        y_test = np.array([])
+
+        # Should return empty array (or handle gracefully)
+        zero_values = zero_fn(x_test, y_test)
+
+        assert isinstance(zero_values, np.ndarray)
+        assert len(zero_values) == 0
+
+    @pytest.mark.unit
+    def test_zero_fn_all_nan_coordinates(self, detected_objects_with_radec, reference_catalog):
+        """Test zero_fn with all-NaN coordinates."""
+        obj = detected_objects_with_radec.copy()
+        cat = reference_catalog.copy()
+
+        result = pipeline.calibrate_photometry(
+            obj, cat,
+            sr=1/3600,
+            order=0,  # Constant model
+            verbose=False
+        )
+
+        zero_fn = result['zero_fn']
+
+        # All-NaN coordinates
+        x_test = np.array([np.nan, np.nan, np.nan])
+        y_test = np.array([np.nan, np.nan, np.nan])
+
+        # Should handle gracefully
+        zero_values = zero_fn(x_test, y_test)
+
+        assert isinstance(zero_values, np.ndarray)
+        assert len(zero_values) == 3
+        # For constant model (order=0), position doesn't matter, so NaN coords
+        # still return the constant zero-point (not NaN)
+        # This is actually sensible behavior
+        assert np.all(np.isfinite(zero_values))
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
