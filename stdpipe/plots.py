@@ -51,6 +51,10 @@ def imshow(
     stretch='linear',
     r0=None,
     ax=None,
+    max_plot_size=4096,
+    fast=True,
+    xlim=None,
+    ylim=None,
     **kwargs,
 ):
     """Simple wrapper around pyplot.imshow with percentile-based intensity scaling, optional colorbar, etc.
@@ -63,31 +67,107 @@ def imshow(
     :param stretch: Image intensity stretching mode - e.g. `linear`, `log`, `asinh`, `histeq` or anything else supported by Astropy visualization layer
     :param r0: Smoothing kernel size (sigma) to be applied, optional
     :param ax: Matplotlib Axes object to be used for plotting, optional
+    :param max_plot_size: Maximum image dimension for display. Images larger than this will be downscaled for faster rendering while preserving coordinate system. Set to None to disable. Default: 4096
+    :param fast: Use faster approximate methods for large images (default: True). When enabled, uses subsampling for percentile calculation, float32 precision, FFT convolution, and optimized finite checks.
+    :param xlim: Tuple (xmin, xmax) to select x region in original image coordinates. Region is extracted before downscaling to preserve quality.
+    :param ylim: Tuple (ymin, ymax) to select y region in original image coordinates. Region is extracted before downscaling to preserve quality.
     :param \\**kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.imshow`
 
     """
     if ax is None:
         ax = plt.gca()
 
-    image = image.astype(np.double)
-    good_idx = np.isfinite(image)
+    # Store original shape for coordinate system
+    orig_shape = image.shape
+
+    # STEP 0: Region selection (FIRST, before any processing)
+    if xlim is not None or ylim is not None:
+        x0 = int(xlim[0]) if xlim is not None else 0
+        x1 = int(xlim[1]) if xlim is not None else orig_shape[1]
+        y0 = int(ylim[0]) if ylim is not None else 0
+        y1 = int(ylim[1]) if ylim is not None else orig_shape[0]
+
+        # Clip to image bounds
+        x0 = max(0, min(x0, orig_shape[1]))
+        x1 = max(0, min(x1, orig_shape[1]))
+        y0 = max(0, min(y0, orig_shape[0]))
+        y1 = max(0, min(y1, orig_shape[0]))
+
+        # Extract region at full resolution
+        image = image[y0:y1, x0:x1]
+        if mask is not None:
+            mask = mask[y0:y1, x0:x1]
+
+        region_offset = (x0, y0)
+        region_shape = (y1 - y0, x1 - x0)
+    else:
+        region_offset = (0, 0)
+        region_shape = orig_shape
+
+    # OPTIMIZATION 1: Downscale large images for matplotlib
+    if fast and max_plot_size is not None and max(image.shape) > max_plot_size:
+        scale = max_plot_size / max(image.shape)
+        from scipy.ndimage import zoom
+
+        image = zoom(image, scale, order=1)  # bilinear interpolation
+        if mask is not None:
+            mask = zoom(mask.astype(np.uint8), scale, order=0).astype(bool)
+
+    # OPTIMIZATION 2: Use float32 instead of float64 for memory efficiency
+    if r0 is not None and r0 > 0:
+        # Need to convert for smoothing operation
+        image = image.astype(np.float32)
+    elif not np.issubdtype(image.dtype, np.floating):
+        # For integer images, convert for proper display
+        image = image.astype(np.float32)
+    else:
+        # Already floating point, use as-is
+        image = np.asarray(image)
+
+    # OPTIMIZATION 3: Fast finite check for large images
+    if fast and image.size > 10_000_000:
+        # Quick check: are there ANY non-finite values in a sample?
+        if not np.all(np.isfinite(image.flat[:10000])):
+            good_idx = np.isfinite(image)
+        else:
+            good_idx = np.ones(image.shape, dtype=bool)
+    else:
+        good_idx = np.isfinite(image)
 
     if mask is not None:
         good_idx &= ~mask
 
     if np.sum(good_idx):
+        # OPTIMIZATION 4: FFT convolution for large images
         if r0 is not None and r0 > 0:
-            # First smooth the image
             kernel = Gaussian2DKernel(r0)
-            image = convolve(image, kernel, mask=mask, boundary='extend')
+            # Use FFT convolution for large images (much faster)
+            if fast and image.size > 1_000_000:
+                from astropy.convolution import convolve_fft
+
+                image = convolve_fft(
+                    image, kernel, mask=mask, boundary='extend', nan_treatment='fill', fill_value=0
+                )
+            else:
+                image = convolve(image, kernel, mask=mask, boundary='extend')
 
         if qq is None and 'vmin' not in kwargs and 'vmax' not in kwargs:
             # Sane defaults for quantiles if no manual limits provided
             qq = [0.5, 99.5]
 
+        # OPTIMIZATION 5: Subsample for percentiles on large images
         if qq is not None:
-            # Presente of qq quantiles overwrites vmin/vmax even if they are present
-            kwargs['vmin'], kwargs['vmax'] = np.percentile(image[good_idx], qq)
+            # Presence of qq quantiles overwrites vmin/vmax even if they are present
+            max_pixels = 1_000_000
+            n_good = np.sum(good_idx)
+            if fast and n_good > max_pixels:
+                # Random subsample of good pixels for percentile calculation
+                good_coords = np.where(good_idx)
+                sample_idx = np.random.choice(len(good_coords[0]), max_pixels, replace=False)
+                sample_values = image[good_coords[0][sample_idx], good_coords[1][sample_idx]]
+                kwargs['vmin'], kwargs['vmax'] = np.percentile(sample_values, qq)
+            else:
+                kwargs['vmin'], kwargs['vmax'] = np.percentile(image[good_idx], qq)
 
         if not 'interpolation' in kwargs:
             # Rough heuristic to choose interpolation method based on image dimensions
@@ -96,13 +176,17 @@ def imshow(
             else:
                 kwargs['interpolation'] = 'bicubic'
 
+        # OPTIMIZATION 6: Optimize stretch (especially histeq mode)
         if stretch and stretch != 'linear':
             if stretch == 'histeq':
-                data = image
-                if 'vmin' in kwargs:
-                    data = data[data >= kwargs['vmin']]
-                if 'vmax' in kwargs:
-                    data = data[data <= kwargs['vmax']]
+                # Use only valid pixels for histogram, avoid creating multiple copies
+                if 'vmin' in kwargs or 'vmax' in kwargs:
+                    vmin = kwargs.get('vmin', -np.inf)
+                    vmax = kwargs.get('vmax', np.inf)
+                    valid_mask = (image >= vmin) & (image <= vmax) & good_idx
+                    data = image[valid_mask]
+                else:
+                    data = image[good_idx]
 
                 kwargs['norm'] = ImageNormalize(
                     stretch=HistEqStretch(data),
@@ -117,6 +201,21 @@ def imshow(
                     max_cut=kwargs.pop('vmax', None),
                     power=2,
                 )
+
+    # CRITICAL: Preserve coordinate system (including region offset)
+    if 'extent' not in kwargs:
+        x0_extent = region_offset[0]
+        y0_extent = region_offset[1]
+        x1_extent = x0_extent + region_shape[1]
+        y1_extent = y0_extent + region_shape[0]
+
+        # extent = [left, right, bottom, top]
+        # For origin='upper' (default): y increases downward, so bottom=y1, top=y0
+        # For origin='lower': y increases upward, so bottom=y0, top=y1
+        if kwargs.get('origin', 'upper') == 'lower':
+            kwargs['extent'] = [x0_extent, x1_extent, y0_extent, y1_extent]
+        else:
+            kwargs['extent'] = [x0_extent, x1_extent, y1_extent, y0_extent]
 
     img = ax.imshow(image, **kwargs)
     if not show_axis:
