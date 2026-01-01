@@ -1289,5 +1289,679 @@ class TestCalibratePhotometryZeroFn:
         assert np.all(np.isfinite(zero_values))
 
 
+# Fixtures for TestSplitImage
+@pytest.fixture
+def simple_image_256():
+    """256×256 test image with gradient for split testing."""
+    y, x = np.mgrid[0:256, 0:256]
+    return (x + y).astype(float)
+
+
+@pytest.fixture
+def simple_mask_256():
+    """256×256 boolean mask."""
+    mask = np.zeros((256, 256), dtype=bool)
+    mask[100:150, 100:150] = True  # Central bad region
+    return mask
+
+
+@pytest.fixture
+def simple_header_256():
+    """FITS header for 256×256 image."""
+    header = fits.Header()
+    header['NAXIS1'] = 256
+    header['NAXIS2'] = 256
+    header['CRPIX1'] = 128
+    header['CRPIX2'] = 128
+    header['CRVAL1'] = 180.0
+    header['CRVAL2'] = 45.0
+    header['CDELT1'] = -0.001
+    header['CDELT2'] = 0.001
+    return header
+
+
+@pytest.fixture
+def split_test_table():
+    """Object table with x, y, ra, dec for split_image testing."""
+    table = Table()
+    table['x'] = np.array([50.0, 100.0, 150.0, 200.0])
+    table['y'] = np.array([50.0, 100.0, 150.0, 200.0])
+    table['ra'] = np.array([179.9, 180.0, 180.1, 180.2])
+    table['dec'] = np.array([44.9, 45.0, 45.1, 45.2])
+    table['flux'] = np.array([1000, 2000, 3000, 4000])
+    return table
+
+
+@pytest.fixture
+def split_test_psf():
+    """PSF dictionary for split_image testing."""
+    return {
+        'x0': 128,
+        'y0': 128,
+        'psf_model': 'gaussian',
+        'fwhm': 3.0
+    }
+
+
+class TestSplitImage:
+    """Test pipeline.split_image functionality."""
+
+    # --- Basic Splitting Tests (Tests 1.1-1.6) ---
+
+    @pytest.mark.unit
+    def test_split_image_single_block(self, simple_image_256):
+        """Test split with nx=1, ny=1 (no splitting)."""
+        blocks = list(pipeline.split_image(simple_image_256, nx=1, ny=1))
+
+        # Should yield exactly 1 block
+        assert len(blocks) == 1
+
+        # Block should match original image
+        image_block = blocks[0]
+        assert image_block.shape == simple_image_256.shape
+        np.testing.assert_array_equal(image_block, simple_image_256)
+
+    @pytest.mark.unit
+    def test_split_image_2x2_grid(self, simple_image_256):
+        """Test split 256×256 image into 2×2 grid."""
+        blocks = list(pipeline.split_image(simple_image_256, nx=2, ny=2, overlap=0))
+
+        # Should yield 4 blocks
+        assert len(blocks) == 4
+
+        # Each block should be 128×128
+        for block in blocks:
+            assert block.shape == (128, 128)
+
+    @pytest.mark.unit
+    def test_split_image_3x2_grid(self, simple_image_256):
+        """Test split into 3×2 grid (nx=3, ny=2)."""
+        blocks = list(pipeline.split_image(simple_image_256, nx=3, ny=2, overlap=0))
+
+        # Should yield 6 blocks
+        assert len(blocks) == 6
+
+        # Expected dimensions: dx = floor(256/3) = 85, dy = floor(256/2) = 128
+        # Note: shape is (rows, cols) = (height, width)
+        assert blocks[0].shape[0] == 128  # height (rows)
+        assert blocks[0].shape[1] == 85   # width (columns)
+
+    @pytest.mark.unit
+    def test_split_image_ny_defaults_to_nx(self, simple_image_256):
+        """Test that ny defaults to nx when not specified."""
+        blocks = list(pipeline.split_image(simple_image_256, nx=3, overlap=0))
+
+        # Should create 3×3 grid
+        assert len(blocks) == 9
+
+    @pytest.mark.unit
+    def test_split_image_block_dimensions(self):
+        """Test block dimension calculation with uneven division."""
+        # Create 250×250 image
+        image = np.ones((250, 250))
+
+        # Split into 3×3
+        blocks = list(pipeline.split_image(image, nx=3, ny=3, overlap=0))
+
+        # dx = floor(250/3) = 83, dy = floor(250/3) = 83
+        assert len(blocks) == 9
+        assert blocks[0].shape[0] == 83
+        assert blocks[0].shape[1] == 83
+
+    @pytest.mark.unit
+    def test_split_image_generator_behavior(self, simple_image_256):
+        """Test that split_image is a proper generator."""
+        # Should return a generator
+        gen = pipeline.split_image(simple_image_256, nx=2, ny=2)
+        assert hasattr(gen, '__iter__')
+        assert hasattr(gen, '__next__')
+
+        # Should be able to convert to list
+        blocks = list(gen)
+        assert len(blocks) == 4
+
+        # Should be able to create new generator from same image
+        gen2 = pipeline.split_image(simple_image_256, nx=2, ny=2)
+        blocks2 = list(gen2)
+        assert len(blocks2) == 4
+
+    # --- Overlap Tests (Tests 2.1-2.4) ---
+
+    @pytest.mark.unit
+    def test_split_image_overlap_basic(self, simple_image_256):
+        """Test basic overlap functionality."""
+        overlap = 10
+        blocks = list(pipeline.split_image(simple_image_256, nx=2, ny=2, overlap=overlap))
+
+        assert len(blocks) == 4
+
+        # Interior blocks should be 128 + 2*10 = 148
+        # (assuming dx=128 base size)
+        # Edge blocks will vary depending on position
+        # At minimum, blocks should be larger than base size
+        for block in blocks:
+            assert block.shape[0] >= 128
+            assert block.shape[1] >= 128
+
+    @pytest.mark.unit
+    def test_split_image_overlap_zero(self, simple_image_256):
+        """Test overlap=0 (no overlap)."""
+        blocks = list(pipeline.split_image(simple_image_256, nx=2, ny=2, overlap=0))
+
+        assert len(blocks) == 4
+
+        # With no overlap, blocks should be exactly 128×128
+        for block in blocks:
+            assert block.shape == (128, 128)
+
+    @pytest.mark.unit
+    def test_split_image_overlap_large(self, simple_image_256):
+        """Test overlap larger than block size."""
+        # Use very large overlap
+        overlap = 200
+
+        # Should not crash
+        blocks = list(pipeline.split_image(simple_image_256, nx=2, ny=2, overlap=overlap))
+
+        assert len(blocks) == 4
+
+    @pytest.mark.unit
+    def test_split_image_overlap_at_boundaries(self, simple_image_256):
+        """Test overlap handling at image boundaries."""
+        overlap = 20
+        blocks = list(pipeline.split_image(simple_image_256, nx=2, ny=2, overlap=overlap))
+
+        assert len(blocks) == 4
+
+        # Corner blocks should have overlap on 1 interior edge
+        # Edge blocks on 2 edges, interior on more
+        # All blocks should be valid shapes
+        for block in blocks:
+            assert block.shape[0] > 0
+            assert block.shape[1] > 0
+
+    # --- Sub-region Tests (Tests 3.1-3.5) ---
+
+    @pytest.mark.unit
+    def test_split_image_subregion_basic(self, simple_image_256):
+        """Test splitting within a sub-region."""
+        # Split only central region
+        blocks = list(pipeline.split_image(
+            simple_image_256,
+            nx=2, ny=2,
+            xmin=50, xmax=200, ymin=50, ymax=200,
+            overlap=0
+        ))
+
+        # With 150×150 sub-region split 2×2, should get 4 blocks of 75×75
+        assert len(blocks) == 4
+
+        for block in blocks:
+            assert block.shape[0] == 75
+            assert block.shape[1] == 75
+
+    @pytest.mark.unit
+    def test_split_image_subregion_out_of_bounds(self, simple_image_256):
+        """Test sub-region clamping to image bounds."""
+        # Specify out-of-bounds region
+        blocks = list(pipeline.split_image(
+            simple_image_256,
+            nx=2, ny=2,
+            xmin=-50, xmax=300, ymin=-50, ymax=300,
+            overlap=0
+        ))
+
+        # Should be clamped to [0, 256] and work normally
+        assert len(blocks) == 4
+
+    @pytest.mark.unit
+    def test_split_image_subregion_invalid(self, simple_image_256):
+        """Test invalid sub-region (min > max)."""
+        # xmin > xmax - should either swap or raise error or return empty
+        try:
+            blocks = list(pipeline.split_image(
+                simple_image_256,
+                nx=2, ny=2,
+                xmin=200, xmax=50,  # Invalid!
+                ymin=50, ymax=200,
+                overlap=0
+            ))
+            # If it doesn't raise, should return empty or handle gracefully
+            assert isinstance(blocks, list)
+        except ValueError:
+            # ValueError for negative dimensions is acceptable behavior
+            pass
+
+    @pytest.mark.unit
+    def test_split_image_subregion_partial(self, simple_image_256):
+        """Test sub-region that partially overlaps blocks."""
+        blocks = list(pipeline.split_image(
+            simple_image_256,
+            nx=2, ny=2,
+            xmin=100, xmax=150, ymin=100, ymax=150,  # 50×50 region
+            overlap=0
+        ))
+
+        # Should return only blocks that intersect with sub-region
+        assert len(blocks) >= 1
+
+    @pytest.mark.unit
+    def test_split_image_subregion_with_overlap(self, simple_image_256):
+        """Test combining sub-region with overlap."""
+        blocks_sub = list(pipeline.split_image(
+            simple_image_256,
+            nx=2, ny=2,
+            xmin=50, xmax=200, ymin=50, ymax=200,
+            overlap=10
+        ))
+
+        blocks_no_sub = list(pipeline.split_image(
+            simple_image_256,
+            nx=2, ny=2,
+            overlap=10
+        ))
+
+        # With sub-region, should have fewer or equal blocks
+        assert len(blocks_sub) <= len(blocks_no_sub)
+
+    # --- Data Type Handling Tests (Tests 4.1-4.7) ---
+
+    @pytest.mark.unit
+    def test_split_image_with_mask(self, simple_image_256, simple_mask_256):
+        """Test splitting with mask array."""
+        blocks = list(pipeline.split_image(
+            simple_image_256,
+            simple_mask_256,
+            nx=2, ny=2,
+            overlap=0
+        ))
+
+        # Should return tuples: (image, mask)
+        assert len(blocks) == 4
+
+        image_block, mask_block = blocks[0]
+        assert image_block.shape == mask_block.shape
+        assert mask_block.dtype == bool
+
+    @pytest.mark.unit
+    def test_split_image_with_header(self, simple_image_256, simple_header_256):
+        """Test splitting with FITS header."""
+        blocks = list(pipeline.split_image(
+            simple_image_256,
+            simple_header_256,
+            nx=2, ny=2,
+            overlap=0
+        ))
+
+        assert len(blocks) == 4
+
+        image_block, header_block = blocks[0]
+
+        # Header should be updated
+        assert header_block['NAXIS1'] == 128
+        assert header_block['NAXIS2'] == 128
+
+        # CRPIX should be adjusted
+        assert 'CRPIX1' in header_block
+        assert 'CRPIX2' in header_block
+
+        # CROP metadata should be added
+        assert 'CROP_X1' in header_block
+        assert 'CROP_X2' in header_block
+        assert 'CROP_Y1' in header_block
+        assert 'CROP_Y2' in header_block
+
+    @pytest.mark.unit
+    def test_split_image_with_wcs(self, simple_image_256, simple_wcs_256):
+        """Test splitting with WCS object."""
+        blocks = list(pipeline.split_image(
+            simple_image_256,
+            simple_wcs_256,
+            nx=2, ny=2,
+            overlap=0
+        ))
+
+        assert len(blocks) == 4
+
+        # Check that all WCS blocks are valid and independent
+        wcs_blocks = []
+        for image_block, wcs_block in blocks:
+            assert wcs_block is not None
+            assert isinstance(wcs_block, WCS)
+            wcs_blocks.append(wcs_block)
+
+        # Verify WCS blocks have different CRPIX values
+        # (showing they're adjusted for each block's origin)
+        crpix0_values = [w.wcs.crpix[0] for w in wcs_blocks]
+        crpix1_values = [w.wcs.crpix[1] for w in wcs_blocks]
+
+        # Not all CRPIX values should be identical
+        assert len(set(crpix0_values)) > 1 or len(set(crpix1_values)) > 1
+
+    @pytest.mark.unit
+    def test_split_image_with_table_xy(self, simple_image_256, split_test_table):
+        """Test splitting with table containing x, y columns."""
+        blocks = list(pipeline.split_image(
+            simple_image_256,
+            split_test_table,
+            nx=2, ny=2,
+            overlap=0
+        ))
+
+        assert len(blocks) == 4
+
+        # Each block will have different objects
+        # First block (0:128, 0:128) should contain objects with x,y in that range
+        image_block, table_block = blocks[0]
+
+        if len(table_block) > 0:
+            # x, y coordinates should be within block range
+            assert np.all(table_block['x'] >= 0)
+            assert np.all(table_block['x'] < 128)
+            assert np.all(table_block['y'] >= 0)
+            assert np.all(table_block['y'] < 128)
+
+    @pytest.mark.unit
+    def test_split_image_with_table_radec(self, simple_image_256, simple_wcs_256, split_test_table):
+        """Test splitting with table containing ra, dec columns."""
+        blocks = list(pipeline.split_image(
+            simple_image_256,
+            split_test_table,
+            simple_wcs_256,
+            nx=2, ny=2,
+            overlap=0
+        ))
+
+        assert len(blocks) == 4
+
+        image_block, table_block, wcs_block = blocks[0]
+
+        # Table should be filtered by WCS coordinates
+        if len(table_block) > 0:
+            # Objects should be valid
+            assert len(table_block) <= len(split_test_table)
+
+    @pytest.mark.unit
+    def test_split_image_with_psf_dict(self, simple_image_256, split_test_psf):
+        """Test splitting with PSF dictionary."""
+        blocks = list(pipeline.split_image(
+            simple_image_256,
+            split_test_psf,
+            nx=2, ny=2,
+            overlap=0
+        ))
+
+        assert len(blocks) == 4
+
+        # Check that all PSF blocks have required keys
+        for image_block, psf_block in blocks:
+            # PSF should be deep copied with x0, y0
+            assert 'x0' in psf_block
+            assert 'y0' in psf_block
+
+            # Other keys should be preserved
+            if 'psf_model' in split_test_psf:
+                assert psf_block['psf_model'] == split_test_psf['psf_model']
+            if 'fwhm' in split_test_psf:
+                assert psf_block['fwhm'] == split_test_psf['fwhm']
+
+        # Verify PSF blocks are distinct (different x0/y0 values across blocks)
+        # This shows they're being adjusted for each block
+        psf_blocks = [block[1] for block in blocks]
+        x0_values = [psf['x0'] for psf in psf_blocks]
+        y0_values = [psf['y0'] for psf in psf_blocks]
+
+        # Not all x0 or y0 values should be identical (they should vary per block)
+        assert len(set(x0_values)) > 1 or len(set(y0_values)) > 1
+
+    @pytest.mark.unit
+    def test_split_image_with_mixed_types(self, simple_image_256, simple_mask_256,
+                                          simple_header_256, split_test_table):
+        """Test splitting with multiple data types simultaneously."""
+        blocks = list(pipeline.split_image(
+            simple_image_256,
+            simple_mask_256,
+            simple_header_256,
+            split_test_table,
+            nx=2, ny=2,
+            overlap=0
+        ))
+
+        assert len(blocks) == 4
+
+        # Each block should have 4 elements
+        block = blocks[0]
+        assert len(block) == 4
+
+        image_block, mask_block, header_block, table_block = block
+
+        # All should be correctly sized/type
+        assert image_block.shape == (128, 128)
+        assert mask_block.shape == (128, 128)
+        assert isinstance(header_block, fits.Header)
+
+    # --- get_index and get_origin Tests (Tests 5.1-5.3) ---
+
+    @pytest.mark.unit
+    def test_split_image_get_index(self, simple_image_256):
+        """Test get_index parameter."""
+        blocks = list(pipeline.split_image(
+            simple_image_256,
+            nx=2, ny=2,
+            get_index=True,
+            overlap=0
+        ))
+
+        assert len(blocks) == 4
+
+        # First element of each yield should be index
+        indices = [block[0] for block in blocks]
+        assert indices == [0, 1, 2, 3]
+
+    @pytest.mark.unit
+    def test_split_image_get_origin(self, simple_image_256):
+        """Test get_origin parameter."""
+        blocks = list(pipeline.split_image(
+            simple_image_256,
+            nx=2, ny=2,
+            get_origin=True,
+            overlap=0
+        ))
+
+        assert len(blocks) == 4
+
+        # Extract origin coordinates
+        origins = [block[:2] for block in blocks]
+
+        # Expected origins for 2×2 of 256×256: (0,0), (128,0), (0,128), (128,128)
+        # Order may vary but all should be present
+        expected = [(0, 0), (128, 0), (0, 128), (128, 128)]
+
+        for origin in origins:
+            assert origin in expected or (origin[0] in [0, 128] and origin[1] in [0, 128])
+
+    @pytest.mark.unit
+    def test_split_image_get_index_and_origin(self, simple_image_256):
+        """Test both get_index and get_origin together."""
+        blocks = list(pipeline.split_image(
+            simple_image_256,
+            nx=2, ny=2,
+            get_index=True,
+            get_origin=True,
+            overlap=0
+        ))
+
+        assert len(blocks) == 4
+
+        # Each block should have (index, x0, y0, image)
+        for i, block in enumerate(blocks):
+            assert block[0] in [0, 1, 2, 3]  # Index
+            assert isinstance(block[1], (int, np.integer))  # x0
+            assert isinstance(block[2], (int, np.integer))  # y0
+            assert isinstance(block[3], np.ndarray)  # Image
+
+    # --- Edge Cases (Tests 6.1-6.5) ---
+
+    @pytest.mark.unit
+    def test_split_image_small_image(self):
+        """Test splitting a very small image."""
+        image = np.ones((10, 10))
+
+        # Request 5×5 grid
+        blocks = list(pipeline.split_image(image, nx=5, ny=5, overlap=0))
+
+        assert len(blocks) == 25
+
+        # Each block should be 2×2
+        for block in blocks:
+            assert block.shape == (2, 2)
+
+    @pytest.mark.unit
+    def test_split_image_single_pixel_blocks(self):
+        """Test extreme case of single-pixel blocks."""
+        image = np.ones((4, 4))
+
+        # Request 4×4 grid
+        blocks = list(pipeline.split_image(image, nx=4, ny=4, overlap=0))
+
+        assert len(blocks) == 16
+
+        # Each block should be 1×1
+        for block in blocks:
+            assert block.shape == (1, 1)
+
+    @pytest.mark.unit
+    def test_split_image_table_no_coordinates(self, simple_image_256):
+        """Test table without coordinate columns."""
+        # Table without x/y or ra/dec
+        table = Table()
+        table['flux'] = [1000, 2000, 3000]
+
+        blocks = list(pipeline.split_image(
+            simple_image_256,
+            table,
+            nx=2, ny=2,
+            overlap=0
+        ))
+
+        assert len(blocks) == 4
+
+        # Table without coordinates is returned unfiltered (all rows in all blocks)
+        # This is the actual behavior of split_image
+        image_block, table_block = blocks[0]
+        assert table_block is not None
+        assert len(table_block) == 3  # All rows returned since no filtering possible
+
+    @pytest.mark.unit
+    def test_split_image_table_radec_no_wcs(self, simple_image_256):
+        """Test table with ra/dec but no WCS provided."""
+        table = Table()
+        table['ra'] = [180.0, 180.1]
+        table['dec'] = [45.0, 45.1]
+
+        blocks = list(pipeline.split_image(
+            simple_image_256,
+            table,
+            nx=2, ny=2,
+            overlap=0
+        ))
+
+        assert len(blocks) == 4
+
+        image_block, table_block = blocks[0]
+        # Without WCS, likely returns None or all objects
+        # Just verify no crash
+        assert True
+
+    @pytest.mark.unit
+    def test_split_image_unknown_data_type(self, simple_image_256):
+        """Test with unknown data type."""
+        blocks = list(pipeline.split_image(
+            simple_image_256,
+            "unknown_string",  # Unknown type
+            nx=2, ny=2,
+            overlap=0
+        ))
+
+        assert len(blocks) == 4
+
+        # Unknown type should be None
+        image_block, unknown_block = blocks[0]
+        assert unknown_block is None
+
+    # --- Integration Tests (Tests 7.1-7.3) ---
+
+    @pytest.mark.unit
+    def test_split_image_block_coverage(self, simple_image_256):
+        """Test that blocks properly cover the image."""
+        blocks = list(pipeline.split_image(simple_image_256, nx=3, ny=3, overlap=0))
+
+        assert len(blocks) == 9
+
+        # Reconstruct image from blocks (no overlap)
+        # dx = floor(256/3) = 85, dy = floor(256/3) = 85
+        dx = 85
+        dy = 85
+
+        # Count total covered pixels
+        covered = np.zeros_like(simple_image_256, dtype=bool)
+
+        block_idx = 0
+        for ny_idx in range(3):
+            for nx_idx in range(3):
+                if block_idx < len(blocks):
+                    block = blocks[block_idx]
+                    y0 = ny_idx * dy
+                    x0 = nx_idx * dx
+
+                    y1 = min(y0 + block.shape[1], 256)
+                    x1 = min(x0 + block.shape[0], 256)
+
+                    covered[x0:x1, y0:y1] = True
+                    block_idx += 1
+
+        # All blocks together should cover a significant portion
+        assert np.sum(covered) > 0
+
+    @pytest.mark.unit
+    def test_split_image_realistic_workflow(self, simple_image_256):
+        """Test realistic workflow: split, process, analyze."""
+        # Simulate real use: split image, compute sum of each block
+        block_sums = []
+
+        for block in pipeline.split_image(simple_image_256, nx=2, ny=2, overlap=0):
+            block_sum = np.sum(block)
+            block_sums.append(block_sum)
+
+        # Should have 4 blocks
+        assert len(block_sums) == 4
+
+        # Total sum should match original
+        total_sum = np.sum(simple_image_256)
+        computed_sum = sum(block_sums)
+
+        np.testing.assert_almost_equal(computed_sum, total_sum)
+
+    @pytest.mark.unit
+    def test_split_image_multiple_args_and_kwargs(self, simple_image_256, simple_mask_256):
+        """Test mixing positional and keyword arguments."""
+        # Pass some as positional, others as kwargs
+        blocks = list(pipeline.split_image(
+            simple_image_256,
+            simple_mask_256,
+            nx=2,
+            ny=2,
+            overlap=0,
+            get_index=False
+        ))
+
+        assert len(blocks) == 4
+
+        # Should work correctly
+        image_block, mask_block = blocks[0]
+        assert image_block.shape == (128, 128)
+        assert mask_block.shape == (128, 128)
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

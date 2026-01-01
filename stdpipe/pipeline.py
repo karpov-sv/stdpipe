@@ -916,22 +916,22 @@ def split_image(
     if xmin is None:
         xmin = 0
     else:
-        xmin = max(0, xmin)
+        xmin = int(max(0, xmin))
 
     if xmax is None:
         xmax = image.shape[1]
     else:
-        xmax = min(image.shape[1], xmax)
+        xmax = int(min(image.shape[1], xmax))
 
     if ymin is None:
         ymin = 0
     else:
-        ymin = max(0, ymin)
+        ymin = int(max(0, ymin))
 
     if ymax is None:
         ymax = image.shape[0]
     else:
-        ymax = min(image.shape[0], ymax)
+        ymax = int(min(image.shape[0], ymax))
 
     width = xmax - xmin
     height = ymax - ymin
