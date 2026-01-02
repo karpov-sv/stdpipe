@@ -2,6 +2,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
+from matplotlib import rcParams
 
 from astropy.stats import mad_std
 from astropy.visualization import simple_norm, ImageNormalize
@@ -204,15 +205,16 @@ def imshow(
 
     # CRITICAL: Preserve coordinate system (including region offset)
     if 'extent' not in kwargs:
-        x0_extent = region_offset[0]
-        y0_extent = region_offset[1]
+        x0_extent = region_offset[0] - 0.5
+        y0_extent = region_offset[1] - 0.5
         x1_extent = x0_extent + region_shape[1]
         y1_extent = y0_extent + region_shape[0]
 
         # extent = [left, right, bottom, top]
         # For origin='upper' (default): y increases downward, so bottom=y1, top=y0
         # For origin='lower': y increases upward, so bottom=y0, top=y1
-        if kwargs.get('origin', 'upper') == 'lower':
+        origin = kwargs.get('origin', rcParams.get('image.origin', 'upper'))
+        if origin == 'lower':
             kwargs['extent'] = [x0_extent, x1_extent, y0_extent, y1_extent]
         else:
             kwargs['extent'] = [x0_extent, x1_extent, y1_extent, y0_extent]
