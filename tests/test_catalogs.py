@@ -196,7 +196,7 @@ class TestCatalogAugmentation:
     def test_detect_catalog_type_gaiadr3syn(self):
         """Test auto-detection of Gaia DR3 Synthetic catalogs."""
         cat = Table()
-        cat['Fuv'] = [1e-10]
+        cat['Fu'] = [1e-10]
         cat['Fg'] = [1e-9]
         cat['Fr'] = [1e-9]
         cat['Fi'] = [1e-9]
