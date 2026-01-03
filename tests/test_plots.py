@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import rc_context
+import pytest
 
 from astropy.visualization import ImageNormalize
 from astropy.visualization.stretch import HistEqStretch
@@ -197,3 +198,34 @@ def test_imshow_matches_matplotlib_extent_lower_origin():
             assert std_img.get_extent() == mpl_extent
         finally:
             plt.close(fig)
+
+
+def test_adaptive_binned_map_raises_on_no_finite_points():
+    x = np.array([np.nan, np.inf])
+    y = np.array([0.0, 1.0])
+    value = np.array([np.nan, np.inf])
+
+    with pytest.raises(ValueError, match="No finite data points"):
+        plots.adaptive_binned_map(x, y, value)
+
+
+def test_adaptive_binned_map_handles_target_sn_with_zero_err():
+    x = np.array([0.0, 1.0, 2.0, 3.0])
+    y = np.array([0.0, 1.0, 2.0, 3.0])
+    value = np.array([1.0, 2.0, 3.0, 4.0])
+    err = np.zeros_like(value)
+
+    fig, ax = plt.subplots()
+    try:
+        plots.adaptive_binned_map(
+            x,
+            y,
+            value,
+            target_sn=5,
+            err=err,
+            show_colorbar=False,
+            show_axis=False,
+            ax=ax,
+        )
+    finally:
+        plt.close(fig)

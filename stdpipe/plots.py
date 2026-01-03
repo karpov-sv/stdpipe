@@ -1,8 +1,8 @@
-
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Circle
 from matplotlib import rcParams
+import builtins
 
 from astropy.stats import mad_std
 from astropy.visualization import simple_norm, ImageNormalize
@@ -385,7 +385,7 @@ def _kdtree_adaptive_bins(x, y, target_count, data_range=None):
     return bins
 
 
-def _powerbin_adaptive_bins(x, y, target_count, data_range=None):
+def _powerbin_adaptive_bins(x, y, target_count, data_range=None, verbose=False):
     """
     Create adaptive bins using PowerBin's centroidal power diagrams.
 
@@ -397,6 +397,8 @@ def _powerbin_adaptive_bins(x, y, target_count, data_range=None):
         Target number of points per bin
     data_range : list, optional
         [[xmin, xmax], [ymin, ymax]] range for binning
+    verbose : bool, optional
+        Whether to enable PowerBin verbose output
 
     Returns
     -------
@@ -440,9 +442,9 @@ def _powerbin_adaptive_bins(x, y, target_count, data_range=None):
             xy,
             capacity_spec=capacity,
             target_capacity=target_count,
-            verbose=1, maxiter=500
+            verbose=1 if verbose else 0,
+            maxiter=500,
         )
-        print(pb.bin_capacity)
     except (IndexError, ValueError) as e:
         raise RuntimeError(
             f"PowerBin failed (may not work with scattered point data): {e}"
@@ -478,6 +480,7 @@ def adaptive_binned_map(
     show_edges=True,
     ax=None,
     range=None,
+    verbose=False,
     **kwargs,
 ):
     """Plots statistical estimators with adaptive binning based on data density.
@@ -502,6 +505,7 @@ def adaptive_binned_map(
     :param show_edges: Whether to show bin boundaries
     :param ax: Matplotlib axes object
     :param range: Data range as [[xmin, xmax], [ymin, ymax]]
+    :param verbose: Enable verbose output from adaptive binning backends
     :param \\**kwargs: Additional arguments passed to matplotlib
     :returns: None
 
@@ -513,6 +517,30 @@ def adaptive_binned_map(
     if ax is None:
         ax = plt.gca()
 
+    # Filter non-finite data early
+    finite_mask = np.isfinite(x) & np.isfinite(y) & np.isfinite(value)
+    if err is not None:
+        err = np.asarray(err)
+        finite_mask &= np.isfinite(err)
+    x = x[finite_mask]
+    y = y[finite_mask]
+    value = value[finite_mask]
+    if err is not None:
+        err = err[finite_mask]
+
+    if range is not None:
+        xmin, xmax = range[0]
+        ymin, ymax = range[1]
+        range_mask = (x >= xmin) & (x <= xmax) & (y >= ymin) & (y <= ymax)
+        x = x[range_mask]
+        y = y[range_mask]
+        value = value[range_mask]
+        if err is not None:
+            err = err[range_mask]
+
+    if len(x) == 0:
+        raise ValueError("No finite data points within the specified range.")
+
     # Determine method
     if method == 'auto':
         method = 'powerbin' if HAS_POWERBIN else 'kdtree'
@@ -521,10 +549,13 @@ def adaptive_binned_map(
     if target_sn is not None:
         if err is None:
             raise ValueError("noise parameter required when using target_sn")
-        err = np.asarray(err)
         # For S/N targeting, estimate how many points needed
         # S/N ~ sqrt(N) * mean_signal / mean_noise for Poisson
-        mean_sn = np.nanmean(np.abs(value) / err)
+        valid_sn = err > 0
+        if np.any(valid_sn):
+            mean_sn = np.nanmean(np.abs(value[valid_sn]) / err[valid_sn])
+        else:
+            mean_sn = np.nan
         if mean_sn > 0:
             target_count = max(3, int((target_sn / mean_sn) ** 2))
         else:
@@ -546,6 +577,16 @@ def adaptive_binned_map(
 
     # Compute adaptive bins
     powerbin_success = False
+    if range is None:
+        xmin, xmax = np.min(x), np.max(x)
+        ymin, ymax = np.min(y), np.max(y)
+    else:
+        xmin, xmax = range[0]
+        ymin, ymax = range[1]
+
+    if xmin == xmax or ymin == ymax:
+        method = 'kdtree'
+
     if method == 'powerbin':
         if not HAS_POWERBIN:
             raise ImportError(
@@ -553,7 +594,9 @@ def adaptive_binned_map(
             )
 
         try:
-            bin_numbers, centroids = _powerbin_adaptive_bins(x, y, target_count, range)
+            bin_numbers, centroids = _powerbin_adaptive_bins(
+                x, y, target_count, range, verbose=verbose
+            )
             powerbin_success = True
         except RuntimeError:
             # PowerBin failed (common with scattered point data), fall back to kdtree
@@ -561,23 +604,15 @@ def adaptive_binned_map(
 
         if powerbin_success:
             # Compute statistic per bin
-            unique_bins = np.unique(bin_numbers[bin_numbers >= 0])
-            bin_values = []
-            for b in unique_bins:
+            bin_values = np.full(len(centroids), np.nan)
+            for b in builtins.range(len(centroids)):
                 mask = bin_numbers == b
-                bin_values.append(stat_func(value[mask]))
-            bin_values = np.array(bin_values)
+                if np.any(mask):
+                    bin_values[b] = stat_func(value[mask])
 
             # Create Voronoi diagram for visualization
             if len(centroids) >= 4:
                 # Add corner points to bound the Voronoi diagram
-                if range is not None:
-                    xmin, xmax = range[0]
-                    ymin, ymax = range[1]
-                else:
-                    xmin, xmax = np.min(x), np.max(x)
-                    ymin, ymax = np.min(y), np.max(y)
-
                 # Pad to ensure all regions are finite
                 pad_x = (xmax - xmin) * 0.1
                 pad_y = (ymax - ymin) * 0.1
@@ -593,7 +628,7 @@ def adaptive_binned_map(
                 # Compute vmin/vmax
                 finite_vals = bin_values[np.isfinite(bin_values)]
                 if len(finite_vals) > 0:
-                    vmin1, vmax1 = np.percentile(finite_vals, qq)
+                    vmin1, vmax1 = np.nanpercentile(finite_vals, qq)
                 else:
                     vmin1, vmax1 = 0, 1
 
@@ -614,7 +649,7 @@ def adaptive_binned_map(
 
                 polygons = []
                 colors = []
-                for i, (b, val) in enumerate(zip(unique_bins, bin_values)):
+                for i, val in enumerate(bin_values):
                     region_idx = vor.point_region[i]
                     region = vor.regions[region_idx]
                     if -1 not in region and len(region) > 0:
@@ -658,7 +693,7 @@ def adaptive_binned_map(
         # Compute vmin/vmax
         finite_vals = bin_values[np.isfinite(bin_values)]
         if len(finite_vals) > 0:
-            vmin1, vmax1 = np.percentile(finite_vals, qq)
+            vmin1, vmax1 = np.nanpercentile(finite_vals, qq)
         else:
             vmin1, vmax1 = 0, 1
 
@@ -699,12 +734,8 @@ def adaptive_binned_map(
         ax.add_collection(pc)
 
         # Set axis limits
-        if range is not None:
-            ax.set_xlim(range[0])
-            ax.set_ylim(range[1])
-        else:
-            ax.set_xlim(np.min(x), np.max(x))
-            ax.set_ylim(np.min(y), np.max(y))
+        ax.set_xlim(xmin, xmax)
+        ax.set_ylim(ymin, ymax)
 
         if show_colorbar:
             sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
