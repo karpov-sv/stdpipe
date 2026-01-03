@@ -51,6 +51,7 @@ Data processing
    transients
    cutouts
    psf
+   lcs
    utils
 
 
