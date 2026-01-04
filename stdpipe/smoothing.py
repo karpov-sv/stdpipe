@@ -43,7 +43,7 @@ class ApproxLoessRegressor:
     min_bandwidth: float = 1e-6
     ridge: float = 1e-10  # tiny Tikhonov for numerical stability
     leaf_size: int = 40
-    n_jobs: int = -1
+    n_jobs: int = None
 
     def fit(self, X: np.ndarray, y: np.ndarray, sample_weight: np.ndarray | None = None):
         """
