@@ -1332,3 +1332,171 @@ def figure_saver(filename=None, show=False, tight_layout=True, **kwargs):
                 display(fig)
             except:
                 pass
+
+
+def plot_outline(x, y, *args, ax=None, **kwargs):
+    """
+    Plot the convex hull outline of (x, y) points.
+
+    Parameters
+    ----------
+    x, y : array-like
+        Coordinates of points to outline.
+    *args, **kwargs :
+        Passed through to `matplotlib.axes.Axes.plot` for line styling.
+    ax : matplotlib.axes.Axes or None
+        Target axes; defaults to current axes when None.
+
+    Notes
+    -----
+    - Uses `scipy.spatial.ConvexHull` to compute the outline.
+    - Requires at least 3 non-collinear points; otherwise ConvexHull may fail.
+    - If you pass masked arrays or NaNs, pre-filter to finite values to avoid
+      distorting the hull.
+    """
+    from scipy.spatial import ConvexHull
+
+    points = np.column_stack((np.array(x), np.array(y)))
+    if points.shape[0] < 3:
+        return
+
+    hull = ConvexHull(points)
+
+    if ax is None:
+        ax = plt.gca()
+
+    kw = kwargs.copy()
+
+    for simplex in hull.simplices:
+        ax.plot(points[simplex, 0], points[simplex, 1], *args, **kw)
+        if 'label' in kw:
+            kw.pop('label')
+
+
+def cornerplot(
+    features,
+    scales=None,
+    lines=None,
+    subsets=None,
+    show_all=True,
+    extra=None,
+    fig=None,
+    **kwargs
+):
+    """
+    Plot pairwise feature scatter panels in an upper-left triangular corner layout.
+
+    Parameters
+    ----------
+    features : list[tuple[array-like, str]]
+        List of (values, label) pairs. Each values array is 1D and aligned.
+    scales : list[str] or None
+        Per-feature axis scale (e.g., 'linear', 'log'); length must match features.
+    lines : list[float] or None
+        Per-feature reference line positions; length must match features.
+    subsets : list[dict] or None
+        Optional subsets to overlay. Each dict must include an 'idx' boolean mask,
+        plus any matplotlib style kwargs (e.g., label, color, marker).
+    extra : callable or None
+        If set, this callable will be called for every panel, with axes instance
+        and two features (for x and y axes) as arguments
+    show_all : bool
+        If True, plot the full dataset in each panel excluding subset masks.
+    fig : matplotlib.figure.Figure or None
+        Figure to plot into; a new figure is created when None.
+    **kwargs :
+        Additional matplotlib plot kwargs for the main dataset and subsets.
+
+    Notes
+    -----
+    - Only off-diagonal panels are drawn, resulting in a (N-1)x(N-1) grid.
+    - Subsets are excluded from the "all data" layer when `show_all=True`.
+    """
+
+    if fig is None:
+        fig = plt.figure()
+
+    N = len(features)
+
+    assert(scales is None or len(scales) == len(features))
+    assert(lines is None or len(lines) == len(features))
+
+    if subsets is None:
+        subsets = []
+
+    # Reasonable defaults
+    kwargs = kwargs.copy()
+    # Plot with markers without lines
+    kwargs.setdefault('ls', 'none')
+    kwargs.setdefault('marker', '.')
+
+    i = 0
+    for iy in range(1, N):
+        j = 0
+        for ix in range(0, N):
+            if ix == iy:
+                continue
+
+            i += 1
+            j += 1
+
+            if j > (N - iy):
+                continue
+
+            col_x,col_y = features[ix], features[iy]
+
+            ax = fig.add_subplot(N - 1, N - 1, i)
+            ax.grid(alpha=0.2)
+
+            if ix == 0:
+                ax.set_ylabel(col_y[1])#, rotation=105, labelpad=20)
+            if iy == N - 1 or ix > iy:
+                ax.set_xlabel(col_x[1])#, rotation=15)
+
+            # Main plotting
+
+            if show_all:
+                idx0 = np.isfinite(col_x[0]) & np.isfinite(col_y[0])
+                # Exclude user defined subsets
+                for sub in subsets:
+                    idx0 &= ~sub['idx']
+
+                ax.plot(col_x[0][idx0], col_y[0][idx0], **kwargs)
+
+            for sub in subsets:
+                sub = sub.copy()
+                idx = sub.pop('idx')
+
+                kw = kwargs.copy()
+                kw.update(sub)
+
+                ax.plot(
+                    col_x[0][idx], col_y[0][idx],
+                    **kw,
+                )
+
+            if callable(extra):
+                extra(ax, col_x, col_y)
+
+            if scales is not None:
+                ax.set_xscale(scales[ix])
+                ax.set_yscale(scales[iy])
+
+            if lines is not None:
+                if lines[ix] is not None:
+                    ax.axvline(lines[ix], ls='--', color='gray')
+                if lines[iy] is not None:
+                    ax.axhline(lines[iy], ls='--', color='gray')
+
+            if ix > 0:
+                ax.set_yticklabels([])
+            if iy < N - 1 and ix <= iy:
+                ax.set_xticklabels([])
+
+            if len(subsets):
+                legend = ax.legend()
+
+                for _ in legend.legend_handles:
+                    _.set_alpha(1)
+
+    fig.subplots_adjust(wspace=0.05, hspace=0.05)
