@@ -70,8 +70,8 @@ def imshow(
     :param ax: Matplotlib Axes object to be used for plotting, optional
     :param max_plot_size: Maximum image dimension for display. Images larger than this will be downscaled for faster rendering while preserving coordinate system. Set to None to disable. Default: 4096
     :param fast: Use faster approximate methods for large images (default: True). When enabled, uses subsampling for percentile calculation, float32 precision, FFT convolution, and optimized finite checks.
-    :param xlim: Tuple (xmin, xmax) to select x region in original image coordinates. Region is extracted before downscaling to preserve quality.
-    :param ylim: Tuple (ymin, ymax) to select y region in original image coordinates. Region is extracted before downscaling to preserve quality.
+    :param xlim: Tuple (xmin, xmax) to select x region in original image coordinates (pixel centers, inclusive). Region is extracted before downscaling to preserve quality.
+    :param ylim: Tuple (ymin, ymax) to select y region in original image coordinates (pixel centers, inclusive). Region is extracted before downscaling to preserve quality.
     :param \\**kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.imshow`
 
     """
@@ -83,10 +83,10 @@ def imshow(
 
     # STEP 0: Region selection (FIRST, before any processing)
     if xlim is not None or ylim is not None:
-        x0 = int(xlim[0]) if xlim is not None else 0
-        x1 = int(xlim[1]) if xlim is not None else orig_shape[1]
-        y0 = int(ylim[0]) if ylim is not None else 0
-        y1 = int(ylim[1]) if ylim is not None else orig_shape[0]
+        x0 = int(np.floor(xlim[0])) if xlim is not None else 0
+        x1 = int(np.ceil(xlim[1])) + 1 if xlim is not None else orig_shape[1]
+        y0 = int(np.floor(ylim[0])) if ylim is not None else 0
+        y1 = int(np.ceil(ylim[1])) + 1 if ylim is not None else orig_shape[0]
 
         # Clip to image bounds
         x0 = max(0, min(x0, orig_shape[1]))

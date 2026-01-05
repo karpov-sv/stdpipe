@@ -43,7 +43,7 @@ def test_imshow_respects_xlim_ylim_extent():
         img = plots.imshow(
             image, show_colorbar=False, show_axis=False, ax=ax, xlim=(2, 5), ylim=(3, 7)
         )
-        assert img.get_extent() == [1.5, 4.5, 6.5, 2.5]
+        assert img.get_extent() == [1.5, 5.5, 7.5, 2.5]
     finally:
         plt.close(fig)
 
