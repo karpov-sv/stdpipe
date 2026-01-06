@@ -228,14 +228,16 @@ def match(
     else:
         log('Using weighted fitting')
 
+    fit_color_term = use_color and force_color_term is None
+
     if cat_color is not None:
         ccolor = np.ma.filled(cat_color[cidx], fill_value=np.nan)
-        if use_color:
+        if fit_color_term:
             pos_color = len(X)
-            for _ in range(int(use_color)):
+            for _ in range(int(fit_color_term)):
                 X += make_series(ccolor**(_ + 1), x, y, order=0)
 
-            log('Using color term of order', int(use_color))
+            log('Using color term of order', int(fit_color_term))
         elif force_color_term is not None:
             for i,val in enumerate(np.atleast_1d(force_color_term)):
                 cmag -= val * ccolor**(i + 1)
@@ -257,7 +259,7 @@ def match(
         & np.isfinite(cmag_err)
         & ((oflags & ~accept_flags) == 0)
     )  # initial mask
-    if cat_color is not None and use_color:
+    if cat_color is not None and (fit_color_term or force_color_term is not None):
         idx0 &= np.isfinite(ccolor)
     if cat_saturation is not None:
         idx0 &= cmag >= cat_saturation
@@ -338,15 +340,17 @@ def match(
 
     # Export the model
     def zero_fn(xx, yy, mag=None, get_err=False, add_intrinsic_rms=False):
+        if mag is not None:
+            mag = np.atleast_1d(np.ma.filled(mag, np.nan))
+
         if xx is not None and yy is not None:
             x, y = xx - x0, yy - y0
         else:
-            x, y = np.zeros_like(omag), np.zeros_like(omag)
+            n = len(mag) if mag is not None else 1
+            x, y = np.zeros(n), np.zeros(n)
 
         # Ensure we do not have MaskedColumns
-        x, y = [np.ma.filled(_, fill_value=np.nan) for _ in (x, y)]
-        if mag is not None:
-            mag = np.ma.filled(mag, np.nan)
+        x, y = [np.atleast_1d(np.ma.filled(_, fill_value=np.nan)) for _ in (x, y)]
 
         X = make_series(1.0, x, y, order=spatial_order)
 
@@ -369,13 +373,14 @@ def match(
                 err = np.zeros_like(x)
             if add_intrinsic_rms:
                 err = np.hypot(err, intrinsic_rms)
-            return err
+            return err[0] if err.size == 1 else err
         else:
-            return np.sum(X * C.params[0 : X.shape[1]], axis=1)
+            result = np.sum(X * C.params[0 : X.shape[1]], axis=1)
+            return result[0] if result.size == 1 else result
 
-    if cat_color is not None and (use_color or force_color_term is not None):
-        if use_color:
-            color_term = list(C.params[pos_color:][:int(use_color)])
+    if cat_color is not None and (fit_color_term or force_color_term is not None):
+        if fit_color_term:
+            color_term = list(C.params[pos_color:][:int(fit_color_term)])
             if len(color_term) == 1:
                 color_term = color_term[0]
 
@@ -422,9 +427,12 @@ def make_sn_model(mag, sn):
     :param sn: Array of S/N values corresponding to them
     :returns: The function that accepts the array of magnitudes and returns the S/N model values for them
     """
-    idx = np.isfinite(mag) & np.isfinite(sn)
+    idx = np.isfinite(mag) & np.isfinite(sn) & (sn > 0)
     mag = mag[idx]
     sn = sn[idx]
+
+    if mag.size == 0:
+        raise ValueError('No finite positive S/N values to build the model')
 
     def sn_fn(p, mag):
         return 1 / np.sqrt(p[0] * 10 ** (0.8 * mag) + p[1] * 10 ** (0.4 * mag))
@@ -465,9 +473,24 @@ def get_detection_limit_sn(mag, mag_sn, sn=5, get_model=False, verbose=True):
         else lambda *args, **kwargs: None
     )
 
+    mag = np.asarray(mag)
+    mag_sn = np.asarray(mag_sn)
+
+    idx = np.isfinite(mag) & np.isfinite(mag_sn) & (mag_sn > 0)
+    mag = mag[idx]
+    mag_sn = mag_sn[idx]
+
+    if mag.size == 0:
+        log('No valid magnitudes/SN values for detection limit estimation')
+        return (None, None) if get_model else None
+
     mag0 = None
 
-    sn_model = make_sn_model(mag, mag_sn)
+    try:
+        sn_model = make_sn_model(mag, mag_sn)
+    except ValueError:
+        log('Cannot build S/N model function')
+        return (None, None) if get_model else None
     res = root_scalar(
         lambda x: np.log10(sn_model(x)) - np.log10(sn),
         x0=np.nanmax(mag),
