@@ -11,6 +11,105 @@ from astropy.table import Table
 from stdpipe import photometry_measure
 
 
+def _simulate_random_field(
+    rng,
+    *,
+    size,
+    fwhm,
+    n_sources,
+    margin,
+    min_sep,
+    noise_std,
+    aper,
+    mask_fraction=0.0,
+):
+    sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+
+    xs = []
+    ys = []
+    attempts = 0
+    while len(xs) < n_sources and attempts < 10000:
+        attempts += 1
+        x = rng.randint(margin, size - margin)
+        y = rng.randint(margin, size - margin)
+        if xs:
+            dist2 = (np.array(xs) - x)**2 + (np.array(ys) - y)**2
+            if np.any(dist2 < min_sep**2):
+                continue
+        xs.append(int(x))
+        ys.append(int(y))
+    assert len(xs) == n_sources
+
+    fluxes = rng.uniform(1000.0, 5000.0, size=n_sources)
+    amplitudes = fluxes / (2 * np.pi * sigma**2)
+    yy, xx = np.mgrid[:size, :size]
+    image = rng.normal(0.0, noise_std, (size, size))
+    for x, y, amp in zip(xs, ys, amplitudes):
+        image += amp * np.exp(
+            -((xx - x)**2 + (yy - y)**2) / (2 * sigma**2)
+        )
+
+    obj = Table()
+    obj['x'] = np.array(xs, dtype=float)
+    obj['y'] = np.array(ys, dtype=float)
+    obj['flux'] = fluxes
+    obj['fluxerr'] = np.full(n_sources, noise_std)
+
+    bg = np.zeros_like(image)
+    err = np.full_like(image, noise_std)
+    mask = None
+    if mask_fraction:
+        mask = rng.rand(size, size) < mask_fraction
+
+    result_aper = photometry_measure.measure_objects(
+        obj.copy(),
+        image,
+        aper=aper,
+        fwhm=fwhm,
+        optimal=False,
+        mask=mask,
+        bg=bg,
+        err=err,
+        verbose=False,
+    )
+    result_opt = photometry_measure.measure_objects(
+        obj.copy(),
+        image,
+        aper=aper,
+        fwhm=fwhm,
+        optimal=True,
+        mask=mask,
+        bg=bg,
+        err=err,
+        verbose=False,
+    )
+
+    rel_aper = np.abs(result_aper['flux'] - fluxes) / fluxes
+    rel_opt = np.abs(result_opt['flux'] - fluxes) / fluxes
+    valid_aper = np.isfinite(rel_aper)
+    valid_opt = np.isfinite(rel_opt)
+    med_aper = float(np.nan)
+    med_opt = float(np.nan)
+    if np.any(valid_aper):
+        med_aper = float(np.median(rel_aper[valid_aper]))
+    if np.any(valid_opt):
+        med_opt = float(np.median(rel_opt[valid_opt]))
+    accuracy_aper = 1.0 - med_aper
+    accuracy_opt = 1.0 - med_opt
+
+    return {
+        'result_aper': result_aper,
+        'result_opt': result_opt,
+        'accuracy_aper': accuracy_aper,
+        'accuracy_opt': accuracy_opt,
+        'med_aper': med_aper,
+        'med_opt': med_opt,
+        'n_valid_aper': int(np.sum(valid_aper)),
+        'n_valid_opt': int(np.sum(valid_opt)),
+        'mask_fraction': mask_fraction,
+    }
+
+
 class TestOptimalExtraction:
     """Test optimal extraction photometry in measure_objects."""
 
@@ -99,6 +198,151 @@ class TestOptimalExtraction:
         valid = np.isfinite(result['flux'])
         assert np.sum(valid) > 0
 
+    @pytest.mark.unit
+    def test_optimal_extraction_mask_avoids_bias(self):
+        """Test masked pixels do not bias optimal extraction."""
+        size = 51
+        fwhm = 3.0
+        sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+        y, x = np.mgrid[:size, :size]
+        cx = cy = size // 2
+        amplitude = 1000.0
+
+        image_clean = amplitude * np.exp(
+            -((x - cx)**2 + (y - cy)**2) / (2 * sigma**2)
+        )
+        image_bad = image_clean.copy()
+        mask = np.zeros_like(image_bad, dtype=bool)
+        mask[cy-1:cy+2, cx-1:cx+2] = True
+        image_bad[mask] = 1e6
+
+        obj = Table()
+        obj['x'] = [float(cx)]
+        obj['y'] = [float(cy)]
+        obj['flux'] = [1.0]
+        obj['fluxerr'] = [1.0]
+
+        bg = np.zeros_like(image_clean)
+        err = np.ones_like(image_clean)
+
+        result_clean = photometry_measure.measure_objects(
+            obj.copy(),
+            image_clean,
+            aper=5.0,
+            fwhm=fwhm,
+            optimal=True,
+            bg=bg,
+            err=err,
+            verbose=False,
+        )
+        result_masked = photometry_measure.measure_objects(
+            obj.copy(),
+            image_bad,
+            aper=5.0,
+            fwhm=fwhm,
+            optimal=True,
+            mask=mask,
+            bg=bg,
+            err=err,
+            verbose=False,
+        )
+        result_unmasked = photometry_measure.measure_objects(
+            obj.copy(),
+            image_bad,
+            aper=5.0,
+            fwhm=fwhm,
+            optimal=True,
+            bg=bg,
+            err=err,
+            verbose=False,
+        )
+
+        assert np.isfinite(result_clean['flux'][0])
+        np.testing.assert_allclose(
+            result_masked['flux'][0],
+            result_clean['flux'][0],
+            rtol=1e-6,
+            atol=1e-6,
+        )
+        assert result_unmasked['flux'][0] > result_clean['flux'][0] * 10
+
+    @pytest.mark.unit
+    def test_random_field_accuracy_aperture_vs_optimal(self):
+        """Test relative accuracy of aperture and optimal extraction."""
+        rng = np.random.RandomState(123)
+        metrics = _simulate_random_field(
+            rng,
+            size=200,
+            fwhm=3.0,
+            n_sources=20,
+            margin=20,
+            min_sep=18,
+            noise_std=2.0,
+            aper=3.0,
+        )
+        accuracy_aper = metrics['accuracy_aper']
+        accuracy_opt = metrics['accuracy_opt']
+        med_aper = metrics['med_aper']
+        med_opt = metrics['med_opt']
+
+        print(
+            f"aperture accuracy {accuracy_aper:.3f} (median rel err {med_aper:.3f}), "
+            f"optimal accuracy {accuracy_opt:.3f} (median rel err {med_opt:.3f})"
+        )
+
+        assert accuracy_aper > 0.95, (
+            f"aperture accuracy {accuracy_aper:.3f}, median rel err {med_aper:.3f}"
+        )
+        assert accuracy_opt > 0.95, (
+            f"optimal accuracy {accuracy_opt:.3f}, median rel err {med_opt:.3f}"
+        )
+        assert med_opt <= med_aper * 1.2, (
+            f"optimal median rel err {med_opt:.3f} worse than aperture {med_aper:.3f}"
+        )
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize(
+        "label,min_sep,n_sources",
+        [
+            ("moderate", 12, 40),
+            ("crowded", 8, 60),
+            ("very_crowded", 6, 80),
+        ],
+    )
+    @pytest.mark.parametrize("mask_fraction", [0.0, 0.1, 0.3])
+    def test_random_field_accuracy_crowded_report(
+        self, label, min_sep, n_sources, mask_fraction
+    ):
+        """Report accuracy for crowded fields without assertions."""
+        rng = np.random.RandomState(456 + int(min_sep * 10))
+        metrics = _simulate_random_field(
+            rng,
+            size=200,
+            fwhm=3.0,
+            n_sources=n_sources,
+            margin=15,
+            min_sep=min_sep,
+            noise_std=2.0,
+            aper=3.0,
+            mask_fraction=mask_fraction,
+        )
+        accuracy_aper = metrics['accuracy_aper']
+        accuracy_opt = metrics['accuracy_opt']
+        med_aper = metrics['med_aper']
+        med_opt = metrics['med_opt']
+        n_valid_aper = metrics['n_valid_aper']
+        n_valid_opt = metrics['n_valid_opt']
+
+        assert len(metrics['result_aper']) == n_sources
+        assert len(metrics['result_opt']) == n_sources
+
+        print(
+            f"crowding={label} min_sep={min_sep} n={n_sources} mask={mask_fraction:.2f} "
+            f"aperture accuracy {accuracy_aper:.3f} (median rel err {med_aper:.3f}, "
+            f"valid {n_valid_aper}), "
+            f"optimal accuracy {accuracy_opt:.3f} (median rel err {med_opt:.3f}, "
+            f"valid {n_valid_opt})"
+        )
     @pytest.mark.unit
     def test_optimal_extraction_edge_objects(self, image_with_sources):
         """Test that edge objects are handled correctly."""

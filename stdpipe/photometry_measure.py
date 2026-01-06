@@ -58,8 +58,8 @@ def _solve_weighted_leastsq(A, D, W):
 
     # Solve and get covariance
     try:
-        cov = np.linalg.inv(AtWA)
-        x = cov @ AtWD
+        x = np.linalg.solve(AtWA, AtWD)
+        cov = np.linalg.solve(AtWA, np.eye(AtWA.shape[0]))
     except np.linalg.LinAlgError:
         return None, None
 
@@ -70,7 +70,7 @@ def _grouped_optimal_extraction(image, err, positions, psf, bg_local=None, mask=
     """
     Perform grouped optimal extraction for multiple overlapping sources.
 
-    Solves: D = Σ_k F_k × P_k via weighted least squares (A^T W A)x = A^T W D
+    Solves: D = Σ_k F_k × P_k + B via weighted least squares (A^T W A)x = A^T W D
 
     This function simultaneously fits the fluxes of all sources in a group,
     properly accounting for flux sharing between overlapping PSFs.
@@ -147,18 +147,18 @@ def _grouped_optimal_extraction(image, err, positions, psf, bg_local=None, mask=
     if n_pix == 0:
         return [(np.nan, np.nan, 0, np.nan, np.nan) for _ in range(K)]
 
-    # Subtract local background from data
+    # Subtract average local background to center data (fit includes residual background term)
+    bg_offset = 0.0
     if bg_local is not None:
-        # Average local background for grouped fitting
         if isinstance(bg_local, (list, np.ndarray)):
-            avg_bg = np.mean(bg_local)
+            bg_offset = np.nanmean(bg_local)
         else:
-            avg_bg = bg_local
-        if avg_bg:
-            data_cutout -= avg_bg
+            bg_offset = bg_local
+        if np.isfinite(bg_offset) and bg_offset != 0:
+            data_cutout -= bg_offset
 
-    # Build design matrix with K PSF columns
-    A = np.zeros((n_pix, K))
+    # Build design matrix with K PSF columns + background term
+    A = np.zeros((n_pix, K + 1))
     psf_norms = np.zeros(K)
 
     for k, (x, y) in enumerate(positions):
@@ -201,6 +201,9 @@ def _grouped_optimal_extraction(image, err, positions, psf, bg_local=None, mask=
         A[:, k] = psf_full[good]
         psf_norms[k] = np.sum(psf_full[good])
 
+    # Common background term
+    A[:, -1] = 1.0
+
     # Data and weights
     D = data_cutout[good]
     V = err_cutout[good]**2
@@ -226,8 +229,8 @@ def _grouped_optimal_extraction(image, err, positions, psf, bg_local=None, mask=
     residuals = D - model
     chi2 = np.sum(residuals**2 * W)
 
-    # Reduced chi-squared (degrees of freedom = N - K)
-    dof = n_pix - K
+    # Reduced chi-squared (degrees of freedom = N - K - 1)
+    dof = n_pix - (K + 1)
     if dof > 0:
         reduced_chi2 = chi2 / dof
     else:
@@ -571,7 +574,9 @@ def measure_objects(
 
         # Only compute local background for valid positions
         if np.sum(valid_pos) > 0:
-            obj['bg_local'][valid_pos] = lbg(image1, x_vals[valid_pos], y_vals[valid_pos], mask=mask)
+            obj['bg_local'][valid_pos] = lbg(
+                image1, x_vals[valid_pos], y_vals[valid_pos], mask=mask | mask0
+            )
 
         # Flag invalid positions and positions where local bg estimation failed
         idx = ~valid_pos | ~np.isfinite(obj['bg_local'])
@@ -579,24 +584,31 @@ def measure_objects(
         obj['bg_local'][idx] = 0
 
     # Photometric apertures
-    # FIXME: is there any better way to exclude some positions from photometry?..
-    positions = [(_['x'], _['y']) if np.isfinite(_['x']) and np.isfinite(_['y']) else (-1000, -1000) for _ in obj]
-    apertures = photutils.aperture.CircularAperture(positions, r=aper)
+    x_vals = np.ma.filled(np.asarray(obj['x']), fill_value=np.nan)
+    y_vals = np.ma.filled(np.asarray(obj['y']), fill_value=np.nan)
+    valid_pos = np.isfinite(x_vals) & np.isfinite(y_vals)
+    valid_idx = np.where(valid_pos)[0]
 
-    # Check whether some aperture pixels are masked, and set the flags for that
-    mres = photutils.aperture.aperture_photometry(mask | mask0, apertures, method='center')
-    obj['flags'][mres['aperture_sum'] > 0] |= 0x200
-
-    # Aperture unmasked areas, in (fractional) pixels
-    image_ones = np.ones(image1.shape)
-    res_area = photutils.aperture.aperture_photometry(image_ones, apertures, mask=mask0)
-    obj['npix_aper'] = res_area['aperture_sum']
-
-    # Position-dependent background flux error from global background model, if available
+    apertures = None
+    obj['npix_aper'] = 0.0
     obj['bg_fluxerr'] = 0.0  # Local background flux error inside the aperture
-    if bg_est is not None:
-        res = photutils.aperture.aperture_photometry(bg_est_rms**2, apertures)
-        obj['bg_fluxerr'] = np.sqrt(res['aperture_sum'])
+    if np.sum(valid_pos) > 0:
+        positions = list(zip(x_vals[valid_pos], y_vals[valid_pos]))
+        apertures = photutils.aperture.CircularAperture(positions, r=aper)
+
+        # Check whether some aperture pixels are masked, and set the flags for that
+        mres = photutils.aperture.aperture_photometry(mask | mask0, apertures, method='center')
+        obj['flags'][valid_idx[mres['aperture_sum'] > 0]] |= 0x200
+
+        # Aperture unmasked areas, in (fractional) pixels
+        image_ones = np.ones(image1.shape)
+        res_area = photutils.aperture.aperture_photometry(image_ones, apertures, mask=mask0)
+        obj['npix_aper'][valid_idx] = res_area['aperture_sum']
+
+        # Position-dependent background flux error from global background model, if available
+        if bg_est is not None:
+            res = photutils.aperture.aperture_photometry(bg_est_rms**2, apertures)
+            obj['bg_fluxerr'][valid_idx] = np.sqrt(res['aperture_sum'])
 
     if optimal:
         # Optimal extraction photometry (Naylor 1998)
@@ -676,7 +688,7 @@ def measure_objects(
                     positions,
                     psf_for_extraction,
                     bg_local=bg_locals,
-                    mask=mask,
+                    mask=mask | mask0,
                     radius=aper
                 )
 
@@ -707,7 +719,7 @@ def measure_objects(
                         o['x'], o['y'],
                         psf_for_extraction,
                         bg_local=o['bg_local'],
-                        mask=mask, # Do not count the flux from 'soft-masked' pixels
+                        mask=mask | mask0, # Do not count the flux from 'soft-masked' pixels
                         radius=aper  # Use aperture radius as clipping radius
                     )
 
@@ -719,13 +731,15 @@ def measure_objects(
     else:
         # Standard aperture photometry
         # Use just a minimal mask here so that the flux from 'soft-masked' (e.g. saturated) pixels is still counted
-        res = photutils.aperture.aperture_photometry(image1, apertures, error=err, mask=mask0)
-
-        obj['flux'] = res['aperture_sum']
-        obj['fluxerr'] = res['aperture_sum_err']
+        obj['flux'] = np.nan
+        obj['fluxerr'] = np.nan
+        if apertures is not None:
+            res = photutils.aperture.aperture_photometry(image1, apertures, error=err, mask=mask0)
+            obj['flux'][valid_idx] = res['aperture_sum']
+            obj['fluxerr'][valid_idx] = res['aperture_sum_err']
 
         # Subtract local background
-        obj['flux'] -= obj['bg_local'] * obj['npix_aper']
+        obj['flux'][valid_pos] -= obj['bg_local'][valid_pos] * obj['npix_aper'][valid_pos]
 
     for _ in ['mag', 'magerr']:
         obj[_] = np.nan
