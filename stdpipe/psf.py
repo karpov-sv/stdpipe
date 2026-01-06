@@ -28,9 +28,9 @@ def run_psfex(
     minarea=5,
     vignet_size=None,
     order=0,
-    sex_extra={},
-    checkimages=[],
-    extra={},
+    sex_extra=None,
+    checkimages=None,
+    extra=None,
     psffile=None,
     get_obj=False,
     _workdir=None,
@@ -114,6 +114,13 @@ def run_psfex(
     psf = None
 
     # Estimate image FWHM if aperture radius is not set
+    if sex_extra is None:
+        sex_extra = {}
+    if checkimages is None:
+        checkimages = []
+    if extra is None:
+        extra = {}
+
     if not aper:
         log('Aperture size not specified, will estimate it from image FWHM')
         obj = photometry.get_objects_sextractor(
@@ -130,16 +137,27 @@ def run_psfex(
             verbose=verbose,
             extra=sex_extra,
         )
-        fwhm = np.median(obj['fwhm'][obj['flags'] == 0])
-        aper = 2.0*fwhm
+        fwhm_vals = obj['fwhm'][obj['flags'] == 0]
+        if len(fwhm_vals) > 0:
+            fwhm = np.median(fwhm_vals)
+        else:
+            fwhm = np.nan
+        if not np.isfinite(fwhm) or fwhm <= 0:
+            fwhm = 3.0
+            log('FWHM estimate failed, using default %.1f pixels' % fwhm)
+        aper = 2.0 * fwhm
         log('FWHM = %.1f pixels, will use aperture radius %.1f pixels' % (fwhm, aper))
 
     if vignet_size is None:
-        vignet_size = 6 * aper + 1
-        log(
-            'Extracting PSF using vignette size %d x %d pixels'
-            % (vignet_size, vignet_size)
-        )
+        vignet_size = int(np.ceil(6 * aper)) + 1
+    else:
+        vignet_size = int(np.round(vignet_size))
+    if vignet_size % 2 == 0:
+        vignet_size += 1
+    log(
+        'Extracting PSF using vignette size %d x %d pixels'
+        % (vignet_size, vignet_size)
+    )
 
     # Run SExtractor on input image in current workdir so that the LDAC catalogue will be in out.cat there
     obj = photometry.get_objects_sextractor(
@@ -341,7 +359,9 @@ def get_supersampled_psf_stamp(psf, x=0, y=0, normalize=True):
             i += 1
 
     if normalize:
-        stamp /= np.sum(stamp)
+        total = np.sum(stamp)
+        if np.isfinite(total) and total > 0:
+            stamp /= total
 
     return stamp
 
@@ -378,9 +398,9 @@ def get_psf_stamp(psf, x=0, y=0, dx=None, dy=None, normalize=True):
     """
 
     if dx is None:
-        dx = x % 1
+        dx = x - np.round(x)
     if dy is None:
-        dy = y % 1
+        dy = y - np.round(y)
 
     supersampled = get_supersampled_psf_stamp(psf, x, y, normalize=normalize)
 
@@ -410,7 +430,9 @@ def get_psf_stamp(psf, x=0, y=0, dx=None, dy=None, normalize=True):
     stamp = ndimage.map_coordinates(supersampled, [y1, x1], order=3) / psf['sampling'] ** 2
 
     if normalize:
-        stamp /= np.sum(stamp)
+        total = np.sum(stamp)
+        if np.isfinite(total) and total > 0:
+            stamp /= total
 
     return stamp
 

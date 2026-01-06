@@ -24,6 +24,65 @@ from . import psf as psf_module
 from .psf import create_psf_model
 
 
+def _odd_int(value, min_value=1):
+    value = int(np.round(value))
+    if value < min_value:
+        value = min_value
+    if value % 2 == 0:
+        value += 1
+    return value
+
+
+def _compute_oversampling(psf_sampling):
+    if psf_sampling is None or not np.isfinite(psf_sampling) or psf_sampling <= 0:
+        return 1
+    if psf_sampling >= 1.0:
+        return 1
+    return max(1, int(np.rint(1.0 / psf_sampling)))
+
+
+def _compute_native_psf_size(psf_height, psf_sampling):
+    if psf_sampling is None or not np.isfinite(psf_sampling) or psf_sampling <= 0:
+        size = psf_height
+    elif psf_sampling >= 1.0:
+        size = psf_height
+    else:
+        size = psf_height * psf_sampling
+    return _odd_int(size)
+
+
+def _scale_psf_image_for_photutils(psf_image, oversampling):
+    if oversampling is None:
+        return psf_image
+    factor = float(oversampling) ** 2
+    if factor <= 1.0:
+        return psf_image
+    return psf_image * factor
+
+
+def _build_circular_fit_mask(shape, x_positions, y_positions, radius):
+    mask_fit = np.ones(shape, dtype=bool)
+    r2 = radius ** 2
+    for x, y in zip(x_positions, y_positions):
+        if not np.isfinite(x) or not np.isfinite(y):
+            continue
+        x0 = int(np.floor(x - radius))
+        x1 = int(np.ceil(x + radius)) + 1
+        y0 = int(np.floor(y - radius))
+        y1 = int(np.ceil(y + radius)) + 1
+        x0 = max(0, x0)
+        y0 = max(0, y0)
+        x1 = min(shape[1], x1)
+        y1 = min(shape[0], y1)
+        if x1 <= x0 or y1 <= y0:
+            continue
+        yy, xx = np.mgrid[y0:y1, x0:x1]
+        inside = (xx - x) ** 2 + (yy - y) ** 2 <= r2
+        sub = mask_fit[y0:y1, x0:x1]
+        sub[inside] = False
+    return mask_fit
+
+
 def measure_objects_psf(
     obj,
     image,
@@ -180,9 +239,7 @@ def measure_objects_psf(
         psf_model = photutils.psf.CircularGaussianSigmaPRF(sigma=sigma)
 
         if psf_size is None:
-            psf_size = int(np.ceil(5 * fwhm))
-            if psf_size % 2 == 0:
-                psf_size += 1  # Make odd
+            psf_size = _odd_int(5 * fwhm)
 
     elif isinstance(psf, dict) and 'data' in psf and 'sampling' in psf:
         # PSFEx-like dict structure (from run_psfex, load_psf, or create_psf_model)
@@ -197,48 +254,48 @@ def measure_objects_psf(
             psf_model = psf  # Keep original PSFEx dict
             psf_is_position_dependent = True
             if psf_size is None:
-                psf_size = psf['height']
+                psf_size = _compute_native_psf_size(psf['height'], psf_sampling)
         else:
             log('Using PSFEx/ePSF PSF model (constant across field)')
             # Get PSF stamp at center position (0,0 works for degree=0)
             psf_image = psf_module.get_supersampled_psf_stamp(psf, x=0, y=0, normalize=True)
 
             # Handle oversampling if needed
-            oversampling = int(1 / psf_sampling) if psf_sampling < 1.0 else 1
+            oversampling = _compute_oversampling(psf_sampling)
+            psf_image = _scale_psf_image_for_photutils(psf_image, oversampling)
             psf_model = photutils.psf.ImagePSF(psf_image, oversampling=oversampling)
             psf_is_position_dependent = False
 
             if psf_size is None:
-                psf_size = psf_image.shape[0]
+                psf_size = _compute_native_psf_size(psf_image.shape[0], psf_sampling)
 
     elif isinstance(psf, (photutils.psf.ImagePSF, photutils.psf.FittableImageModel)):
         # Already a photutils PSF model (ImagePSF or legacy FittableImageModel)
         log('Using provided photutils ImagePSF model')
         psf_model = psf
         if psf_size is None:
-            psf_size = psf.data.shape[0]
+            psf_size = _odd_int(psf.data.shape[0])
 
     elif hasattr(psf, 'fwhm'):
         # Photutils ePSF or similar
         log('Using provided photutils PSF model with FWHM')
         psf_model = psf
         if psf_size is None:
-            psf_size = psf.data.shape[0] if hasattr(psf, 'data') else int(np.ceil(5 * psf.fwhm))
+            psf_size = _odd_int(psf.data.shape[0]) if hasattr(psf, 'data') else _odd_int(5 * psf.fwhm)
 
     else:
         # Assume it's a photutils PSF model
         log('Using provided PSF model')
         psf_model = psf
         if psf_size is None:
-            psf_size = int(np.ceil(5 * fwhm))
-            if psf_size % 2 == 0:
-                psf_size += 1
+            psf_size = _odd_int(5 * fwhm)
 
     log('Using PSF size: %d pixels' % psf_size)
 
     # Fitting region size
     if fit_size is None:
         fit_size = psf_size
+    fit_size = _odd_int(fit_size)
     log('Using fitting region size: %d pixels' % fit_size)
 
     # Prepare initial positions table
@@ -257,22 +314,16 @@ def measure_objects_psf(
         # Estimate initial flux from image at positions
         init_params['flux'] = 1000.0  # Default initial guess
 
-    # Create apertures for fitting regions using safe positions
-    # Replace NaN with dummy positions (will be filtered out later)
-    x_safe = np.where(valid_pos, init_params['x'], 0.0)
-    y_safe = np.where(valid_pos, init_params['y'], 0.0)
+    if fit_shape not in ['circular', 'square']:
+        raise ValueError("fit_shape must be 'circular' or 'square'")
 
-    if fit_shape == 'circular':
-        fit_apertures = photutils.aperture.CircularAperture(
-            list(zip(x_safe, y_safe)),
-            r=fit_size / 2
-        )
-    else:  # 'square'
-        fit_apertures = photutils.aperture.RectangularAperture(
-            list(zip(x_safe, y_safe)),
-            w=fit_size,
-            h=fit_size,
-            theta=0
+    fit_mask = None
+    if fit_shape == 'circular' and np.any(valid_pos):
+        fit_mask = _build_circular_fit_mask(
+            image1.shape,
+            init_params['x'][valid_pos],
+            init_params['y'][valid_pos],
+            radius=fit_size / 2,
         )
 
     # Import fitting class
@@ -290,6 +341,12 @@ def measure_objects_psf(
     n_invalid = np.sum(~valid_pos)
     if n_invalid > 0:
         log('Found %d objects with invalid (masked/NaN) positions, will be skipped' % n_invalid)
+
+    mask_for_fit = mask | mask0
+    if fit_mask is not None:
+        mask_for_fit = mask_for_fit | fit_mask
+
+    xy_bounds = None if recentroid else 1e-6
 
     # Perform PSF photometry
     log('Performing PSF photometry on %d objects (%d valid)' % (len(obj), np.sum(valid_pos)))
@@ -313,7 +370,7 @@ def measure_objects_psf(
 
         # Get sampling (psf_model is always dict at this point)
         psf_sampling = psf_model['sampling']
-        oversampling = int(1 / psf_sampling) if psf_sampling < 1.0 else 1
+        oversampling = _compute_oversampling(psf_sampling)
 
         # Process objects individually or in small groups
         # For each object, evaluate PSF at its position
@@ -334,6 +391,7 @@ def measure_objects_psf(
                 psf_image = psf_module.get_supersampled_psf_stamp(
                     psf_model, x=x_pos, y=y_pos, normalize=True
                 )
+                psf_image = _scale_psf_image_for_photutils(psf_image, oversampling)
 
                 # Create photutils PSF model for this position
                 psf_at_pos = photutils.psf.ImagePSF(psf_image, oversampling=oversampling)
@@ -345,6 +403,8 @@ def measure_objects_psf(
                     finder=None,
                     grouper=grouper,
                     fitter=LevMarLSQFitter(),
+                    fitter_maxiters=maxiters,
+                    xy_bounds=xy_bounds,
                     aperture_radius=fit_size / 2
                 )
 
@@ -359,7 +419,7 @@ def measure_objects_psf(
 
                 result_single = phot_single(
                     image1,
-                    mask=mask,
+                    mask=mask_for_fit,
                     error=err,
                     init_params=init_single
                 )
@@ -428,13 +488,15 @@ def measure_objects_psf(
                     finder=None,  # We already have positions
                     grouper=grouper,  # Group nearby sources if requested
                     fitter=LevMarLSQFitter(),  # Levenberg-Marquardt fitter from astropy
+                    fitter_maxiters=maxiters,
+                    xy_bounds=xy_bounds,
                     aperture_radius=fit_size / 2
                 )
 
                 # Do the photometry - photutils 2.x API
                 result = phot_obj(
                     image1,
-                    mask=mask,
+                    mask=mask_for_fit,
                     error=err,
                     init_params=init_params_valid
                 )

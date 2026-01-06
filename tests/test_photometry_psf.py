@@ -12,6 +12,137 @@ from stdpipe import photometry_psf
 from stdpipe import psf
 
 
+def _make_gaussian_image(size, x0, y0, fwhm, amplitude):
+    sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+    y, x = np.mgrid[:size, :size]
+    return amplitude * np.exp(-((x - x0) ** 2 + (y - y0) ** 2) / (2 * sigma**2))
+
+
+def _make_psf_dict(size=25, sampling=1.0):
+    y, x = np.mgrid[0:size, 0:size]
+    data = np.exp(-((x - size // 2) ** 2 + (y - size // 2) ** 2) / (2 * 3**2))
+    data /= np.sum(data)
+    return {
+        'data': data[np.newaxis, :, :],
+        'width': size,
+        'height': size,
+        'sampling': sampling,
+        'degree': 0,
+        'ncoeffs': 1,
+        'x0': 0.0,
+        'y0': 0.0,
+        'sx': 1.0,
+        'sy': 1.0,
+        'type': 'psfex',
+    }
+
+
+def _make_mock_psf(seed=0):
+    rng = np.random.RandomState(seed)
+    mock_psf = {
+        'data': rng.normal(0, 0.1, (3, 25, 25)),  # (ncoeff, height, width)
+        'width': 25,
+        'height': 25,
+        'sampling': 1.0,
+        'degree': 1,
+        'ncoeffs': 3,
+        'x0': 128.0,
+        'y0': 128.0,
+        'sx': 128.0,
+        'sy': 128.0,
+        'type': 'psfex'
+    }
+
+    y, x = np.mgrid[0:25, 0:25]
+    mock_psf['data'][0] = np.exp(-((x - 12)**2 + (y - 12)**2) / (2 * 3**2))
+    mock_psf['data'][0] /= np.sum(mock_psf['data'][0])
+
+    return mock_psf
+
+
+def _simulate_psf_field(
+    rng,
+    *,
+    size,
+    fwhm,
+    n_sources,
+    margin,
+    min_sep,
+    noise_std,
+    flux_range,
+    mask_fraction=0.0,
+    recentroid=True,
+    maxiters=20,
+    fit_shape='square',
+):
+    sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+
+    xs = []
+    ys = []
+    attempts = 0
+    while len(xs) < n_sources and attempts < 20000:
+        attempts += 1
+        x = rng.randint(margin, size - margin)
+        y = rng.randint(margin, size - margin)
+        if xs:
+            dist2 = (np.array(xs) - x)**2 + (np.array(ys) - y)**2
+            if np.any(dist2 < min_sep**2):
+                continue
+        xs.append(int(x))
+        ys.append(int(y))
+
+    assert len(xs) == n_sources
+
+    fluxes = rng.uniform(flux_range[0], flux_range[1], size=n_sources)
+    amplitudes = fluxes / (2 * np.pi * sigma**2)
+    yy, xx = np.mgrid[:size, :size]
+    image = rng.normal(0.0, noise_std, (size, size))
+    for x, y, amp in zip(xs, ys, amplitudes):
+        image += amp * np.exp(
+            -((xx - x)**2 + (yy - y)**2) / (2 * sigma**2)
+        )
+
+    obj = Table()
+    obj['x'] = np.array(xs, dtype=float)
+    obj['y'] = np.array(ys, dtype=float)
+    obj['flux'] = fluxes
+
+    bg = np.zeros_like(image)
+    err = np.full_like(image, noise_std)
+    mask = None
+    if mask_fraction:
+        mask = rng.rand(size, size) < mask_fraction
+
+    result = photometry_psf.measure_objects_psf(
+        obj.copy(),
+        image,
+        fwhm=fwhm,
+        bg=bg,
+        err=err,
+        mask=mask,
+        recentroid=recentroid,
+        maxiters=maxiters,
+        fit_shape=fit_shape,
+        verbose=False,
+    )
+
+    rel = np.abs(result['flux'] - fluxes) / fluxes
+    valid = np.isfinite(rel)
+    med_rel = float(np.nan)
+    if np.any(valid):
+        med_rel = float(np.median(rel[valid]))
+
+    return {
+        'result': result,
+        'fluxes': fluxes,
+        'med_rel': med_rel,
+        'accuracy': 1.0 - med_rel,
+        'n_valid': int(np.sum(valid)),
+        'n_sources': n_sources,
+        'mask_fraction': mask_fraction,
+    }
+
+
 class TestMeasureObjectsPSF:
     """Test PSF photometry measurement function."""
 
@@ -76,6 +207,209 @@ class TestMeasureObjectsPSF:
         assert isinstance(result, Table)
         # Should still measure some objects
         assert len(result) >= 0
+
+    @pytest.mark.unit
+    def test_measure_objects_psf_mask_avoids_bias(self):
+        """Test that non-finite pixels are masked even with a user mask."""
+        size = 51
+        fwhm = 3.0
+        sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+        y, x = np.mgrid[:size, :size]
+        cx = cy = size // 2
+        amplitude = 1000.0
+
+        image_clean = amplitude * np.exp(
+            -((x - cx)**2 + (y - cy)**2) / (2 * sigma**2)
+        )
+        image_bad = image_clean.copy()
+        image_bad[cy-2:cy+3, cx-2:cx+3] = np.nan
+        user_mask = np.zeros_like(image_bad, dtype=bool)
+        explicit_mask = user_mask.copy()
+        explicit_mask[cy-2:cy+3, cx-2:cx+3] = True
+
+        obj = Table()
+        obj['x'] = [float(cx)]
+        obj['y'] = [float(cy)]
+        obj['flux'] = [amplitude]
+
+        bg = np.zeros_like(image_clean)
+        err = np.ones_like(image_clean)
+
+        result_user = photometry_psf.measure_objects_psf(
+            obj.copy(),
+            image_bad,
+            fwhm=fwhm,
+            mask=user_mask,
+            bg=bg,
+            err=err,
+            verbose=False,
+        )
+        result_explicit = photometry_psf.measure_objects_psf(
+            obj.copy(),
+            image_bad,
+            fwhm=fwhm,
+            mask=explicit_mask,
+            bg=bg,
+            err=err,
+            verbose=False,
+        )
+
+        assert np.isfinite(result_user['flux'][0])
+        np.testing.assert_allclose(
+            result_user['flux'][0],
+            result_explicit['flux'][0],
+            rtol=1e-3,
+            atol=1e-3,
+        )
+
+    @pytest.mark.unit
+    def test_measure_objects_psf_fit_shape(self):
+        """Test that circular fit_shape uses fewer fit pixels than square."""
+        size = 51
+        fwhm = 3.0
+        image = _make_gaussian_image(size, 25, 25, fwhm, 1000.0)
+        obj = Table()
+        obj['x'] = [25.0]
+        obj['y'] = [25.0]
+
+        result_square = photometry_psf.measure_objects_psf(
+            obj.copy(),
+            image,
+            fwhm=fwhm,
+            fit_shape='square',
+            fit_size=11,
+            verbose=False,
+        )
+        result_circular = photometry_psf.measure_objects_psf(
+            obj.copy(),
+            image,
+            fwhm=fwhm,
+            fit_shape='circular',
+            fit_size=11,
+            verbose=False,
+        )
+
+        assert np.isfinite(result_square['flux'][0])
+        assert np.isfinite(result_circular['flux'][0])
+        assert result_circular['npix_psf'][0] < result_square['npix_psf'][0]
+
+    @pytest.mark.unit
+    def test_measure_objects_psf_recentroid(self):
+        """Test that recentroid controls position updates."""
+        size = 51
+        fwhm = 3.0
+        image = _make_gaussian_image(size, 25, 25, fwhm, 1000.0)
+        obj = Table()
+        obj['x'] = [27.0]
+        obj['y'] = [25.0]
+
+        result_fixed = photometry_psf.measure_objects_psf(
+            obj.copy(),
+            image,
+            fwhm=fwhm,
+            recentroid=False,
+            maxiters=50,
+            bg=np.zeros_like(image),
+            err=np.ones_like(image),
+            verbose=False,
+        )
+        result_free = photometry_psf.measure_objects_psf(
+            obj.copy(),
+            image,
+            fwhm=fwhm,
+            recentroid=True,
+            maxiters=50,
+            bg=np.zeros_like(image),
+            err=np.ones_like(image),
+            verbose=False,
+        )
+
+        assert abs(result_fixed['x_psf'][0] - obj['x'][0]) < 1e-3
+        assert abs(result_free['x_psf'][0] - 25.0) < abs(obj['x'][0] - 25.0)
+
+    @pytest.mark.unit
+    def test_measure_objects_psf_fit_size_even(self):
+        """Test that even fit_size is rounded to an odd size."""
+        size = 51
+        fwhm = 3.0
+        image = _make_gaussian_image(size, 25, 25, fwhm, 1000.0)
+        obj = Table()
+        obj['x'] = [25.0]
+        obj['y'] = [25.0]
+
+        result = photometry_psf.measure_objects_psf(
+            obj.copy(),
+            image,
+            fwhm=fwhm,
+            fit_shape='square',
+            fit_size=10,
+            bg=np.zeros_like(image),
+            err=np.ones_like(image),
+            verbose=False,
+        )
+
+        assert result['npix_psf'][0] == 11 * 11
+
+    @pytest.mark.unit
+    def test_measure_objects_psf_psf_size_sampling(self):
+        """Test PSF size scales with sampling factor."""
+        psf_dict = _make_psf_dict(size=25, sampling=0.5)
+        image = np.zeros((100, 100))
+        psf.place_psf_stamp(image, psf_dict, x0=50.0, y0=50.0, flux=1000.0)
+
+        obj = Table()
+        obj['x'] = [50.0]
+        obj['y'] = [50.0]
+
+        result = photometry_psf.measure_objects_psf(
+            obj.copy(),
+            image,
+            psf=psf_dict,
+            fit_shape='square',
+            bg=np.zeros_like(image),
+            err=np.ones_like(image),
+            maxiters=50,
+            verbose=False,
+        )
+
+        assert result['npix_psf'][0] == 13 * 13
+
+    @pytest.mark.unit
+    def test_measure_objects_psf_maxiters_used(self, monkeypatch):
+        """Test that maxiters is passed to PSFPhotometry."""
+        calls = {}
+
+        class DummyPSFPhotometry:
+            def __init__(self, *args, **kwargs):
+                calls['fitter_maxiters'] = kwargs.get('fitter_maxiters')
+
+            def __call__(self, image, mask=None, error=None, init_params=None):
+                n = len(init_params)
+                result = Table()
+                result['flux_fit'] = np.ones(n)
+                result['flux_err'] = np.ones(n)
+                result['x_fit'] = init_params['x']
+                result['y_fit'] = init_params['y']
+                return result
+
+        monkeypatch.setattr(
+            photometry_psf.photutils.psf, 'PSFPhotometry', DummyPSFPhotometry
+        )
+
+        obj = Table()
+        obj['x'] = [5.0]
+        obj['y'] = [5.0]
+        image = np.zeros((20, 20))
+
+        photometry_psf.measure_objects_psf(
+            obj.copy(),
+            image,
+            fwhm=3.0,
+            maxiters=7,
+            verbose=False,
+        )
+
+        assert calls['fitter_maxiters'] == 7
 
     @pytest.mark.unit
     def test_measure_objects_psf_with_background(self, image_with_sources, detected_objects):
@@ -256,6 +590,60 @@ class TestMeasureObjectsPSF:
         assert isinstance(result, Table)
         assert len(result) == len(detected_objects_masked)
 
+    @pytest.mark.unit
+    def test_measure_objects_psf_random_field_accuracy(self):
+        """Test PSF photometry accuracy on a simulated field."""
+        rng = np.random.RandomState(123)
+        metrics = _simulate_psf_field(
+            rng,
+            size=128,
+            fwhm=3.0,
+            n_sources=25,
+            margin=12,
+            min_sep=8,
+            noise_std=2.0,
+            flux_range=(2000.0, 8000.0),
+        )
+
+        accuracy = metrics['accuracy']
+        med_rel = metrics['med_rel']
+        n_valid = metrics['n_valid']
+        n_sources = metrics['n_sources']
+        print(
+            f"PSF accuracy {accuracy:.3f} (median rel err {med_rel:.3f}), "
+            f"valid {n_valid}/{n_sources}"
+        )
+
+        assert n_valid >= int(0.9 * n_sources)
+        assert accuracy > 0.95, (
+            f"PSF accuracy {accuracy:.3f}, median rel err {med_rel:.3f}"
+        )
+
+    @pytest.mark.unit
+    def test_measure_objects_psf_random_field_accuracy_report(self):
+        """Report PSF photometry accuracy for a crowded field."""
+        rng = np.random.RandomState(321)
+        metrics = _simulate_psf_field(
+            rng,
+            size=128,
+            fwhm=3.0,
+            n_sources=35,
+            margin=12,
+            min_sep=6,
+            noise_std=3.0,
+            flux_range=(1500.0, 7000.0),
+            mask_fraction=0.05,
+        )
+
+        accuracy = metrics['accuracy']
+        med_rel = metrics['med_rel']
+        n_valid = metrics['n_valid']
+        n_sources = metrics['n_sources']
+        print(
+            f"PSF crowded accuracy {accuracy:.3f} (median rel err {med_rel:.3f}), "
+            f"valid {n_valid}/{n_sources}, mask_fraction {metrics['mask_fraction']:.2f}"
+        )
+
 
 class TestCreatePSFModel:
     """Test empirical PSF model creation."""
@@ -430,25 +818,7 @@ class TestPositionDependentPSF:
     @pytest.mark.unit
     def test_position_dependent_psf_photometry(self, image_with_sources, detected_objects):
         """Test PSF photometry with position-dependent PSFEx model."""
-        # Create a mock PSFEx model with polynomial coefficients (dict format)
-        mock_psf = {
-            'data': np.random.normal(0, 0.1, (3, 25, 25)),  # (ncoeff, height, width)
-            'width': 25,
-            'height': 25,
-            'sampling': 1.0,
-            'degree': 1,
-            'ncoeffs': 3,
-            'x0': 128.0,
-            'y0': 128.0,
-            'sx': 128.0,
-            'sy': 128.0,
-            'type': 'psfex'
-        }
-
-        # Make realistic Gaussian for constant term
-        y, x = np.mgrid[0:25, 0:25]
-        mock_psf['data'][0] = np.exp(-((x - 12)**2 + (y - 12)**2) / (2 * 3**2))
-        mock_psf['data'][0] /= np.sum(mock_psf['data'][0])
+        mock_psf = _make_mock_psf(seed=123)
 
         # Try with position-dependent PSF enabled
         result = photometry_psf.measure_objects_psf(
@@ -466,25 +836,7 @@ class TestPositionDependentPSF:
     @pytest.mark.unit
     def test_position_dependent_vs_constant_psf(self, image_with_sources, detected_objects):
         """Compare position-dependent and constant PSF fitting."""
-        # Create a mock PSFEx model with polynomial coefficients (dict format)
-        mock_psf = {
-            'data': np.random.normal(0, 0.1, (3, 25, 25)),  # (ncoeff, height, width)
-            'width': 25,
-            'height': 25,
-            'sampling': 1.0,
-            'degree': 1,
-            'ncoeffs': 3,
-            'x0': 128.0,
-            'y0': 128.0,
-            'sx': 128.0,
-            'sy': 128.0,
-            'type': 'psfex'
-        }
-
-        # Make realistic Gaussian for constant term
-        y, x = np.mgrid[0:25, 0:25]
-        mock_psf['data'][0] = np.exp(-((x - 12)**2 + (y - 12)**2) / (2 * 3**2))
-        mock_psf['data'][0] /= np.sum(mock_psf['data'][0])
+        mock_psf = _make_mock_psf(seed=456)
 
         # Constant PSF (default)
         result_const = photometry_psf.measure_objects_psf(
@@ -507,6 +859,23 @@ class TestPositionDependentPSF:
         # Both should work (though results may differ)
         assert isinstance(result_const, Table)
         assert isinstance(result_pos_dep, Table)
+
+    @pytest.mark.unit
+    def test_position_dependent_grouped_runs(self, image_with_sources, detected_objects):
+        """Test grouped flag with position-dependent PSF photometry."""
+        mock_psf = _make_mock_psf(seed=789)
+        result = photometry_psf.measure_objects_psf(
+            detected_objects,
+            image_with_sources,
+            psf=mock_psf,
+            use_position_dependent_psf=True,
+            group_sources=True,
+            grouper_radius=10.0,
+            verbose=False
+        )
+
+        assert isinstance(result, Table)
+        assert len(result) == len(detected_objects)
 
 
 # ============================================================================
