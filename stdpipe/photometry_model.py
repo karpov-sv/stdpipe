@@ -373,10 +373,10 @@ def match(
                 err = np.zeros_like(x)
             if add_intrinsic_rms:
                 err = np.hypot(err, intrinsic_rms)
-            return err[0] if err.size == 1 else err
+            return err
         else:
             result = np.sum(X * C.params[0 : X.shape[1]], axis=1)
-            return result[0] if result.size == 1 else result
+            return result
 
     if cat_color is not None and (fit_color_term or force_color_term is not None):
         if fit_color_term:
