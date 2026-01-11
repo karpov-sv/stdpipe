@@ -73,7 +73,7 @@ class DB:
 
             if table:
                 # Code from astrolibpy, https://code.google.com/p/astrolibpy
-                strLength = 10
+                strLength = 256
                 __pgTypeHash = {
                     16: bool,
                     18: str,
