@@ -6,9 +6,38 @@ Tests aperture photometry, optimal extraction, and grouped fitting.
 
 import pytest
 import numpy as np
+from scipy.special import erf
 from astropy.table import Table
 
 from stdpipe import photometry_measure
+
+
+def _create_pixel_integrated_gaussian(size, x0, y0, amplitude, sigma):
+    """
+    Create pixel-integrated Gaussian image.
+
+    Uses error function to correctly integrate Gaussian flux over pixel area,
+    matching the pixel-integrated PSF used in optimal extraction.
+    """
+    # Pixel edges (pixels span from i-0.5 to i+0.5)
+    x_edges = np.arange(size + 1) - 0.5
+    y_edges = np.arange(size + 1) - 0.5
+
+    # Integrate Gaussian over pixel boundaries using CDF (error function)
+    sqrt2_sigma = np.sqrt(2) * sigma
+    cdf_x = 0.5 * (1 + erf((x_edges - x0) / sqrt2_sigma))
+    cdf_y = 0.5 * (1 + erf((y_edges - y0) / sqrt2_sigma))
+
+    # Flux in each pixel = difference of CDFs at edges
+    flux_x = np.diff(cdf_x)
+    flux_y = np.diff(cdf_y)
+
+    # 2D Gaussian (separable)
+    # Normalize to amplitude = total flux
+    total_flux = 2 * np.pi * sigma**2
+    image = amplitude * total_flux * np.outer(flux_y, flux_x)
+
+    return image
 
 
 def _simulate_random_field(
@@ -42,12 +71,10 @@ def _simulate_random_field(
 
     fluxes = rng.uniform(1000.0, 5000.0, size=n_sources)
     amplitudes = fluxes / (2 * np.pi * sigma**2)
-    yy, xx = np.mgrid[:size, :size]
     image = rng.normal(0.0, noise_std, (size, size))
+    # Use pixel-integrated Gaussian to match the PSF model in optimal extraction
     for x, y, amp in zip(xs, ys, amplitudes):
-        image += amp * np.exp(
-            -((xx - x)**2 + (yy - y)**2) / (2 * sigma**2)
-        )
+        image += _create_pixel_integrated_gaussian(size, x, y, amp, sigma)
 
     obj = Table()
     obj['x'] = np.array(xs, dtype=float)
@@ -204,13 +231,11 @@ class TestOptimalExtraction:
         size = 51
         fwhm = 3.0
         sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
-        y, x = np.mgrid[:size, :size]
         cx = cy = size // 2
         amplitude = 1000.0
 
-        image_clean = amplitude * np.exp(
-            -((x - cx)**2 + (y - cy)**2) / (2 * sigma**2)
-        )
+        # Use pixel-integrated Gaussian to match the PSF model in optimal extraction
+        image_clean = _create_pixel_integrated_gaussian(size, cx, cy, amplitude, sigma)
         image_bad = image_clean.copy()
         mask = np.zeros_like(image_bad, dtype=bool)
         mask[cy-1:cy+2, cx-1:cx+2] = True

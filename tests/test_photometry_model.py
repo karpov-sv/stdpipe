@@ -132,7 +132,7 @@ class TestMatch:
 
         zero_eval = result["zero_fn"](None, None)
         np.testing.assert_allclose(zero_eval, data["zero_point"], atol=1e-6)
-        assert np.shape(zero_eval) == ()
+        assert np.shape(zero_eval) == (1,)
 
         mag_eval = np.array([15.0, 16.0, 17.0])
         zero_eval_mag = result["zero_fn"](None, None, mag=mag_eval)
