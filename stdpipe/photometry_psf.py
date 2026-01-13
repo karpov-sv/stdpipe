@@ -85,16 +85,19 @@ def _build_circular_fit_mask(shape, x_positions, y_positions, radius):
 
 class GradientLocalBackground(photutils.background.LocalBackground):
     """
-    Local background estimator using gradient fitting.
+    Local background estimator using gradient fitting with sigma-clipping.
 
     Inherits from photutils.background.LocalBackground but overrides the estimation
     method to fit polynomial gradients instead of taking mean/median.
 
     Instead of taking mean/median of annulus (assumes flat background),
     fits a polynomial model to the annulus and evaluates at source position.
+    Includes sigma-clipping to reject outliers (contaminating sources).
+
     This dramatically reduces biases with background gradients:
     - Linear gradients: ~20× improvement (19% → <1% error)
     - Quadratic gradients: ~100-400× improvement (-415% → <5% error)
+    - Sigma-clipping provides robustness in crowded fields
 
     Parameters
     ----------
@@ -108,12 +111,19 @@ class GradientLocalBackground(photutils.background.LocalBackground):
         1 = plane (linear gradient, recommended)
         2 = quadratic surface (complex gradients)
         Default is 1.
+    sigma : float, optional
+        Sigma threshold for sigma-clipping outliers. Default is 3.0.
+        Higher values are more permissive, lower values reject more outliers.
+    maxiters : int, optional
+        Maximum number of sigma-clipping iterations. Default is 3.
     """
 
-    def __init__(self, inner_radius, outer_radius, order=1):
+    def __init__(self, inner_radius, outer_radius, order=1, sigma=3.0, maxiters=3):
         # Initialize parent class with dummy bkg_estimator (we'll override __call__)
         super().__init__(inner_radius, outer_radius, bkg_estimator=None)
         self.order = order
+        self.sigma = sigma
+        self.maxiters = maxiters
 
     def __call__(self, data, x, y, mask=None):
         """
@@ -174,39 +184,139 @@ class GradientLocalBackground(photutils.background.LocalBackground):
                 bg_values[i] = np.mean(z_annulus) if len(z_annulus) > 0 else 0.0
                 continue
 
-            # Fit gradient
+            # Sigma-clipping to reject outliers (contaminating sources)
+            # Iteratively fit, compute residuals, reject outliers, refit
+            good_mask = np.ones(len(z_annulus), dtype=bool)
+
+            for iteration in range(self.maxiters):
+                x_good = x_annulus[good_mask]
+                y_good = y_annulus[good_mask]
+                z_good = z_annulus[good_mask]
+
+                if len(z_good) < max(10, (self.order + 1) * (self.order + 2) // 2):
+                    # Too many rejections, stop
+                    break
+
+                # Fit current good points
+                if self.order == 0:
+                    # Constant (mean)
+                    bg_fit = np.mean(z_good)
+                    residuals = z_good - bg_fit
+
+                elif self.order == 1:
+                    # Plane: z = a + b*(x-x0) + c*(y-y0)
+                    dx = x_good - xi
+                    dy = y_good - yi
+                    A = np.column_stack([np.ones_like(x_good), dx, dy])
+
+                    try:
+                        coeffs = np.linalg.lstsq(A, z_good, rcond=None)[0]
+                        residuals = z_good - (coeffs[0] + coeffs[1] * dx + coeffs[2] * dy)
+                    except np.linalg.LinAlgError:
+                        bg_fit = np.mean(z_good)
+                        residuals = z_good - bg_fit
+
+                elif self.order == 2:
+                    # Quadratic: z = a + b*dx + c*dy + d*dx^2 + e*dy^2 + f*dx*dy
+                    dx = x_good - xi
+                    dy = y_good - yi
+                    A = np.column_stack([
+                        np.ones_like(x_good),
+                        dx, dy,
+                        dx**2, dy**2,
+                        dx * dy
+                    ])
+
+                    try:
+                        coeffs = np.linalg.lstsq(A, z_good, rcond=None)[0]
+                        residuals = z_good - (
+                            coeffs[0] + coeffs[1] * dx + coeffs[2] * dy +
+                            coeffs[3] * dx**2 + coeffs[4] * dy**2 + coeffs[5] * dx * dy
+                        )
+                    except np.linalg.LinAlgError:
+                        bg_fit = np.mean(z_good)
+                        residuals = z_good - bg_fit
+                else:
+                    raise ValueError(f"order={self.order} not supported. Use 0, 1, or 2.")
+
+                # Compute sigma from residuals
+                sigma_residuals = np.std(residuals)
+
+                if sigma_residuals == 0:
+                    # Perfect fit or constant values, stop
+                    break
+
+                # Find outliers in the FULL dataset (not just current good points)
+                # Compute residuals for all points using current fit
+                if self.order == 0:
+                    all_residuals = z_annulus[good_mask] - bg_fit
+                elif self.order == 1:
+                    dx_all = x_annulus[good_mask] - xi
+                    dy_all = y_annulus[good_mask] - yi
+                    all_residuals = z_annulus[good_mask] - (coeffs[0] + coeffs[1] * dx_all + coeffs[2] * dy_all)
+                elif self.order == 2:
+                    dx_all = x_annulus[good_mask] - xi
+                    dy_all = y_annulus[good_mask] - yi
+                    all_residuals = z_annulus[good_mask] - (
+                        coeffs[0] + coeffs[1] * dx_all + coeffs[2] * dy_all +
+                        coeffs[3] * dx_all**2 + coeffs[4] * dy_all**2 + coeffs[5] * dx_all * dy_all
+                    )
+
+                # Reject outliers beyond sigma threshold
+                outliers = np.abs(all_residuals) > self.sigma * sigma_residuals
+
+                if not np.any(outliers):
+                    # No more outliers, converged
+                    break
+
+                # Update mask - create new mask relative to original good_mask
+                good_indices = np.where(good_mask)[0]
+                good_mask[good_indices[outliers]] = False
+
+            # Final fit with cleaned data
+            x_final = x_annulus[good_mask]
+            y_final = y_annulus[good_mask]
+            z_final = z_annulus[good_mask]
+
+            if len(z_final) < max(10, (self.order + 1) * (self.order + 2) // 2):
+                # Sigma-clipping rejected too many points, use all data
+                x_final = x_annulus
+                y_final = y_annulus
+                z_final = z_annulus
+
+            # Fit gradient with cleaned data
             if self.order == 0:
                 # Constant (mean)
-                bg_values[i] = np.mean(z_annulus)
+                bg_values[i] = np.mean(z_final)
 
             elif self.order == 1:
                 # Plane: z = a + b*(x-x0) + c*(y-y0)
-                dx = x_annulus - xi
-                dy = y_annulus - yi
-                A = np.column_stack([np.ones_like(x_annulus), dx, dy])
+                dx = x_final - xi
+                dy = y_final - yi
+                A = np.column_stack([np.ones_like(x_final), dx, dy])
 
                 try:
-                    coeffs = np.linalg.lstsq(A, z_annulus, rcond=None)[0]
+                    coeffs = np.linalg.lstsq(A, z_final, rcond=None)[0]
                     bg_values[i] = coeffs[0]  # Value at source position
                 except np.linalg.LinAlgError:
-                    bg_values[i] = np.mean(z_annulus)
+                    bg_values[i] = np.mean(z_final)
 
             elif self.order == 2:
                 # Quadratic: z = a + b*dx + c*dy + d*dx^2 + e*dy^2 + f*dx*dy
-                dx = x_annulus - xi
-                dy = y_annulus - yi
+                dx = x_final - xi
+                dy = y_final - yi
                 A = np.column_stack([
-                    np.ones_like(x_annulus),
+                    np.ones_like(x_final),
                     dx, dy,
                     dx**2, dy**2,
                     dx * dy
                 ])
 
                 try:
-                    coeffs = np.linalg.lstsq(A, z_annulus, rcond=None)[0]
+                    coeffs = np.linalg.lstsq(A, z_final, rcond=None)[0]
                     bg_values[i] = coeffs[0]  # Value at source position
                 except np.linalg.LinAlgError:
-                    bg_values[i] = np.mean(z_annulus)
+                    bg_values[i] = np.mean(z_final)
 
             else:
                 raise ValueError(f"order={self.order} not supported. Use 0, 1, or 2.")
@@ -215,7 +325,8 @@ class GradientLocalBackground(photutils.background.LocalBackground):
 
     def __repr__(self):
         return (f"GradientLocalBackground(inner_radius={self.inner_radius}, "
-                f"outer_radius={self.outer_radius}, order={self.order})")
+                f"outer_radius={self.outer_radius}, order={self.order}, "
+                f"sigma={self.sigma}, maxiters={self.maxiters})")
 
 
 def measure_objects_psf(
