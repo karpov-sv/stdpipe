@@ -27,6 +27,13 @@ import photutils.detection
 # Put these to common namespace
 from .photometry_model import match, make_sn_model, get_detection_limit_sn, format_color_term
 from .photometry_measure import measure_objects
+from .photometry_background import (
+    get_background,
+    get_background_percentile,
+    get_background_morphology,
+    estimate_background_rms_percentile,
+    estimate_background_rms_local,
+)
 
 try:
     import cv2
@@ -1320,18 +1327,3 @@ def get_objects_photutils(
             return obj, None
     else:
         return obj
-
-
-def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kwargs):
-    if method == 'sep':
-        bg = sep.Background(image, mask=mask, bw=size, bh=size, **kwargs)
-
-        back, backrms = bg.back(), bg.rms()
-    else:  # photutils
-        bg = photutils.background.Background2D(image, size, mask=mask, **kwargs)
-        back, backrms = bg.background, bg.background_rms
-
-    if get_rms:
-        return back, backrms
-    else:
-        return back
