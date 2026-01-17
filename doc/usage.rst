@@ -30,7 +30,7 @@ Next, you will need to import the modules from *STDPipe* itself:
 .. code-block:: python
 
    # Load (most of) our sub-modules
-   from stdpipe import astrometry, photometry, catalogs, cutouts, templates, subtraction, plots, psf, pipeline, utils
+   from stdpipe import astrometry, photometry, catalogs, cutouts, templates, subtraction, plots, psf, pipeline, simulation, utils
 
 Now you have everything imported, and may start actual data analysis!
 
@@ -52,6 +52,7 @@ Data processing
    cutouts
    psf
    lcs
+   simulation
    utils
 
 
