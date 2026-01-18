@@ -67,7 +67,132 @@ def tnsResolve(name='AT2023lxx'):
 def resolve(string='M33', verbose=False):
     """
     Resolve the object name (or coordinates string) into proper coordinates on the sky.
-    Uses several different algorithms
+
+    This function attempts multiple resolution methods in order:
+    1. Decimal degrees (RA Dec in degrees)
+    2. Sexagesimal coordinates (hours/degrees with minutes and seconds)
+    3. Simbad name resolution (astronomical objects)
+    4. TNS name resolution (transients)
+    5. Astropy SkyCoord.from_name() (fallback)
+
+    :param string: Input string to resolve (object name or coordinates)
+    :param verbose: Enable verbose output. Can be True/False or a print-like function.
+    :returns: astropy.coordinates.SkyCoord object if resolved, None otherwise
+
+    **Supported Coordinate Formats:**
+
+    1. **Decimal degrees** (RA and Dec in degrees, space or comma separated):
+       - ``"123.456 45.678"`` → RA=123.456°, Dec=+45.678°
+       - ``"123.456, 45.678"`` → RA=123.456°, Dec=+45.678° (comma-separated)
+       - ``"123.456 -45.678"`` → RA=123.456°, Dec=-45.678°
+       - ``"10.68, 41.27"`` → RA=10.68°, Dec=+41.27° (M31)
+
+    2. **Sexagesimal coordinates** (space-separated or colon-separated):
+       - Space format: ``"HH MM SS.ss ±DD MM SS.ss"``
+       - Colon format: ``"HH:MM:SS.ss ±DD:MM:SS.ss"``
+       - Comma can separate RA from Dec: ``"HH MM SS.ss, ±DD MM SS.ss"``
+
+       Examples:
+       - ``"12 34 56.7 +45 12 34.5"`` → RA=12h 34m 56.7s, Dec=+45° 12' 34.5"
+       - ``"12 34 56.7, +45 12 34.5"`` → Same (comma between RA and Dec)
+       - ``"12:34:56.7 +45:12:34.5"`` → RA=12h 34m 56.7s, Dec=+45° 12' 34.5"
+       - ``"12:34:56.7, +45:12:34.5"`` → Same (comma between RA and Dec)
+       - ``"12 34 56 45 12 34"`` → Dec assumed positive if no sign
+       - ``"00 42 44.3, +41 16 09"`` → M31 coordinates (comma-separated)
+
+       **Note:** RA is interpreted as **hours** (multiplied by 15 to convert to degrees),
+       Dec is interpreted as **degrees**. This is the standard astronomical convention.
+
+    3. **Object names** (resolved via Simbad, TNS, or Astropy):
+       - Messier objects: ``"M31"``, ``"M 31"``, ``"m31"``
+       - NGC/IC objects: ``"NGC1234"``, ``"IC 5146"``
+       - Named stars: ``"Betelgeuse"``, ``"Vega"``
+       - Transients: ``"AT2023lxx"``, ``"AT 2023lxx"``, ``"SN2023ixf"``
+       - Coordinates as names: ``"12h34m56s +45d12m34s"`` (via Astropy)
+
+    **Resolution Priority:**
+
+    The function tries methods in order and returns the first successful match:
+    1. Decimal degrees parsing (fastest, no network)
+    2. Sexagesimal parsing (fast, no network)
+    3. Simbad query (network required)
+    4. TNS query via Fink API (network required, for transients)
+    5. Astropy SkyCoord.from_name() (network required, CDS Sesame)
+
+    **Examples:**
+
+    >>> from stdpipe.resolve import resolve
+    >>>
+    >>> # Decimal degrees
+    >>> target = resolve("10.68 41.27")
+    >>> print(target.ra.deg, target.dec.deg)
+    10.68 41.27
+    >>>
+    >>> # Decimal degrees (comma-separated)
+    >>> target = resolve("10.68, 41.27")
+    >>> print(target.ra.deg, target.dec.deg)
+    10.68 41.27
+    >>>
+    >>> # Sexagesimal (space-separated)
+    >>> target = resolve("12 34 56 +45 12 34")
+    >>> print(f"{target.ra.deg:.2f} {target.dec.deg:.2f}")
+    188.73 45.21
+    >>>
+    >>> # Sexagesimal (comma between RA and Dec)
+    >>> target = resolve("12 34 56, +45 12 34")
+    >>> print(f"{target.ra.deg:.2f} {target.dec.deg:.2f}")
+    188.73 45.21
+    >>>
+    >>> # Sexagesimal (colon-separated)
+    >>> target = resolve("00:42:44.3 +41:16:09")
+    >>> print(f"{target.ra.deg:.2f} {target.dec.deg:.2f}")
+    10.68 41.27
+    >>>
+    >>> # Sexagesimal (colon-separated with comma)
+    >>> target = resolve("00:42:44.3, +41:16:09")
+    >>> print(f"{target.ra.deg:.2f} {target.dec.deg:.2f}")
+    10.68 41.27
+    >>>
+    >>> # Object name (requires network)
+    >>> target = resolve("M31", verbose=True)
+    Resolved by Simbad as M 31
+    RA = 10.6847 deg, Dec = 41.2688 deg
+    >>>
+    >>> # Transient name (requires network)
+    >>> target = resolve("AT2023lxx", verbose=True)
+    Resolved by TNS as AT 2023lxx
+    RA = 123.4560 deg, Dec = -45.6780 deg
+    >>>
+    >>> # Failed resolution returns None
+    >>> target = resolve("InvalidObject123")
+    >>> print(target)
+    None
+
+    **Verbose Mode:**
+
+    When ``verbose=True``, prints resolution method and result:
+
+    >>> target = resolve("123.456 45.678", verbose=True)
+    Resolved as two values in degrees
+    RA = 123.4560 deg, Dec = 45.6780 deg
+
+    You can also provide a custom logging function:
+
+    >>> def my_log(*args):
+    ...     print("[RESOLVER]", *args)
+    >>> target = resolve("M31", verbose=my_log)
+    [RESOLVER] Resolved by Simbad as M 31
+    [RESOLVER] RA = 10.6847 deg, Dec = 41.2688 deg
+
+    **Network Requirements:**
+
+    - Decimal/sexagesimal parsing: No network required
+    - Simbad resolution: Queries http://cdsweb.u-strasbg.fr
+    - TNS resolution: Queries https://api.ztf.fink-portal.org
+    - Astropy fallback: Queries CDS Sesame service
+
+    If network is unavailable, only coordinate parsing will work. Object name
+    resolution will fail silently and return None.
     """
 
     # Simple wrapper around print for logging in verbose mode only
@@ -80,7 +205,7 @@ def resolve(string='M33', verbose=False):
     target = None
 
     if target is None:
-        m = re.search("^\s*(\d+\.?\d*)\s+([+-]?\d+\.?\d*)\s*$", string)
+        m = re.search(r"^\s*(\d+\.?\d*)\s*[,\s]+\s*([+-]?\d+\.?\d*)\s*$", string)
         if m:
             log("Resolved as two values in degrees")
 
@@ -91,10 +216,10 @@ def resolve(string='M33', verbose=False):
 
     if target is None:
         m = re.search(
-            "^\s*(\d{1,2})\s+(\d{1,2})\s+(\d{1,2}\.?\d*)\s+([+-])?\s*(\d{1,3})\s+(\d{1,2})\s+(\d{1,2}\.?\d*)\s*$",
+            r"^\s*(\d{1,2})\s+(\d{1,2})\s+(\d{1,2}\.?\d*)\s*[,\s]+\s*([+-])?\s*(\d{1,3})\s+(\d{1,2})\s+(\d{1,2}\.?\d*)\s*$",
             string,
         ) or re.search(
-            "^\s*(\d{1,2})\:(\d{1,2})\:(\d{1,2}\.?\d*)\s+([+-])?\s*(\d{1,3})\:(\d{1,2})\:(\d{1,2}\.?\d*)\s*$",
+            r"^\s*(\d{1,2})\:(\d{1,2})\:(\d{1,2}\.?\d*)\s*[,\s]+\s*([+-])?\s*(\d{1,3})\:(\d{1,2})\:(\d{1,2}\.?\d*)\s*$",
             string,
         )
         if m:
