@@ -1198,3 +1198,263 @@ def simulate_image(
     log("Simulation complete")
 
     return result
+
+
+def generate_realbogus_training_data(
+    n_images=100,
+    image_size=(2048, 2048),
+    n_stars_range=(50, 200),
+    n_galaxies_range=(10, 50),
+    fwhm_range=(1.5, 8.0),
+    background_range=(100, 10000),
+    n_cosmic_rays_range=(5, 20),
+    n_hot_pixels_range=(5, 30),
+    n_satellites_range=(0, 2),
+    detection_threshold=3.0,
+    match_radius=3.0,
+    cutout_radius=15,
+    augment=True,
+    verbose=False,
+):
+    """
+    Generate labeled training data for real-bogus classifier.
+
+    This function creates a dataset of labeled cutouts by:
+    1. Simulating images with known source positions
+    2. Running object detection
+    3. Matching detections to truth catalog
+    4. Labeling matched detections as 'real', others as 'bogus'
+    5. Extracting and preprocessing cutouts
+    6. Optionally applying data augmentation
+
+    :param n_images: Number of simulated images to generate
+    :param image_size: (width, height) of simulated images
+    :param n_stars_range: (min, max) number of stars per image
+    :param n_galaxies_range: (min, max) number of galaxies per image
+    :param fwhm_range: (min, max) FWHM in pixels (varied per image)
+    :param background_range: (min, max) background level in ADU
+    :param n_cosmic_rays_range: (min, max) cosmic rays per image
+    :param n_hot_pixels_range: (min, max) hot pixels per image
+    :param n_satellites_range: (min, max) satellite trails per image
+    :param detection_threshold: Detection threshold in sigma
+    :param match_radius: Matching radius in pixels for truth matching
+    :param cutout_radius: Cutout radius in pixels
+    :param augment: Apply data augmentation (rotations, flips)
+    :param verbose: Print progress
+    :returns: Dictionary with 'X' (cutouts), 'y' (labels), 'fwhm' (FWHM values), 'metadata'
+
+    """
+    from . import photometry
+    from . import realbogus
+
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
+
+    log(f"Generating training data from {n_images} simulated images...")
+
+    width, height = image_size
+
+    # Containers for training data
+    all_cutouts = []
+    all_labels = []
+    all_fwhms = []
+    all_metadata = []
+
+    for img_idx in range(n_images):
+        # Randomize parameters for diversity
+        fwhm = np.random.uniform(*fwhm_range)
+        background = 10 ** np.random.uniform(np.log10(background_range[0]), np.log10(background_range[1]))
+        n_stars = np.random.randint(*n_stars_range)
+        n_galaxies = np.random.randint(*n_galaxies_range)
+        n_cosmic_rays = np.random.randint(*n_cosmic_rays_range)
+        n_hot_pixels = np.random.randint(*n_hot_pixels_range)
+        n_satellites = np.random.randint(*n_satellites_range) if n_satellites_range[1] > 0 else 0
+
+        log(f"Image {img_idx+1}/{n_images}: FWHM={fwhm:.2f}, BG={background:.1f}, "
+            f"stars={n_stars}, gal={n_galaxies}, CR={n_cosmic_rays}, hot={n_hot_pixels}")
+
+        # Simulate image
+        sim = simulate_image(
+            width=width,
+            height=height,
+            n_stars=n_stars,
+            star_fwhm=fwhm,
+            n_galaxies=n_galaxies,
+            n_cosmic_rays=n_cosmic_rays,
+            n_hot_pixels=n_hot_pixels,
+            n_satellites=n_satellites,
+            background=background,
+            return_catalog=True,
+            verbose=False,
+        )
+
+        image = sim['image']
+        truth_catalog = sim['catalog']
+
+        # Detect objects
+        try:
+            detected = photometry.get_objects_sep(
+                image,
+                thresh=detection_threshold,
+                aper=2.5 * fwhm,
+                minarea=5,
+                verbose=False,
+            )
+        except Exception as e:
+            log(f"Detection failed for image {img_idx+1}: {e}")
+            continue
+
+        if len(detected) == 0:
+            log(f"No detections in image {img_idx+1}, skipping")
+            continue
+
+        # Match detections to truth catalog
+        # Real sources: stars and galaxies (type='star' or type='galaxy')
+        # Artifacts: cosmic rays, hot pixels, satellites (type='cosmic_ray', etc.)
+
+        truth_real = truth_catalog[
+            (truth_catalog['type'] == 'star') | (truth_catalog['type'] == 'galaxy')
+        ]
+
+        # Simple distance-based matching
+        matched_indices = np.full(len(detected), -1, dtype=int)
+
+        for i, det in enumerate(detected):
+            dx = truth_real['x'] - det['x']
+            dy = truth_real['y'] - det['y']
+            dist = np.sqrt(dx**2 + dy**2)
+
+            if len(dist) > 0 and np.min(dist) < match_radius:
+                matched_indices[i] = 1  # Real source
+            else:
+                matched_indices[i] = 0  # Bogus (artifact or spurious)
+
+        # Count matches
+        n_real = np.sum(matched_indices == 1)
+        n_bogus = np.sum(matched_indices == 0)
+
+        log(f"  Matched: {n_real} real, {n_bogus} bogus from {len(detected)} detections")
+
+        if n_real == 0 and n_bogus == 0:
+            continue
+
+        # Extract cutouts
+        try:
+            cutouts, fwhm_features, valid_indices = realbogus.extract_cutouts(
+                detected,
+                image,
+                bg=background,
+                radius=cutout_radius,
+                fwhm=fwhm,
+                verbose=False,
+            )
+        except Exception as e:
+            log(f"Cutout extraction failed for image {img_idx+1}: {e}")
+            continue
+
+        # Get labels for valid cutouts
+        labels = matched_indices[valid_indices]
+
+        # Store data
+        all_cutouts.append(cutouts)
+        all_labels.append(labels)
+        all_fwhms.append(fwhm_features)
+
+        # Metadata for each cutout
+        metadata = {
+            'image_idx': np.full(len(cutouts), img_idx),
+            'fwhm': np.full(len(cutouts), fwhm),
+            'background': np.full(len(cutouts), background),
+        }
+        all_metadata.append(metadata)
+
+    # Concatenate all data
+    if len(all_cutouts) == 0:
+        raise ValueError("No valid training data generated")
+
+    X = np.concatenate(all_cutouts, axis=0)
+    y = np.concatenate(all_labels, axis=0)
+    fwhm_feat = np.concatenate(all_fwhms, axis=0)
+
+    log(f"Total samples: {len(X)} ({np.sum(y)} real, {np.sum(~y)} bogus)")
+
+    # Apply data augmentation
+    if augment:
+        log("Applying data augmentation...")
+        X_aug, y_aug, fwhm_aug = _augment_training_data(X, y, fwhm_feat, verbose=verbose)
+        log(f"After augmentation: {len(X_aug)} samples")
+    else:
+        X_aug = X
+        y_aug = y
+        fwhm_aug = fwhm_feat
+
+    # Convert labels to binary (ensure proper dtype)
+    y_aug = y_aug.astype(np.float32)
+
+    result = {
+        'X': X_aug,
+        'y': y_aug,
+        'fwhm': fwhm_aug,
+        'metadata': all_metadata,
+    }
+
+    return result
+
+
+def _augment_training_data(X, y, fwhm, augment_factor=4, verbose=False):
+    """
+    Apply data augmentation to training cutouts.
+
+    Augmentation strategies:
+    - Rotations: 0°, 90°, 180°, 270°
+    - Flips: horizontal, vertical
+    - Combined: rotations + flips (~8-16× augmentation)
+
+    :param X: Input cutouts (N, H, W, C)
+    :param y: Labels (N,)
+    :param fwhm: FWHM features (N, 1)
+    :param augment_factor: Target augmentation factor
+    :param verbose: Print progress
+    :returns: (X_aug, y_aug, fwhm_aug) with augmented data
+    """
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
+
+    n_samples = len(X)
+    X_list = [X]
+    y_list = [y]
+    fwhm_list = [fwhm]
+
+    # Rotation augmentation (90°, 180°, 270°)
+    for angle in [90, 180, 270]:
+        X_rot = np.rot90(X, k=angle // 90, axes=(1, 2))
+        X_list.append(X_rot)
+        y_list.append(y)
+        fwhm_list.append(fwhm)
+
+    # Flip augmentation
+    if augment_factor >= 8:
+        # Horizontal flip
+        X_flip_h = np.flip(X, axis=2)
+        X_list.append(X_flip_h)
+        y_list.append(y)
+        fwhm_list.append(fwhm)
+
+        # Vertical flip
+        X_flip_v = np.flip(X, axis=1)
+        X_list.append(X_flip_v)
+        y_list.append(y)
+        fwhm_list.append(fwhm)
+
+        # Both flips
+        X_flip_both = np.flip(np.flip(X, axis=1), axis=2)
+        X_list.append(X_flip_both)
+        y_list.append(y)
+        fwhm_list.append(fwhm)
+
+    # Concatenate
+    X_aug = np.concatenate(X_list, axis=0)
+    y_aug = np.concatenate(y_list, axis=0)
+    fwhm_aug = np.concatenate(fwhm_list, axis=0)
+
+    log(f"Augmentation: {n_samples} → {len(X_aug)} samples ({len(X_aug)/n_samples:.1f}× increase)")
+
+    return X_aug, y_aug, fwhm_aug

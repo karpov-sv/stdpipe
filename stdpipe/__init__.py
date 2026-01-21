@@ -7,3 +7,10 @@ pipelines, as well as for interactive data analysis.
 """
 
 __version__ = "0.3.0"
+
+# Optional real-bogus classifier (requires TensorFlow)
+try:
+    from . import realbogus
+except ImportError:
+    # TensorFlow not installed, realbogus module not available
+    realbogus = None
