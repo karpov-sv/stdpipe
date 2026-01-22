@@ -728,6 +728,7 @@ def train_realbogus_classifier(
     n_simulated=1000,
     image_size=(2048, 2048),
     fwhm_range=(1.5, 8.0),
+    real_source_types=['star'],
     validation_split=0.15,
     model=None,
     model_file=None,
@@ -751,6 +752,10 @@ def train_realbogus_classifier(
         Size of simulated images (width, height). Default: (2048, 2048)
     fwhm_range : tuple, optional
         Range of FWHM values for simulated images. Default: (1.5, 8.0)
+    real_source_types : list, optional
+        List of source types to consider 'real' (if training_data=None).
+        Default: ['star'] treats only stars as real and galaxies as bogus.
+        Use ['star', 'galaxy'] to train a classifier that treats both as real.
     validation_split : float, optional
         Fraction of data for validation. Default: 0.15
     model : keras.Model, optional
@@ -779,9 +784,16 @@ def train_realbogus_classifier(
     Examples
     --------
     >>> from stdpipe import realbogus
-    >>> # Train on simulated data
+    >>> # Train on simulated data (stars and galaxies as real)
     >>> model, history = realbogus.train_realbogus_classifier(
     ...     n_simulated=500,
+    ...     epochs=30,
+    ...     verbose=True
+    ... )
+    >>> # Train stars-only classifier (galaxies as bogus)
+    >>> model, history = realbogus.train_realbogus_classifier(
+    ...     n_simulated=500,
+    ...     real_source_types=['star'],
     ...     epochs=30,
     ...     verbose=True
     ... )
@@ -805,6 +817,7 @@ def train_realbogus_classifier(
             n_images=n_simulated,
             image_size=image_size,
             fwhm_range=fwhm_range,
+            real_source_types=real_source_types,
             augment=True,
             verbose=verbose,
         )
@@ -820,7 +833,7 @@ def train_realbogus_classifier(
         else:
             X, y, fwhm_features = training_data
 
-    log(f"Training data: {len(X)} samples, {np.sum(y)} real, {np.sum(~y)} bogus")
+    log(f"Training data: {len(X)} samples, {np.sum(y)} real, {len(y) - np.sum(y)} bogus")
 
     # Create model if not provided
     if model is None:

@@ -1214,6 +1214,7 @@ def generate_realbogus_training_data(
     match_radius=3.0,
     cutout_radius=15,
     augment=True,
+    real_source_types=['star'],
     verbose=False,
 ):
     """
@@ -1240,6 +1241,9 @@ def generate_realbogus_training_data(
     :param match_radius: Matching radius in pixels for truth matching
     :param cutout_radius: Cutout radius in pixels
     :param augment: Apply data augmentation (rotations, flips)
+    :param real_source_types: List of source types to consider 'real'.
+        Default: ['star'] treats only stars as real and galaxies as bogus.
+        Use ['star', 'galaxy'] to treat both stars and galaxies as real sources.
     :param verbose: Print progress
     :returns: Dictionary with 'X' (cutouts), 'y' (labels), 'fwhm' (FWHM values), 'metadata'
 
@@ -1308,12 +1312,15 @@ def generate_realbogus_training_data(
             continue
 
         # Match detections to truth catalog
-        # Real sources: stars and galaxies (type='star' or type='galaxy')
+        # Real sources: determined by real_source_types parameter
         # Artifacts: cosmic rays, hot pixels, satellites (type='cosmic_ray', etc.)
 
-        truth_real = truth_catalog[
-            (truth_catalog['type'] == 'star') | (truth_catalog['type'] == 'galaxy')
-        ]
+        # Build filter for real sources based on real_source_types
+        real_filter = np.zeros(len(truth_catalog), dtype=bool)
+        for source_type in real_source_types:
+            real_filter |= (truth_catalog['type'] == source_type)
+
+        truth_real = truth_catalog[real_filter]
 
         # Simple distance-based matching
         matched_indices = np.full(len(detected), -1, dtype=int)
@@ -1375,7 +1382,7 @@ def generate_realbogus_training_data(
     y = np.concatenate(all_labels, axis=0)
     fwhm_feat = np.concatenate(all_fwhms, axis=0)
 
-    log(f"Total samples: {len(X)} ({np.sum(y)} real, {np.sum(~y)} bogus)")
+    log(f"Total samples: {len(X)} ({np.sum(y)} real, {len(y) - np.sum(y)} bogus)")
 
     # Apply data augmentation
     if augment:

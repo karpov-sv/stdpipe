@@ -50,7 +50,7 @@ dependencies = [
     "sep",
     "astroscrappy",
     "photutils>=2.2",
-    "scikit-image",
+    "scikit-image>=0.22.0",  # Requires >=0.22.0 for NumPy 2.0 compatibility
     "statsmodels",
     "tqdm",
     "regions",
@@ -89,9 +89,14 @@ adaptive = [
     "powerbin",
 ]
 
+# Machine learning for real-bogus classifier
+ml = [
+    "tensorflow>=2.10,<3.0",
+]
+
 # All optional dependencies
 all = [
-    "stdpipe[dev,docs,adaptive]",
+    "stdpipe[dev,docs,adaptive,ml]",
 ]
 
 [project.urls]

@@ -40,19 +40,21 @@ def example_1_train_classifier():
     """
     Example 1: Train a real-bogus classifier on simulated data.
 
-    This creates a CNN model and trains it on simulated images containing
-    both real sources (stars, galaxies) and artifacts (cosmic rays, hot pixels).
+    This creates a CNN model and trains it on simulated images. By default,
+    only stars are treated as real sources - galaxies and artifacts are bogus.
     """
     print("=" * 70)
-    print("Example 1: Training Real-Bogus Classifier")
+    print("Example 1: Training Real-Bogus Classifier (Stars-Only Default)")
     print("=" * 70)
 
     # Generate training data from simulated images
     print("\nGenerating training data from simulated images...")
     print("(This may take a few minutes for realistic dataset sizes)")
+    print("Default: Stars-only mode (galaxies treated as bogus)")
 
     # For this example, use small dataset (fast training)
     # For production, increase n_simulated to 500-1000
+    # By default, only stars are real - galaxies are treated as bogus
     model, history = realbogus.train_realbogus_classifier(
         n_simulated=20,  # Number of simulated images (increase for better model)
         image_size=(512, 512),  # Size of simulated images
@@ -317,6 +319,200 @@ def example_5_custom_training_data():
     return model
 
 
+def example_6_stars_only_classifier():
+    """
+    Example 6: Stars-only classifier (DEFAULT BEHAVIOR).
+
+    This demonstrates the default behavior where only stars are treated as
+    real sources and galaxies are treated as bogus/artifacts. This is the
+    standard mode for transient detection, variable star surveys, and astrometry.
+    """
+    print("\n" + "=" * 70)
+    print("Example 6: Stars-Only Classifier (DEFAULT BEHAVIOR)")
+    print("=" * 70)
+
+    print("\nGenerating training data with ONLY STARS as real sources...")
+    print("Galaxies will be treated as bogus/artifacts (default behavior)")
+
+    # Generate training data treating only stars as real
+    data = simulation.generate_realbogus_training_data(
+        n_images=15,
+        image_size=(512, 512),
+        n_stars_range=(30, 60),
+        n_galaxies_range=(10, 25),  # Include galaxies but label as bogus
+        fwhm_range=(2.0, 5.0),
+        n_cosmic_rays_range=(8, 20),
+        n_hot_pixels_range=(10, 30),
+        real_source_types=['star'],  # Only stars are "real"
+        augment=True,
+        verbose=True
+    )
+
+    print(f"\nGenerated {len(data['X'])} training samples")
+    print(f"  Real sources (stars only): {np.sum(data['y'])}")
+    print(f"  Bogus (galaxies + artifacts): {len(data['y']) - np.sum(data['y'])}")
+
+    # Train model on stars-only data
+    print("\nTraining stars-only classifier...")
+    model, history = realbogus.train_realbogus_classifier(
+        training_data=data,
+        epochs=10,
+        batch_size=64,
+        model_file='realbogus_stars_only_model.h5',
+        verbose=True
+    )
+
+    print("\nStars-only model saved to: realbogus_stars_only_model.h5")
+    print("\nUse cases for this model:")
+    print("  - Transient detection (reject stationary galaxies)")
+    print("  - Variable star surveys (focus on point sources)")
+    print("  - Astrometry (reject extended sources)")
+    print("  - Crowded field photometry (prioritize stars)")
+
+    # Test the model on a new image
+    print("\n" + "-" * 70)
+    print("Testing stars-only classifier on simulated image...")
+
+    # Simulate test image with both stars and galaxies
+    sim = simulation.simulate_image(
+        width=800,
+        height=800,
+        n_stars=40,
+        star_fwhm=3.5,
+        n_galaxies=20,  # Add galaxies to test rejection
+        n_cosmic_rays=10,
+        background=1000.0,
+        verbose=False
+    )
+
+    truth = sim['catalog']
+    n_stars_truth = len(truth[truth['type'] == 'star'])
+    n_galaxies_truth = len(truth[truth['type'] == 'galaxy'])
+
+    print(f"\nTest image contains:")
+    print(f"  Stars: {n_stars_truth}")
+    print(f"  Galaxies: {n_galaxies_truth}")
+    print(f"  Artifacts: {len(truth) - n_stars_truth - n_galaxies_truth}")
+
+    # Detect all objects
+    obj = photometry.get_objects_sep(sim['image'], thresh=3.0, verbose=False)
+    print(f"\nDetected {len(obj)} total objects")
+
+    # Classify with stars-only model
+    obj_stars = realbogus.classify_realbogus(
+        obj,
+        sim['image'],
+        model=model,
+        threshold=0.5,
+        flag_bogus=True,
+        verbose=False
+    )
+
+    print(f"\nAfter classification: {len(obj_stars)} objects retained")
+    print(f"Rejected: {len(obj) - len(obj_stars)} objects")
+    print(f"  (Expected to reject ~{n_galaxies_truth} galaxies + artifacts)")
+
+    print("\n" + "=" * 70)
+    print("Stars-only classifier demonstration complete!")
+    print("=" * 70)
+
+    return model
+
+
+def example_7_include_galaxies_classifier():
+    """
+    Example 7: Include galaxies as real sources (OPT-IN BEHAVIOR).
+
+    This demonstrates how to train a classifier that treats BOTH stars and
+    galaxies as real sources. This is useful for galaxy surveys or general-purpose
+    detection where you want to keep all astronomical sources.
+    """
+    print("\n" + "=" * 70)
+    print("Example 7: Full Classifier (Stars + Galaxies as Real)")
+    print("=" * 70)
+
+    print("\nGenerating training data with BOTH stars and galaxies as real...")
+    print("(This requires explicit opt-in via real_source_types=['star', 'galaxy'])")
+
+    # Generate training data treating both stars and galaxies as real
+    data = simulation.generate_realbogus_training_data(
+        n_images=15,
+        image_size=(512, 512),
+        n_stars_range=(30, 60),
+        n_galaxies_range=(10, 25),
+        fwhm_range=(2.0, 5.0),
+        n_cosmic_rays_range=(8, 20),
+        n_hot_pixels_range=(10, 30),
+        real_source_types=['star', 'galaxy'],  # EXPLICIT OPT-IN for galaxies
+        augment=True,
+        verbose=True
+    )
+
+    print(f"\nGenerated {len(data['X'])} training samples")
+    print(f"  Real sources (stars + galaxies): {np.sum(data['y'])}")
+    print(f"  Bogus (artifacts only): {len(data['y']) - np.sum(data['y'])}")
+
+    # Train model on full data
+    print("\nTraining full classifier (stars + galaxies)...")
+    model, history = realbogus.train_realbogus_classifier(
+        training_data=data,
+        epochs=10,
+        batch_size=64,
+        model_file='realbogus_full_model.h5',
+        verbose=True
+    )
+
+    print("\nFull model saved to: realbogus_full_model.h5")
+    print("\nUse cases for this model:")
+    print("  - Galaxy surveys (keep all extended sources)")
+    print("  - General-purpose detection (all astronomical objects)")
+    print("  - Science requiring both stellar and galactic sources")
+
+    # Test the model on a new image
+    print("\n" + "-" * 70)
+    print("Testing full classifier on simulated image...")
+
+    # Simulate test image with both stars and galaxies
+    sim = simulation.simulate_image(
+        width=800,
+        height=800,
+        n_stars=40,
+        star_fwhm=3.5,
+        n_galaxies=20,
+        n_cosmic_rays=10,
+        background=1000.0,
+        verbose=False
+    )
+
+    truth = sim['catalog']
+    n_real_truth = len(truth[truth['type'].isin(['star', 'galaxy'])])
+
+    # Detect objects
+    from stdpipe import photometry
+    obj = photometry.get_objects_sep(sim['image'], thresh=3.0, verbose=False)
+    print(f"Detected {len(obj)} objects")
+
+    # Classify with full model
+    obj_real = realbogus.classify_realbogus(
+        obj,
+        sim['image'],
+        model=model,
+        threshold=0.5,
+        flag_bogus=True,
+        verbose=False
+    )
+
+    print(f"\nAfter classification: {len(obj_real)} objects retained")
+    print(f"Rejected: {len(obj) - len(obj_real)} objects")
+    print(f"  (Expected to keep ~{n_real_truth} stars + galaxies)")
+
+    print("\n" + "=" * 70)
+    print("Full classifier demonstration complete!")
+    print("=" * 70)
+
+    return model
+
+
 def visualize_results(results):
     """
     Visualize classification results.
@@ -400,6 +596,14 @@ def main():
     print("\n\nRunning Example 5: Custom training...")
     example_5_custom_training_data()
 
+    # Example 6: Stars-only classifier (default)
+    print("\n\nRunning Example 6: Stars-only classifier (default)...")
+    example_6_stars_only_classifier()
+
+    # Example 7: Full classifier (stars + galaxies)
+    print("\n\nRunning Example 7: Full classifier (opt-in)...")
+    example_7_include_galaxies_classifier()
+
     # Visualize results
     print("\n\nGenerating visualization...")
     visualize_results(results)
@@ -412,6 +616,11 @@ def main():
     print("  2. Adjust the threshold based on your science case")
     print("  3. Fine-tune the model with real labeled data if available")
     print("  4. Integrate into your pipeline with classify_realbogus()")
+    print("\nDefault behavior (stars-only):")
+    print("  - Galaxies are treated as bogus by default")
+    print("  - Use real_source_types=['star'] (or omit, it's the default)")
+    print("\nTo include galaxies as real sources:")
+    print("  - Use real_source_types=['star', 'galaxy'] (opt-in)")
 
 
 if __name__ == '__main__':

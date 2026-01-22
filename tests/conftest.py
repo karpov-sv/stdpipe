@@ -300,7 +300,7 @@ def pytest_collection_modifyitems(config, items):
     for item in items:
         # Auto-skip tests requiring external tools if not available
         if "requires_sextractor" in item.keywords:
-            if not shutil.which('sex') and not shutil.which('sextractor'):
+            if not shutil.which('sex') and not shutil.which('sextractor') and not shutil.which('source-extractor'):
                 item.add_marker(pytest.mark.skip(reason="SExtractor not available"))
 
         if "requires_scamp" in item.keywords:
@@ -375,3 +375,114 @@ def initialize_pyraf_once():
     except Exception:
         # If initialization fails, tests will be skipped anyway
         pass
+
+
+# ============================================================================
+# Real-Bogus Classifier Fixtures (requires TensorFlow)
+# ============================================================================
+
+@pytest.fixture(scope='session')
+def realbogus_available():
+    """Check if real-bogus classifier is available."""
+    try:
+        from stdpipe import realbogus
+        return realbogus.HAS_TENSORFLOW
+    except ImportError:
+        return False
+
+
+@pytest.fixture
+def realbogus_simulated_image():
+    """Create simulated image with stars and artifacts for real-bogus testing."""
+    from stdpipe import simulation
+
+    sim = simulation.simulate_image(
+        width=512,
+        height=512,
+        n_stars=20,
+        star_fwhm=3.0,
+        n_galaxies=5,
+        n_cosmic_rays=8,
+        n_hot_pixels=12,
+        n_satellites=1,
+        background=1000.0,
+        return_catalog=True,
+        verbose=False
+    )
+
+    return sim
+
+
+@pytest.fixture
+def realbogus_detected_objects(realbogus_simulated_image):
+    """Detect objects in simulated image for real-bogus testing."""
+    from stdpipe import photometry
+
+    sim = realbogus_simulated_image
+
+    obj = photometry.get_objects_sep(
+        sim['image'],
+        thresh=3.0,
+        aper=7.5,
+        verbose=False
+    )
+
+    return {
+        'image': sim['image'],
+        'catalog': sim['catalog'],
+        'detected': obj,
+        'background': sim['background']
+    }
+
+
+@pytest.fixture(scope='session')
+def realbogus_training_data_small():
+    """Generate small training dataset for testing (session-scoped for speed)."""
+    try:
+        from stdpipe import simulation
+
+        data = simulation.generate_realbogus_training_data(
+            n_images=3,
+            image_size=(256, 256),
+            n_stars_range=(10, 30),
+            n_galaxies_range=(5, 15),
+            fwhm_range=(2.0, 5.0),
+            augment=False,
+            verbose=False
+        )
+
+        return data
+
+    except Exception:
+        # Return None if generation fails (e.g., TensorFlow not available)
+        return None
+
+
+@pytest.fixture(scope='session')
+def realbogus_minimal_model(realbogus_training_data_small):
+    """Create minimally trained model for testing (session-scoped for speed)."""
+    try:
+        from stdpipe import realbogus
+
+        if not realbogus.HAS_TENSORFLOW:
+            return None
+
+        if realbogus_training_data_small is None:
+            return None
+
+        # Create model
+        model = realbogus.create_realbogus_model()
+
+        # Train for just 1 epoch (minimal training for testing)
+        model.fit(
+            [realbogus_training_data_small['X'], realbogus_training_data_small['fwhm']],
+            realbogus_training_data_small['y'],
+            epochs=1,
+            batch_size=32,
+            verbose=0
+        )
+
+        return model
+
+    except Exception:
+        return None
