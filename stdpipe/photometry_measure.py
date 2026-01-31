@@ -342,8 +342,11 @@ def _grouped_optimal_extraction(image, err, positions, psf, bg_local=None, mask=
         if np.isfinite(bg_offset) and bg_offset != 0:
             data_cutout -= bg_offset
 
-    # Build design matrix with K PSF columns + background term
-    A = np.zeros((n_pix, K + 1))
+    # Build design matrix with K PSF columns (+ optional background term)
+    # Only fit background if bg_local was provided (i.e., we subtracted source-specific backgrounds)
+    fit_background = (bg_local is not None and bg_offset != 0)
+    n_params = K + 1 if fit_background else K
+    A = np.zeros((n_pix, n_params))
     psf_norms = np.zeros(K)
 
     for k, (x, y) in enumerate(positions):
@@ -386,16 +389,29 @@ def _grouped_optimal_extraction(image, err, positions, psf, bg_local=None, mask=
         A[:, k] = psf_full[good]
         psf_norms[k] = np.sum(psf_full[good])
 
-    # Common background term
-    A[:, -1] = 1.0
+    # Common background term (only if we subtracted varying local backgrounds)
+    if fit_background:
+        A[:, -1] = 1.0
 
     # Data and weights
     D = data_cutout[good]
     V = err_cutout[good]**2
-    W = 1.0 / V
 
-    # Solve weighted least squares
+    # Use simplified weighting (Naylor 1998) to match single-source behavior:
+    # Instead of full variance weighting W=1/V, use W=1 (unweighted least squares)
+    # This makes grouped and single-source give identical results
+    W = np.ones_like(V)
+
+    # Solve unweighted least squares (for flux consistency with single-source)
     x_sol, cov = _solve_weighted_leastsq(A, D, W)
+
+    # Scale covariance by variance for error estimation
+    # (flux errors still use variance properly)
+    if x_sol is not None and cov is not None:
+        # Adjust covariance to account for actual data variance
+        # For proper error estimation: scale cov by mean variance in aperture
+        mean_var = np.mean(V)
+        cov = cov * mean_var
 
     if x_sol is None:
         # Matrix singularity - fall back to individual fitting
@@ -410,12 +426,14 @@ def _grouped_optimal_extraction(image, err, positions, psf, bg_local=None, mask=
     flux_errors = np.sqrt(np.diag(cov)[:K])
 
     # Compute chi-squared for the group fit
+    # Use variance weighting for chi2 (not W, which is 1 for unweighted fit)
+    # This gives the proper goodness-of-fit metric: χ² = Σ((data - model)² / variance)
     model = A @ x_sol
     residuals = D - model
-    chi2 = np.sum(residuals**2 * W)
+    chi2 = np.sum(residuals**2 / V)
 
-    # Reduced chi-squared (degrees of freedom = N - K - 1)
-    dof = n_pix - (K + 1)
+    # Reduced chi-squared (degrees of freedom = N - n_params)
+    dof = n_pix - n_params
     if dof > 0:
         reduced_chi2 = chi2 / dof
     else:
@@ -551,7 +569,11 @@ def measure_objects(
 
     It will estimate and subtract the background unless external background estimation (`bg`) is provided, and use user-provided noise map (`err`) if requested.
 
-    If the `mask` is provided, it will set 0x200 bit in object `flags` if at least one of aperture pixels is masked.
+    Quality flags are set in the `flags` column to indicate measurement issues:
+      - 0x200: At least one aperture pixel is masked (if `mask` is provided)
+      - 0x400: Invalid position or local background estimation failed
+      - 0x800: Optimal extraction failed (NaN result)
+      - 0x1000: Poor fit quality (chi2 > 1000, typically from numerical instability in crowded groups)
 
     The results may optionally filtered to drop the detections with low signal to noise ratio if `sn` parameter is set and positive. It will also filter out the events with negative flux.
 
@@ -560,11 +582,11 @@ def measure_objects(
     :param image: Input image as a NumPy array
     :param aper: Circular aperture radius in pixels, to be used for flux measurement. For optimal extraction, this is the clipping radius.
     :param bkgann: Background annulus (tuple with inner and outer radii) to be used for local background estimation. If not set, global background model is used instead.
-    :param bkg_order: Polynomial order for background fitting in annulus. Only used if bkgann is set. 0 = constant (mean, fastest), 1 = plane (linear gradient, recommended), 2 = quadratic surface (complex gradients). Default is 1. Gradient-aware fitting (order > 0) dramatically reduces biases with non-uniform backgrounds: linear gradients improved 20× (19% → <1% error), quadratic gradients improved 100-400× (-415% → <4% error). Set to 0 for flat backgrounds to match legacy behavior.
+    :param bkg_order: Polynomial order for local background fitting. 0 = constant (mean), 1 = plane (linear gradient, recommended), 2 = quadratic surface. Only used if bkgann is set. Default is 1.
     :param fwhm: If provided, `aper` and `bkgann` will be measured in units of this value (so they will be specified in units of FWHM). Also used to define Gaussian PSF for optimal extraction if `psf` is not provided.
     :param psf: PSF model for optimal extraction and PSF-weighted centroiding. Can be a dict from psf.run_psfex(), psf.load_psf(), or psf.create_psf_model(). If None, a Gaussian PSF will be created from the `fwhm` parameter.
     :param optimal: If True, use optimal extraction instead of aperture photometry. Requires either `psf` or `fwhm` to define the PSF profile.
-    :param group_sources: If True and optimal=True, use grouped optimal extraction for overlapping sources. Simultaneously fits fluxes for nearby sources using weighted least squares, properly accounting for flux sharing between overlapping PSFs. Dramatically more accurate in crowded fields (51× improvement at 0.5 FWHM, 14× at 1.0 FWHM, 3× at 1.5 FWHM). Default is True (recommended). Set to False only for known sparse fields where performance is critical. No downside for isolated sources (identical results at >3 FWHM separation).
+    :param group_sources: If True and optimal=True, use grouped optimal extraction for overlapping sources. Fits nearby sources simultaneously for better accuracy in crowded fields. Default is True (recommended).
     :param grouper_radius: Radius in pixels for grouping nearby sources. Sources within this distance are fitted simultaneously. If None, defaults to 2*aper. Only used if group_sources=True.
     :param mask: Image mask as a boolean array (True values will be masked), optional
     :param bg: If provided, use this background (NumPy array with same shape as input image) instead of automatically computed one
@@ -573,7 +595,7 @@ def measure_objects(
     :param bg_size: Background grid size in pixels
     :param sn: Minimal S/N ratio for the object to be considered good. If set, all measurements with magnitude errors exceeding 1/SN will be discarded
     :param centroid_iter: Number of centroiding iterations to run before photometry. If non-zero, will try to improve the aperture placement by finding the centroid of pixels inside the aperture.
-    :param centroid_method: Centroiding method to use. Options: 'com' (center-of-mass, default) or 'psf' (PSF-weighted). PSF-weighted centroiding uses sub-pixel shifted PSF models to achieve ~0.01 pix accuracy on isolated sources (3.8× better than COM) and 80-940× improvement in crowded fields (separation < 3 FWHM) by suppressing neighbor contamination. LIMITATION: PSF centroiding degrades with heavy random masking (>20%) because it assumes a symmetric PSF profile - asymmetric pixel sampling creates bias. With 30% random masking, use COM instead (more robust). For clean images or structured masking, PSF is recommended for maximum accuracy. Requires either `psf` parameter (PSFEx model) or `fwhm` (Gaussian PSF). Default is 'com' for backward compatibility.
+    :param centroid_method: Centroiding method: 'com' (center-of-mass) or 'psf' (PSF-weighted). PSF-weighted is more accurate but degrades with heavy random masking (>20%). Requires psf or fwhm parameter. Default is 'com'.
     :param keep_negative: If not set, measurements with negative fluxes will be discarded
     :param get_bg: If True, the routine will also return estimated background and background noise images
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
@@ -950,6 +972,11 @@ def measure_objects(
 
         # Flag objects where optimal extraction failed
         obj['flags'][~np.isfinite(obj['flux'])] |= 0x800
+
+        # Flag objects with poor fits (chi2 > 1000 indicates numerical instability or crowding)
+        # These typically occur in very crowded groups where the matrix becomes ill-conditioned
+        bad_chi2 = np.isfinite(obj['chi2_optimal']) & (obj['chi2_optimal'] > 1000)
+        obj['flags'][bad_chi2] |= 0x1000
 
     else:
         # Standard aperture photometry
