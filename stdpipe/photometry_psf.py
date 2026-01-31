@@ -154,24 +154,36 @@ class GradientLocalBackground(photutils.background.LocalBackground):
         bg_values = np.zeros(len(x))
 
         size_y, size_x = data.shape
-        yy, xx = np.mgrid[:size_y, :size_x]
 
         for i, (xi, yi) in enumerate(zip(x, y)):
-            # Distance from source
+            # Define bounding box for annulus region (OPTIMIZATION: avoid full-image arrays)
+            r_outer = self.outer_radius
+            x0 = max(0, int(xi - r_outer) - 1)
+            x1 = min(size_x, int(xi + r_outer) + 2)
+            y0 = max(0, int(yi - r_outer) - 1)
+            y1 = min(size_y, int(yi + r_outer) + 2)
+
+            # Create coordinate grids ONLY for bounding box (not full image)
+            yy, xx = np.mgrid[y0:y1, x0:x1]
+
+            # Distance from source (only compute for bounding box pixels)
             dist = np.sqrt((xx - xi)**2 + (yy - yi)**2)
 
             # Annulus mask
-            annulus_mask = (dist >= self.inner_radius) & (dist <= self.outer_radius) & ~mask
+            annulus_mask = (dist >= self.inner_radius) & (dist <= self.outer_radius)
+            if mask is not None:
+                annulus_mask &= ~mask[y0:y1, x0:x1]
 
             if not np.any(annulus_mask):
                 # Fallback: return median of unmasked data
                 bg_values[i] = np.median(data[~mask]) if np.any(~mask) else 0.0
                 continue
 
-            # Get annulus data
+            # Get annulus data (extract from bounding box)
             x_annulus = xx[annulus_mask].ravel()
             y_annulus = yy[annulus_mask].ravel()
-            z_annulus = data[annulus_mask].ravel()
+            data_bbox = data[y0:y1, x0:x1]
+            z_annulus = data_bbox[annulus_mask].ravel()
 
             # Remove NaN/Inf
             valid = np.isfinite(z_annulus)
@@ -379,8 +391,8 @@ def measure_objects_psf(
     :param err: Image noise map as a NumPy array to be used instead of automatically computed one, optional
     :param gain: Image gain, e/ADU, used to build image noise model
     :param bg_size: Background grid size in pixels
-    :param bkgann: Background annulus for local background estimation, [inner_radius, outer_radius] in pixels. If None, no local background subtraction is performed (relies only on global Background2D subtraction). If set, uses gradient-aware local background fitting to handle non-uniform backgrounds. Note: radii are NOT scaled by FWHM (unlike measure_objects). Typical values: [8, 12] pixels.
-    :param bkg_order: Polynomial order for gradient-aware background fitting in annulus. Only used if bkgann is set. 0 = constant (mean), 1 = plane (linear gradient, recommended), 2 = quadratic surface (complex gradients). Default is 1. Gradient-aware fitting dramatically reduces biases with non-uniform backgrounds: linear gradients improved 20× (19% → <1% error), quadratic gradients improved 100-400× (-415% → <5% error).
+    :param bkgann: Background annulus for local background estimation, [inner_radius, outer_radius] in pixels. If None, no local background subtraction is performed (relies only on global Background2D subtraction). If set, uses gradient-aware local background fitting to handle non-uniform backgrounds. Note: radii are NOT scaled by FWHM (unlike measure_objects).
+    :param bkg_order: Polynomial order for local background fitting. 0 = constant (mean), 1 = plane (linear gradient, recommended), 2 = quadratic surface. Only used if bkgann is set. Default is 1.
     :param sn: Minimal S/N ratio for the object to be considered good. If set, all measurements with magnitude errors exceeding 1/SN will be discarded
     :param fit_shape: Shape of fitting region. Options: 'circular' (default), 'square'. Determines the aperture used for PSF fitting.
     :param fit_size: Size of fitting region in pixels. If None, defaults to psf_size.
@@ -389,7 +401,7 @@ def measure_objects_psf(
     :param keep_negative: If not set, measurements with negative fluxes will be discarded
     :param get_bg: If True, the routine will also return estimated background and background noise images
     :param use_position_dependent_psf: If True and PSF is a PSFEx model, use polynomial evaluation for position-dependent PSF (evaluates PSF at each source position)
-    :param group_sources: If True, use grouped PSF fitting for overlapping sources. Simultaneously fits fluxes for nearby sources, properly accounting for flux sharing between overlapping PSFs. Dramatically more accurate in crowded fields (51× improvement at 0.5 FWHM, 14× at 1.0 FWHM, 3× at 1.5 FWHM). Default is True (recommended). Set to False only for known sparse fields where performance is critical. No downside for isolated sources (identical results at >3 FWHM separation).
+    :param group_sources: If True, use grouped PSF fitting for overlapping sources. Fits nearby sources simultaneously for better accuracy in crowded fields. Default is True (recommended).
     :param grouper_radius: Radius in pixels for grouping nearby sources. If None, defaults to 2*psf_size. Only used if group_sources=True
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
     :returns: The copy of original table with `flux`, `fluxerr`, `mag`, `magerr`, `x_psf`, `y_psf` columns from PSF fitting. Also includes quality of fit columns: `qfit_psf` (fit quality, 0=good), `cfit_psf` (central pixel fit quality), `flags_psf` (photutils fit flags), `npix_psf` (number of unmasked pixels used in fit), and `reduced_chi2_psf` (reduced chi-squared, available in photutils >= 2.3.0). If :code:`get_bg=True`, also returns the background and background error images.
@@ -592,9 +604,12 @@ def measure_objects_psf(
     if n_invalid > 0:
         log('Found %d objects with invalid (masked/NaN) positions, will be skipped' % n_invalid)
 
+    # NOTE: Do NOT include fit_mask here! photutils PSFPhotometry handles
+    # the fitting region via the fit_shape parameter. Adding fit_mask would
+    # mask out most of the image and cause convergence failures.
     mask_for_fit = mask | mask0
-    if fit_mask is not None:
-        mask_for_fit = mask_for_fit | fit_mask
+    # if fit_mask is not None:
+    #     mask_for_fit = mask_for_fit | fit_mask
 
     xy_bounds = None if recentroid else 1e-6
 
@@ -701,6 +716,24 @@ def measure_objects_psf(
                 # Flag if fit failed
                 if not np.isfinite(obj['flux'][i]):
                     obj['flags'][i] |= 0x1000
+                # Also flag if fit didn't converge or returned input unchanged
+                elif 'flags' in result_single.colnames:
+                    # Check bit 0 (convergence failure)
+                    bit0_set = (result_single['flags'][0] & 1) != 0
+
+                    # Check for exact match with input when photutils claims it converged
+                    # (bit 0 NOT set). This catches cases where photutils returns input
+                    # unchanged but doesn't set bit 0.
+                    converged_but_unchanged = ((result_single['flags'][0] & 1) == 0 and
+                                             obj['flux'][i] == init_single['flux'][0] and
+                                             obj['x_psf'][i] == init_single['x'][0] and
+                                             obj['y_psf'][i] == init_single['y'][0])
+
+                    if bit0_set or converged_but_unchanged:
+                        log('Warning: PSF fit did not converge or returned unchanged parameters for object %d, setting flux to NaN' % i)
+                        obj['flux'][i] = np.nan
+                        obj['fluxerr'][i] = np.nan
+                        obj['flags'][i] |= 0x1000
 
                 # Flag if position moved significantly
                 if recentroid:
@@ -799,6 +832,30 @@ def measure_objects_psf(
                     moved_idx = valid_pos & (np.sqrt((obj['x_psf'] - init_params['x'])**2 +
                                                       (obj['y_psf'] - init_params['y'])**2) > 1.0)
                     obj['flags'][moved_idx] |= 0x2000  # Large centroid shift
+
+                # Flag fits that didn't converge (photutils returns initial guess unchanged)
+                # Check for flags_psf bit 0 (convergence failure) or exact match with input
+                if 'flags_psf' in obj.colnames and 'flux' in init_params.colnames:
+                    # Photutils flags: bit 0 = fit did not converge
+                    # When fit doesn't converge, photutils returns initial parameters unchanged
+                    unconverged = valid_pos & ((obj['flags_psf'] & 1) != 0)
+
+                    # Also check for exact byte-level match between input and output when photutils
+                    # claims the fit converged (bit 0 NOT set). This catches cases where photutils
+                    # returns input unchanged but doesn't set bit 0.
+                    converged_but_unchanged = valid_pos & ((obj['flags_psf'] & 1) == 0) & \
+                                             (obj['flux'] == init_params['flux']) & \
+                                             (obj['x_psf'] == init_params['x']) & \
+                                             (obj['y_psf'] == init_params['y'])
+
+                    # Combine both conditions
+                    failed = unconverged | converged_but_unchanged
+
+                    if np.sum(failed) > 0:
+                        log('Warning: %d PSF fits failed or returned unchanged parameters, setting flux to NaN' % np.sum(failed))
+                        obj['flux'][failed] = np.nan
+                        obj['fluxerr'][failed] = np.nan
+                        obj['flags'][failed] |= 0x1000  # PSF fit failed
 
             except Exception as e:
                 log('PSF photometry failed: %s' % str(e))
