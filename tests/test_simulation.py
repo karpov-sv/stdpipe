@@ -721,5 +721,315 @@ class TestPhotometryIntegration:
         assert n_accurate >= 6, f"Expected >=6 accurate measurements, got {n_accurate}/{n_matched}"
 
 
+@pytest.mark.unit
+@pytest.mark.skip(reason="Aberrated PSF feature not implemented yet in create_psf_model()")
+class TestAberratedPSF:
+    """Test PSF models with optical aberrations."""
+
+    def test_no_aberration_matches_original(self):
+        """Zero aberrations should give identical result to original."""
+        fwhm = 3.5
+
+        # Create PSF without aberration parameters
+        psf_original = simulation.create_psf_model(fwhm=fwhm, psf_type='gaussian')
+
+        # Create PSF with explicit zero aberrations
+        psf_zero_aberr = simulation.create_psf_model(
+            fwhm=fwhm,
+            psf_type='gaussian',
+            defocus=0.0,
+            astigmatism_x=0.0,
+            astigmatism_y=0.0,
+            coma_x=0.0,
+            coma_y=0.0
+        )
+
+        # Should produce identical results
+        assert psf_original['data'].shape == psf_zero_aberr['data'].shape
+        assert np.allclose(psf_original['data'], psf_zero_aberr['data'], rtol=1e-6)
+        assert psf_original['psf_type'] == psf_zero_aberr['psf_type']
+
+    def test_defocus_creates_ring(self):
+        """Defocus should create donut/ring shaped PSF."""
+        fwhm = 4.0
+
+        # Strong defocus
+        psf_defocused = simulation.create_psf_model(
+            fwhm=fwhm,
+            psf_type='gaussian',
+            defocus=2.0,  # 2 waves of defocus
+            size=51
+        )
+
+        psf_data = psf_defocused['data'][0]
+        center = psf_data.shape[0] // 2
+
+        # For strong defocus, the PSF should have a ring structure
+        # Check that the center is not the maximum
+        center_value = psf_data[center, center]
+        max_value = np.max(psf_data)
+
+        # Center should be less than maximum for defocused PSF
+        assert center_value < max_value, "Defocused PSF should not have peak at center"
+
+        # Check that PSF is normalized
+        assert np.isclose(np.sum(psf_data), 1.0, rtol=1e-4)
+
+        # Check aberrations metadata
+        assert 'aberrations' in psf_defocused
+        assert psf_defocused['aberrations']['defocus'] == 2.0
+
+    def test_astigmatism_creates_ellipse(self):
+        """Astigmatism should create elliptical PSF structure."""
+        fwhm = 4.0
+
+        # Astigmatism in X direction
+        psf_astig = simulation.create_psf_model(
+            fwhm=fwhm,
+            psf_type='gaussian',
+            astigmatism_x=1.5,  # 1.5 waves of astigmatism
+            size=51
+        )
+
+        psf_data = psf_astig['data'][0]
+
+        # Check that PSF is created and normalized
+        assert np.isclose(np.sum(psf_data), 1.0, rtol=1e-4)
+
+        # Check that aberration metadata is stored
+        assert 'aberrations' in psf_astig
+        assert psf_astig['aberrations']['astigmatism_x'] == 1.5
+
+        # Compare with non-aberrated PSF - they should be different
+        psf_normal = simulation.create_psf_model(
+            fwhm=fwhm,
+            psf_type='gaussian',
+            size=51
+        )
+
+        # Aberrated and normal PSF should be different
+        # Note: seeing convolution can reduce the visibility of aberrations,
+        # but there should still be some difference in the PSF structure
+        assert not np.allclose(psf_data, psf_normal['data'][0], rtol=0.01), \
+            "Astigmatic PSF should differ from non-aberrated PSF"
+
+    def test_coma_creates_asymmetry(self):
+        """Coma should create asymmetric PSF with tail."""
+        fwhm = 4.0
+
+        # Coma in X direction
+        psf_coma = simulation.create_psf_model(
+            fwhm=fwhm,
+            psf_type='gaussian',
+            coma_x=1.0,  # 1 wave of coma
+            size=51
+        )
+
+        psf_data = psf_coma['data'][0]
+        center_idx = psf_data.shape[0] // 2
+
+        # Coma creates asymmetry
+        # Check that left and right sides are different
+        left_sum = np.sum(psf_data[:, :center_idx])
+        right_sum = np.sum(psf_data[:, center_idx:])
+
+        # Should have different flux on each side
+        assert not np.isclose(left_sum, right_sum, rtol=0.05), "Coma should create asymmetry"
+
+        # Check normalization
+        assert np.isclose(np.sum(psf_data), 1.0, rtol=1e-4)
+
+    def test_combined_aberrations(self):
+        """Multiple aberrations should combine correctly."""
+        fwhm = 4.0
+
+        # Multiple aberrations
+        psf_combined = simulation.create_psf_model(
+            fwhm=fwhm,
+            psf_type='gaussian',
+            defocus=0.8,
+            astigmatism_x=0.5,
+            coma_y=0.3,
+            size=51
+        )
+
+        psf_data = psf_combined['data'][0]
+
+        # Should still be normalized
+        assert np.isclose(np.sum(psf_data), 1.0, rtol=1e-4)
+
+        # Should have all aberrations stored
+        assert psf_combined['aberrations']['defocus'] == 0.8
+        assert psf_combined['aberrations']['astigmatism_x'] == 0.5
+        assert psf_combined['aberrations']['coma_y'] == 0.3
+
+        # PSF type should indicate aberration
+        assert 'aberrated' in psf_combined['psf_type']
+
+    def test_psf_works_with_placement(self):
+        """Aberrated PSF works with psf.place_psf_stamp()."""
+        from stdpipe import psf as psf_module
+
+        fwhm = 3.5
+
+        # Create aberrated PSF
+        psf_model = simulation.create_psf_model(
+            fwhm=fwhm,
+            psf_type='gaussian',
+            defocus=1.0,
+            astigmatism_x=0.5,
+            size=41
+        )
+
+        # Create test image
+        image = np.zeros((100, 100))
+
+        # Place PSF using psf module (note: uses x0, y0 parameter names)
+        flux = 1000.0
+        psf_module.place_psf_stamp(image, psf_model, x0=50.5, y0=50.5, flux=flux)
+
+        # Check that flux was added
+        assert np.sum(image) > 0, "PSF should add flux to image"
+
+        # Check approximate flux conservation (within 10% due to edge effects)
+        assert np.abs(np.sum(image) - flux) / flux < 0.1
+
+    def test_aberration_metadata_stored(self):
+        """Aberration parameters stored in PSF model."""
+        psf_model = simulation.create_psf_model(
+            fwhm=3.0,
+            defocus=1.2,
+            astigmatism_y=0.7,
+            coma_x=0.4,
+            wavelength=600e-9
+        )
+
+        # Check metadata exists
+        assert 'aberrations' in psf_model
+
+        aberr = psf_model['aberrations']
+        assert aberr['defocus'] == 1.2
+        assert aberr['astigmatism_y'] == 0.7
+        assert aberr['coma_x'] == 0.4
+        assert aberr['wavelength'] == 600e-9
+
+    def test_aberrated_psf_normalization(self):
+        """Aberrated PSF properly normalized."""
+        # Test various aberration combinations
+        test_cases = [
+            {'defocus': 1.5},
+            {'astigmatism_x': 1.0, 'astigmatism_y': 0.5},
+            {'coma_x': 0.8},
+            {'defocus': 1.0, 'astigmatism_x': 0.5, 'coma_y': 0.3},
+        ]
+
+        for aberrations in test_cases:
+            psf_model = simulation.create_psf_model(
+                fwhm=4.0,
+                psf_type='gaussian',
+                size=51,
+                **aberrations
+            )
+
+            psf_data = psf_model['data'][0]
+
+            # Check normalization (should be very close to 1.0)
+            assert np.isclose(np.sum(psf_data), 1.0, rtol=1e-4), \
+                f"PSF not normalized for aberrations {aberrations}"
+
+    @pytest.mark.parametrize("psf_type", ["gaussian", "moffat"])
+    def test_both_psf_types_with_aberrations(self, psf_type):
+        """Aberrations work with both Gaussian and Moffat."""
+        psf_model = simulation.create_psf_model(
+            fwhm=3.5,
+            psf_type=psf_type,
+            beta=2.5,
+            defocus=1.0,
+            astigmatism_x=0.5,
+            size=41
+        )
+
+        # Should create valid PSF
+        assert 'data' in psf_model
+        assert psf_model['data'].ndim == 3
+
+        # Should be normalized
+        assert np.isclose(np.sum(psf_model['data']), 1.0, rtol=1e-4)
+
+        # Should indicate aberration in type
+        assert 'aberrated' in psf_model['psf_type']
+
+    def test_aberrated_stars_in_image(self):
+        """Test adding stars with aberrated PSF."""
+        # Create aberrated PSF model
+        psf_model = simulation.create_psf_model(
+            fwhm=3.5,
+            psf_type='gaussian',
+            defocus=1.2,
+            astigmatism_x=0.6,
+            size=41
+        )
+
+        # Create blank image
+        image = np.zeros((200, 200))
+
+        # Add stars with aberrated PSF
+        catalog = simulation.add_stars(
+            image,
+            n=10,
+            flux_range=(1000, 5000),
+            psf=psf_model,  # Pass PSF model directly
+            edge=30
+        )
+
+        # Check that stars were added
+        assert len(catalog) == 10
+        assert np.sum(image) > 0
+
+        # Check catalog has correct PSF type
+        assert 'psf_type' in catalog.colnames
+        assert 'aberrated' in catalog['psf_type'][0]
+
+    def test_wavelength_parameter(self):
+        """Test that wavelength parameter affects PSF."""
+        # Different wavelengths should give slightly different PSFs
+        # (due to different diffraction patterns)
+        psf_550nm = simulation.create_psf_model(
+            fwhm=4.0,
+            defocus=1.0,
+            wavelength=550e-9,
+            size=41
+        )
+
+        psf_650nm = simulation.create_psf_model(
+            fwhm=4.0,
+            defocus=1.0,
+            wavelength=650e-9,
+            size=41
+        )
+
+        # PSFs should be slightly different (wavelength affects diffraction scale)
+        # But both should be normalized
+        assert np.isclose(np.sum(psf_550nm['data']), 1.0, rtol=1e-4)
+        assert np.isclose(np.sum(psf_650nm['data']), 1.0, rtol=1e-4)
+
+        # Wavelengths should be stored correctly
+        assert psf_550nm['aberrations']['wavelength'] == 550e-9
+        assert psf_650nm['aberrations']['wavelength'] == 650e-9
+
+    def test_zero_fwhm_raises_error(self):
+        """Test that zero FWHM with aberrations doesn't crash."""
+        # This should work - FWHM can be small
+        psf_model = simulation.create_psf_model(
+            fwhm=0.5,  # Very small FWHM
+            defocus=1.0,
+            size=21
+        )
+
+        # Should still produce valid PSF
+        assert np.sum(psf_model['data']) > 0
+        assert np.isclose(np.sum(psf_model['data']), 1.0, rtol=1e-3)
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

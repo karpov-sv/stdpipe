@@ -18,12 +18,19 @@ import photutils.background
 # Check if pyraf is available without importing it yet
 # (importing pyraf initializes IRAF which can cause issues with pytest stdin/stdout capturing)
 def _check_pyraf_available():
-    """Check if pyraf is available without triggering initialization."""
+    """Check if pyraf is available and can actually import iraf."""
     try:
+        # First check if pyraf package exists
         import importlib.util
         spec = importlib.util.find_spec("pyraf")
-        return spec is not None
-    except (ImportError, ValueError):
+        if spec is None:
+            return False
+
+        # Now try to actually import iraf to verify it works
+        # This is necessary because pyraf might be installed but broken
+        from pyraf import iraf
+        return True
+    except (ImportError, ValueError, AttributeError):
         return False
 
 PYRAF_AVAILABLE = _check_pyraf_available()

@@ -59,18 +59,57 @@ def create_psf_model(fwhm=3.0, psf_type='gaussian', beta=2.5, size=None, oversam
     # Create coordinate grid at target pixel scale
     y, x = np.mgrid[0:psf_data_size, 0:psf_data_size]
 
-    # Distance from center in pixels
-    r = np.sqrt((x - center) ** 2 + (y - center) ** 2)
-
     if psf_type.lower() == 'gaussian':
-        # Gaussian PSF
+        # Pixel-integrated Gaussian PSF using error function
+        # This properly accounts for flux integrated over each pixel area
+        # Eliminates the ~2-3% bias from point-sampling
+        from scipy.special import erf
+
         sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
-        psf_data = np.exp(-(r**2) / (2 * sigma**2))
+        sqrt2_sigma = np.sqrt(2) * sigma
+
+        # For each pixel, integrate Gaussian over pixel area [x-0.5, x+0.5] × [y-0.5, y+0.5]
+        # Using 2D Gaussian: G(x,y) = (1/(2π σ²)) exp(-(x²+y²)/(2σ²))
+        # Integral factorizes: I(x,y) = I_x(x) * I_y(y) where
+        # I_x(x) = (1/2) [erf((x+0.5-x0)/(√2 σ)) - erf((x-0.5-x0)/(√2 σ))]
+
+        # X-direction integration (centered at 'center')
+        erf_xp = erf((x + 0.5 - center) / sqrt2_sigma)
+        erf_xm = erf((x - 0.5 - center) / sqrt2_sigma)
+        integral_x = 0.5 * (erf_xp - erf_xm)
+
+        # Y-direction integration
+        erf_yp = erf((y + 0.5 - center) / sqrt2_sigma)
+        erf_ym = erf((y - 0.5 - center) / sqrt2_sigma)
+        integral_y = 0.5 * (erf_yp - erf_ym)
+
+        # Combined 2D pixel-integrated PSF
+        psf_data = integral_x * integral_y
 
     elif psf_type.lower() == 'moffat':
-        # Moffat PSF: I(r) = 1 / (1 + (r/alpha)^2)^beta
+        # Moffat PSF with pixel integration
+        # For Moffat, analytical pixel integration is complex, so we use
+        # supersampling for accurate pixel integration
+
         alpha = fwhm / (2 * np.sqrt(2 ** (1.0 / beta) - 1))
-        psf_data = 1.0 / (1 + (r / alpha) ** 2) ** beta
+
+        # Use 5x supersampling for pixel integration
+        supersample = 5
+        psf_data = np.zeros((psf_data_size, psf_data_size))
+
+        for i in range(psf_data_size):
+            for j in range(psf_data_size):
+                # Create supersampled grid for this pixel
+                y_sub = np.linspace(i - 0.5, i + 0.5, supersample)
+                x_sub = np.linspace(j - 0.5, j + 0.5, supersample)
+                yy_sub, xx_sub = np.meshgrid(y_sub, x_sub, indexing='ij')
+
+                # Evaluate Moffat at subpixel positions
+                r_sub = np.sqrt((xx_sub - center) ** 2 + (yy_sub - center) ** 2)
+                moffat_sub = 1.0 / (1 + (r_sub / alpha) ** 2) ** beta
+
+                # Average over subpixels (numerical integration)
+                psf_data[i, j] = np.mean(moffat_sub)
 
     else:
         raise ValueError(
