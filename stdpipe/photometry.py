@@ -84,6 +84,7 @@ def get_objects_sep(
     bg_size=64,
     fwhm=False,
     optimal=False,
+    centroid=False,
     use_mask_large=False,
     subtract_bg=True,
     npix_large=100,
@@ -100,10 +101,11 @@ def get_objects_sep(
 
     1. **Background estimation**: Builds 2D background model using sep.Background() with sigma-clipping
     2. **Object detection**: Runs sep.extract() with optional smoothing kernel and deblending (watershed by default)
-    3. **Edge rejection**: Filters objects too close to image edges
-    4. **FWHM estimation**: Estimates FWHM per-object (always) or globally (if requested) using flux radius
-    5. **Photometry**: Performs aperture photometry (sep.sum_circle) or optimal extraction (sep.sum_circle_optimal with Gaussian PSF)
-    6. **Quality cuts**: Applies S/N threshold and sorts by flux
+    3. **Centroiding** (optional): Refines positions using windowed centroiding (sep.winpos)
+    4. **Edge rejection**: Filters objects too close to image edges
+    5. **FWHM estimation**: Estimates FWHM per-object (always) or globally (if requested) using flux radius
+    6. **Photometry**: Performs aperture photometry (sep.sum_circle) or optimal extraction (sep.sum_circle_optimal with Gaussian PSF)
+    7. **Quality cuts**: Applies S/N threshold and sorts by flux
 
     Detection flags are documented at https://sep.readthedocs.io/en/v1.1.x/reference.html - they are different from SExtractor ones!
 
@@ -124,6 +126,7 @@ def get_objects_sep(
     :param bg_size: Background grid size in pixels
     :param fwhm: FWHM handling. If False (default), FWHM is estimated per-object for output but not used for photometry. If True, FWHM is estimated from detected objects and aperture is set to max(1.5*FWHM, aper). If numeric, this FWHM value is used directly (skips estimation).
     :param optimal: If True, use optimal extraction photometry (sep.sum_circle_optimal) instead of aperture photometry. Requires FWHM to be provided or estimated. Only available in SEP 1.4+.
+    :param centroid: If True, refine object positions using windowed centroiding (sep.winpos). Default is False as windowed positions can be biased in crowded fields. When SEP 1.4+ is available, uses maxstep=0.2*FWHM to cap position shift per iteration and avoid excessive drift in degenerate cases.
     :param use_mask_large: If True, filter out large objects (with footprints larger than `npix_large` pixels)
     :param npix_large: Threshold for rejecting large objects (if `use_mask_large` is set)
     :param subtract_bg: Whether to subtract the background (default) or not
@@ -273,9 +276,26 @@ def get_objects_sep(
 
         log("Estimated FWHM = %.2g, aperture = %.2g" % (fwhm_value, aper))
 
-    # Windowed positional parameters are often biased in crowded fields, let's avoid them for now
-    # xwin,ywin,flag = sep.winpos(image1, obj0['x'], obj0['y'], 0.5, mask=mask)
-    xwin, ywin = obj0['x'], obj0['y']
+    # Windowed positional parameters - use if requested
+    if centroid:
+        log("Refining positions using windowed centroiding")
+        # Use sep.winpos for centroiding
+        # maxstep parameter is only available in SEP 1.4+
+        winpos_kwargs = {'mask': mask | mask_bg | mask_segm}
+        if _HAS_SEP_OPTIMAL:
+            # SEP 1.4+ has maxstep parameter to cap position shift per iteration
+            # Set to 0.2 * FWHM to avoid excessive drift in degenerate cases
+            if fwhm_value is not None:
+                winpos_kwargs['maxstep'] = 0.2 * fwhm_value
+            else:
+                # Default to 1.0 pixel if FWHM not available
+                winpos_kwargs['maxstep'] = 1.0
+
+        xwin, ywin, flag_win = sep.winpos(image1, obj0['x'], obj0['y'], 0.5, **winpos_kwargs)
+    else:
+        # Use initial positions from extraction
+        xwin, ywin = obj0['x'], obj0['y']
+        flag_win = np.zeros(len(obj0), dtype=int)
 
     # Filter out objects too close to frame edges
     idx = (
@@ -348,7 +368,7 @@ def get_objects_sep(
         # More robust than flux_radius (5-27x fewer outliers) but less accurate than SEP built-in
         fwhm = 2.0 * np.sqrt(np.log(2) * (obj0['a'][idx]**2 + obj0['b'][idx]**2))
 
-    flag |= obj0['flag'][idx]
+    flag |= obj0['flag'][idx] | flag_win[idx]
 
     # Quality cuts
     fidx = (flux > 0) & (magerr < 1.0 / sn)
