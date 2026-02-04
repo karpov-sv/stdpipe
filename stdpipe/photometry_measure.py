@@ -16,6 +16,13 @@ from photutils.utils import calc_total_error
 
 # Note: psf and photometry_psf modules imported lazily in functions to avoid circular dependency
 
+# Check if new SEP features are available (version 1.4+)
+try:
+    import sep
+    _HAS_SEP_OPTIMAL = hasattr(sep, 'sum_circle_optimal') and hasattr(sep, 'stats_circann')
+except ImportError:
+    _HAS_SEP_OPTIMAL = False
+
 
 def _get_psf_stamp_at_position(psf, x, y, stamp_size=None):
     """
@@ -999,6 +1006,305 @@ def measure_objects(
     obj['magerr'][idx] = 2.5 / np.log(10) * obj['fluxerr'][idx] / obj['flux'][idx]
 
     # Final filtering of properly measured objects
+    if sn is not None and sn > 0:
+        log('Filtering out measurements with S/N < %.1f' % sn)
+        idx = np.isfinite(obj['magerr'])
+        idx[idx] &= obj['magerr'][idx] < 1 / sn
+        obj = obj[idx]
+
+    if not keep_negative:
+        log('Filtering out measurements with negative fluxes')
+        idx = obj['flux'] > 0
+        obj = obj[idx]
+
+    if get_bg:
+        return obj, bg_est_bg, err
+    else:
+        return obj
+
+
+def measure_objects_sep(
+    obj,
+    image,
+    aper=3,
+    bkgann=None,
+    fwhm=None,
+    optimal=False,
+    group_sources=True,
+    mask=None,
+    bg=None,
+    err=None,
+    gain=None,
+    bg_size=64,
+    sn=None,
+    centroid_iter=0,
+    keep_negative=True,
+    get_bg=False,
+    verbose=False,
+):
+    """Photometry at the positions of already detected objects using SEP routines.
+
+    This function uses SEP's built-in features for optimal extraction with sigma-clipped
+    background (via bkgann parameter in sum_circle_optimal) and iterative centroiding
+    (via winpos with maxstep parameter).
+
+    Only available if SEP version 1.4+ with these features is installed.
+
+    Quality flags are set in the `flags` column to indicate measurement issues:
+      - 0x200: At least one aperture pixel is masked (if `mask` is provided)
+      - 0x400: Invalid position
+      - 0x800: Optimal extraction failed (NaN result)
+
+    :param obj: astropy.table.Table with initial object detections to be measured
+    :param image: Input image as a NumPy array
+    :param aper: Circular aperture radius in pixels, to be used for flux measurement
+    :param bkgann: Background annulus (tuple with inner and outer radii) for local background.
+                   For optimal extraction, SEP handles this internally with sigma-clipping.
+                   For aperture photometry, we use sep.stats_circann().
+    :param fwhm: If provided, `aper` and `bkgann` will be measured in units of this value.
+                 Also used for Gaussian PSF in optimal extraction and centroiding.
+    :param optimal: If True, use optimal extraction via sep.sum_circle_optimal().
+                    Requires `fwhm` parameter.
+    :param group_sources: If True and optimal=True, use grouped optimal extraction.
+    :param mask: Image mask as a boolean array (True values will be masked), optional
+    :param bg: If provided, use this background instead of automatically computed one
+    :param err: Image noise map as a NumPy array, optional
+    :param gain: Image gain, e/ADU, used to build image noise model
+    :param bg_size: Background grid size in pixels
+    :param sn: Minimal S/N ratio for filtering
+    :param centroid_iter: Number of centroiding iterations (uses SEP's built-in iteration)
+    :param keep_negative: If not set, measurements with negative fluxes will be discarded
+    :param get_bg: If True, also return estimated background and noise images
+    :param verbose: Whether to show verbose messages. May be boolean or print-like function.
+    :returns: Copy of table with flux/mag columns from SEP measurements.
+    """
+    import sep
+
+    if not _HAS_SEP_OPTIMAL:
+        raise RuntimeError(
+            "measure_objects_sep() requires SEP version 1.4+ with sum_circle_optimal() and "
+            "stats_circann() functions. Please upgrade SEP or use measure_objects() instead."
+        )
+
+    # Simple wrapper around print for logging in verbose mode only
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
+
+    if not len(obj):
+        log('No objects to measure')
+        return obj
+
+    # Operate on the copy of the list
+    obj = obj.copy()
+
+    # Sanitize the image and make its copy to safely operate on it
+    image1 = image.astype(np.double)
+    mask0 = ~np.isfinite(image1)  # Minimal mask
+
+    # Ensure that the mask is defined
+    if mask is None:
+        mask = np.zeros(image.shape, dtype=bool)
+    else:
+        mask = np.array(mask).astype(bool)
+
+    # SEP requires C-contiguous arrays
+    image1 = np.ascontiguousarray(image1)
+
+    if bg is None or err is None or get_bg:
+        log('Estimating global background with SEP')
+        bg_est = sep.Background(image1, mask=mask | mask0, bw=bg_size, bh=bg_size)
+        bg_est_bg = bg_est.back()
+        bg_est_rms = bg_est.rms()
+    else:
+        bg_est = None
+
+    if bg is None:
+        log(
+            'Subtracting global background: median %.1f rms %.2f' % (
+                np.median(bg_est_bg), np.std(bg_est_bg)
+            )
+        )
+        image1 -= bg_est_bg
+    else:
+        log(
+            'Subtracting user-provided background: median %.1f rms %.2f' % (
+                np.median(bg), np.std(bg)
+            )
+        )
+        image1 -= bg
+
+    image1[mask0] = 0
+
+    if err is None:
+        log(
+            'Using global background noise map: median %.1f rms %.2f' % (
+                np.median(bg_est_rms),
+                np.std(bg_est_rms),
+            )
+        )
+        err = bg_est_rms
+    else:
+        log(
+            'Using user-provided noise map: median %.1f rms %.2f' % (
+                np.median(err), np.std(err)
+            )
+        )
+
+    # Ensure error map is C-contiguous
+    err = np.ascontiguousarray(err)
+
+    if fwhm is not None and fwhm > 0:
+        log('Scaling aperture radii with FWHM %.1f pix' % fwhm)
+        aper_pix = aper * fwhm
+    else:
+        aper_pix = aper
+
+    log('Using aperture radius %.1f pixels' % aper_pix)
+
+    # Centroiding with SEP windowed positions (built-in iteration)
+    if centroid_iter:
+        sigma = fwhm / 2.355 if fwhm else 1.0
+        maxstep = 0.2 * fwhm if fwhm else 0.6  # Prevent excessive steps between iterations
+
+        log('Using SEP windowed centroiding (maxstep=%.2f pix)' % maxstep)
+
+        # Keep original pixel positions
+        obj['x_orig'] = obj['x'].copy()
+        obj['y_orig'] = obj['y'].copy()
+
+        x_vals = np.ma.filled(np.asarray(obj['x']), fill_value=np.nan)
+        y_vals = np.ma.filled(np.asarray(obj['y']), fill_value=np.nan)
+        valid_pos = np.isfinite(x_vals) & np.isfinite(y_vals)
+
+        if np.sum(valid_pos) > 0:
+            # SEP's windowed position (iterates internally until convergence)
+            xwin, ywin, flag = sep.winpos(
+                image1,
+                x_vals[valid_pos],
+                y_vals[valid_pos],
+                sigma,
+                mask=mask | mask0,
+                maxstep=maxstep
+            )
+
+            # Update positions where centroiding succeeded (flag == 0)
+            good_centroid = (flag == 0) & np.isfinite(xwin) & np.isfinite(ywin)
+            update_indices = np.where(valid_pos)[0][good_centroid]
+
+            obj['x'][update_indices] = xwin[good_centroid]
+            obj['y'][update_indices] = ywin[good_centroid]
+
+            if verbose:
+                n_failed = np.sum(~good_centroid)
+                n_converged = np.sum(good_centroid)
+                log(f'  Centroiding: {n_converged} converged, {n_failed} failed')
+
+    if 'flags' not in obj.keys():
+        obj['flags'] = 0
+
+    # Convert MaskedColumns to arrays and identify valid positions
+    x_vals = np.ma.filled(np.asarray(obj['x']), fill_value=np.nan)
+    y_vals = np.ma.filled(np.asarray(obj['y']), fill_value=np.nan)
+    valid_pos = np.isfinite(x_vals) & np.isfinite(y_vals)
+
+    # Flag invalid positions
+    obj['flags'][~valid_pos] |= 0x400
+
+    obj['flux'] = np.nan
+    obj['fluxerr'] = np.nan
+
+    if np.sum(valid_pos) > 0:
+        # Prepare bkgann in pixels
+        bkgann_pix = None
+        if bkgann is not None and len(bkgann) == 2:
+            if fwhm is not None and fwhm > 0:
+                bkgann_pix = (bkgann[0] * fwhm, bkgann[1] * fwhm)
+            else:
+                bkgann_pix = bkgann
+
+        if optimal:
+            # Optimal extraction using SEP with built-in background handling
+            if fwhm is None or fwhm <= 0:
+                raise ValueError("'fwhm' must be provided for optimal extraction")
+
+            if bkgann_pix:
+                log('Using SEP optimal extraction with sigma-clipped background annulus (%.1f, %.1f)' % bkgann_pix)
+            else:
+                log('Using SEP optimal extraction (no local background)')
+
+            if group_sources:
+                log('Grouped optimal extraction enabled')
+
+            # SEP handles sigma-clipped background internally when bkgann is provided
+            flux, fluxerr, flag = sep.sum_circle_optimal(
+                image1,
+                x_vals[valid_pos],
+                y_vals[valid_pos],
+                aper_pix,
+                fwhm=fwhm,
+                err=err,
+                gain=gain if gain else 1.0,
+                mask=mask | mask0,
+                bkgann=bkgann_pix,  # SEP handles sigma-clipped background
+                grouped=group_sources
+            )
+
+            obj['flux'][valid_pos] = flux
+            obj['fluxerr'][valid_pos] = fluxerr
+            obj['flags'][np.where(valid_pos)[0][flag > 0]] |= 0x200
+
+        else:
+            # Standard aperture photometry
+            log('Using standard aperture photometry')
+
+            flux, fluxerr, flag = sep.sum_circle(
+                image1,
+                x_vals[valid_pos],
+                y_vals[valid_pos],
+                aper_pix,
+                err=err,
+                gain=gain if gain else 1.0,
+                mask=mask | mask0,
+                bkgann=None  # Handle separately for aperture photometry
+            )
+
+            obj['flux'][valid_pos] = flux
+            obj['fluxerr'][valid_pos] = fluxerr
+            obj['flags'][np.where(valid_pos)[0][flag > 0]] |= 0x200
+
+            # For aperture photometry, compute local background separately
+            if bkgann_pix is not None:
+                log('Computing sigma-clipped local background for aperture photometry')
+
+                bg_mean, bg_std, bg_median, bg_mad, bg_mean_clip, bg_flags = sep.stats_circann(
+                    image1,
+                    x_vals[valid_pos],
+                    y_vals[valid_pos],
+                    bkgann_pix[0],
+                    bkgann_pix[1],
+                    mask=mask | mask0,
+                    clip_sigma=3.0,
+                    clip_iters=5
+                )
+
+                # Subtract local background (use median)
+                obj['flux'][valid_pos] -= bg_median * np.pi * aper_pix**2
+
+    # Flag objects where measurement failed
+    obj['flags'][~np.isfinite(obj['flux'])] |= 0x800
+
+    # Convert to magnitudes
+    for _ in ['mag', 'magerr']:
+        obj[_] = np.nan
+
+    idx = obj['flux'] > 0
+    obj['mag'][idx] = -2.5 * np.log10(obj['flux'][idx])
+    obj['magerr'][idx] = 2.5 / np.log(10) * obj['fluxerr'][idx] / obj['flux'][idx]
+
+    # Final filtering
     if sn is not None and sn > 0:
         log('Filtering out measurements with S/N < %.1f' % sn)
         idx = np.isfinite(obj['magerr'])

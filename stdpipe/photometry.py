@@ -27,6 +27,13 @@ import photutils.detection
 # Put these to common namespace
 from .photometry_model import match, make_sn_model, get_detection_limit_sn, format_color_term
 from .photometry_measure import measure_objects
+
+# Conditionally import SEP-based photometry if available
+try:
+    from .photometry_measure import measure_objects_sep, _HAS_SEP_OPTIMAL
+except ImportError:
+    _HAS_SEP_OPTIMAL = False
+
 from .photometry_background import (
     get_background,
     get_background_percentile,
