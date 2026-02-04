@@ -82,16 +82,28 @@ def get_objects_sep(
     relfluxradius=2.0,
     wcs=None,
     bg_size=64,
-    use_fwhm=False,
+    fwhm=False,
+    optimal=False,
     use_mask_large=False,
     subtract_bg=True,
     npix_large=100,
     sn=10.0,
     get_segmentation=False,
+    deblend_fwhm=0,
+    deblend_method='watershed',
     verbose=True,
     **kwargs
 ):
-    """Object detection and simple aperture photometry using `SEP <https://github.com/kbarbary/sep>`_ routines, with the signature as similar as possible to :func:`~stdpipe.photometry.get_objects_sextractor` function.
+    """Object detection and aperture/optimal photometry using `SEP <https://github.com/kbarbary/sep>`_ routines, with the signature as similar as possible to :func:`~stdpipe.photometry.get_objects_sextractor` function.
+
+    **Algorithm Overview:**
+
+    1. **Background estimation**: Builds 2D background model using sep.Background() with sigma-clipping
+    2. **Object detection**: Runs sep.extract() with optional smoothing kernel and deblending (watershed by default)
+    3. **Edge rejection**: Filters objects too close to image edges
+    4. **FWHM estimation**: Estimates FWHM per-object (always) or globally (if requested) using flux radius
+    5. **Photometry**: Performs aperture photometry (sep.sum_circle) or optimal extraction (sep.sum_circle_optimal with Gaussian PSF)
+    6. **Quality cuts**: Applies S/N threshold and sorts by flux
 
     Detection flags are documented at https://sep.readthedocs.io/en/v1.1.x/reference.html - they are different from SExtractor ones!
 
@@ -110,14 +122,45 @@ def get_objects_sep(
     :param relfluxradius:
     :param wcs: Astrometric solution to be used for assigning sky coordinates (`ra`/`dec`) to detected objects
     :param bg_size: Background grid size in pixels
-    :param use_fwhm: If True, the aperture will be set to 1.5*FWHM (if greater than `aper`)
+    :param fwhm: FWHM handling. If False (default), FWHM is estimated per-object for output but not used for photometry. If True, FWHM is estimated from detected objects and aperture is set to max(1.5*FWHM, aper). If numeric, this FWHM value is used directly (skips estimation).
+    :param optimal: If True, use optimal extraction photometry (sep.sum_circle_optimal) instead of aperture photometry. Requires FWHM to be provided or estimated. Only available in SEP 1.4+.
     :param use_mask_large: If True, filter out large objects (with footprints larger than `npix_large` pixels)
     :param npix_large: Threshold for rejecting large objects (if `use_mask_large` is set)
     :param subtract_bg: Whether to subtract the background (default) or not
     :param sn: Minimal S/N ratio for the object to be considered a detection
-    :param get_segmentation: If set, segmentation map will also be returned
+    :param get_segmentation: If set, segmentation map will also be returned. The output table will include 'seg_id' column with segmentation map IDs (sequential object number + 1).
+    :param deblend_fwhm: If > 0, use a fixed circular Gaussian with this FWHM (in pixels) when assigning ambiguous pixels during deblending. This uses a deterministic max-weight assignment and is less sensitive to moment estimates in crowded fields. Default is 0.0 (use adaptive shapes and stochastic assignment). When deblend_method='watershed', this also enforces a minimum peak separation of 0.5*FWHM. Only available in SEP 1.4+.
+    :param deblend_method: Deblending algorithm. 'watershed' (default) seeds local maxima and applies watershed assignment within each detection footprint. 'threshold' uses the traditional multi-threshold method. Only available in SEP 1.4+.
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :returns: astropy.table.Table object with detected objects
+    :returns: astropy.table.Table object with detected objects, or tuple of (table, segmentation_map) if get_segmentation=True
+
+    **Returned Table Columns:**
+
+    - **x, y**: Object centroid positions (pixels)
+    - **xerr, yerr**: Positional uncertainties (pixels)
+    - **flux, fluxerr**: Measured flux and error in ADU (aperture or optimal extraction)
+    - **mag, magerr**: Instrumental magnitude and error (-2.5*log10(flux))
+    - **flags**: Detection quality flags (see SEP documentation for flag meanings)
+    - **ra, dec**: Sky coordinates in degrees (if WCS provided, otherwise zeros)
+    - **bg**: Local background level per pixel (from aperture or annulus)
+    - **fwhm**: Per-object FWHM estimate in pixels (from flux radius)
+    - **a, b**: Semi-major and semi-minor axes from 2nd moments (pixels)
+    - **theta**: Position angle from 2nd moments (radians, counter-clockwise from +x axis)
+    - **seg_id**: Segmentation map object ID (1-based, only if get_segmentation=True)
+
+    **Table Metadata:**
+
+    - **aper**: Aperture radius used for photometry (pixels)
+    - **bkgann**: Background annulus used (tuple of inner/outer radii, or None)
+    - **optimal**: Whether optimal extraction was used (bool)
+    - **fwhm_phot**: FWHM value used for photometry (if provided or estimated for optimal extraction)
+
+    **Notes:**
+
+    - Optimal extraction assumes Gaussian PSF. For ground-based data with Moffat PSF, bias varies with crowding (see PSF photometry modules for accurate crowded-field photometry).
+    - Watershed deblending (default) provides often better completeness for close pairs (<2 FWHM) compared to threshold method.
+    - Object detection is performed on background-subtracted image. Photometry includes local or global background estimation.
+    - S/N cut is applied after photometry: only objects with magerr < 1/sn are returned.
     """
 
     # Simple Wrapper around print for logging in verbose mode only
@@ -159,6 +202,7 @@ def get_objects_sep(
         # Mask regions around huge objects as they are most probably corrupted by saturation and blooming
         log("Extracting initial objects")
 
+        # Minimal extraction, just to get large objects
         obj0, segm = sep.extract(
             image1,
             err=err,
@@ -178,37 +222,55 @@ def get_objects_sep(
 
     log("Extracting final objects")
 
-    obj0,segm = sep.extract(
-        image1,
-        err=err,
-        thresh=thresh,
-        minarea=minarea,
-        mask=mask | mask_bg | mask_segm,
-        filter_kernel=kernel,
-        segmentation_map=True,
-        **kwargs
-    )
+    extract_kwargs = {
+        'err': err,
+        'thresh': thresh,
+        'minarea': minarea,
+        'mask': mask | mask_bg | mask_segm,
+        'filter_kernel': kernel,
+        'segmentation_map': True,
+    }
 
-    if use_fwhm:
-        # Estimate FHWM and use it to get optimal aperture size
-        idx = obj0['flag'] == 0
-        fwhm = 2.0 * np.sqrt(np.hypot(obj0['a'][idx], obj0['b'][idx]) * np.log(2))
-        fwhm = (
+    # Add deblending parameters if available (SEP 1.4+)
+    if _HAS_SEP_OPTIMAL:
+        extract_kwargs['deblend_fwhm'] = deblend_fwhm
+        extract_kwargs['deblend_method'] = deblend_method
+
+    # Merge with any additional kwargs
+    extract_kwargs.update(kwargs)
+
+    obj0, segm = sep.extract(image1, **extract_kwargs)
+
+    # Handle FWHM parameter
+    fwhm_value = None
+    if isinstance(fwhm, (int, float)) and not isinstance(fwhm, bool) and fwhm > 0:
+        # Numeric FWHM value provided directly
+        fwhm_value = float(fwhm)
+        aper = max(1.5 * fwhm_value, aper)
+        log("Using provided FWHM = %.2g, aperture = %.2g" % (fwhm_value, aper))
+    elif fwhm is True or (optimal and fwhm is False):
+        # Estimate FWHM from detected objects
+        # (either explicitly requested or needed for optimal extraction)
+        idx_fwhm = obj0['flag'] == 0
+        fwhm_est = 2.0 * np.sqrt(np.hypot(obj0['a'][idx_fwhm], obj0['b'][idx_fwhm]) * np.log(2))
+        fwhm_est = (
             2.0
             * sep.flux_radius(
                 image1,
-                obj0['x'][idx],
-                obj0['y'][idx],
-                relfluxradius * fwhm * np.ones_like(obj0['x'][idx]),
+                obj0['x'][idx_fwhm],
+                obj0['y'][idx_fwhm],
+                relfluxradius * fwhm_est * np.ones_like(obj0['x'][idx_fwhm]),
                 0.5,
                 mask=mask,
             )[0]
         )
-        fwhm = np.median(fwhm)
+        fwhm_value = np.median(fwhm_est)
 
-        aper = max(1.5 * fwhm, aper)
+        if fwhm is True:
+            # Update aperture only if fwhm=True (not when auto-estimating for optimal)
+            aper = max(1.5 * fwhm_value, aper)
 
-        log("FWHM = %.2g, aperture = %.2g" % (fwhm, aper))
+        log("Estimated FWHM = %.2g, aperture = %.2g" % (fwhm_value, aper))
 
     # Windowed positional parameters are often biased in crowded fields, let's avoid them for now
     # xwin,ywin,flag = sep.winpos(image1, obj0['x'], obj0['y'], 0.5, mask=mask)
@@ -227,16 +289,33 @@ def get_objects_sep(
 
     log("Measuring final objects")
 
-    flux, fluxerr, flag = sep.sum_circle(
-        image1,
-        xwin[idx],
-        ywin[idx],
-        aper,
-        err=err,
-        gain=gain,
-        mask=mask | mask_bg | mask_segm,
-        bkgann=bkgann,
-    )
+    # Choose photometry method
+    if optimal and _HAS_SEP_OPTIMAL:
+        log("Using optimal extraction")
+        flux, fluxerr, flag = sep.sum_circle_optimal(
+            image1,
+            xwin[idx],
+            ywin[idx],
+            aper,
+            fwhm=fwhm_value,
+            err=err,
+            gain=gain,
+            mask=mask | mask_bg | mask_segm,
+            bkgann=bkgann,
+        )
+    else:
+        if optimal and not _HAS_SEP_OPTIMAL:
+            log("WARNING: Optimal extraction requested but SEP 1.4+ not available, falling back to aperture photometry")
+        flux, fluxerr, flag = sep.sum_circle(
+            image1,
+            xwin[idx],
+            ywin[idx],
+            aper,
+            err=err,
+            gain=gain,
+            mask=mask | mask_bg | mask_segm,
+            bkgann=bkgann,
+        )
     # For debug purposes, let's make also the same aperture photometry on the background map
     bgflux, bgfluxerr, bgflag = sep.sum_circle(
         bg.back(),
@@ -310,12 +389,16 @@ def get_objects_sep(
 
     obj.meta['aper'] = aper
     obj.meta['bkgann'] = bkgann
+    obj.meta['optimal'] = optimal and _HAS_SEP_OPTIMAL
+    if fwhm_value is not None:
+        obj.meta['fwhm_phot'] = fwhm_value
 
     obj.sort('flux', reverse=True)
 
     if get_segmentation:
-        number = np.arange(len(obj0['x'])) + 1 # Running object number
-        obj['number'] = number[idx][fidx]
+        # Segmentation map ID (sequential object number + 1, 1-based indexing)
+        seg_id = np.arange(len(obj0['x'])) + 1
+        obj['seg_id'] = seg_id[idx][fidx]
 
         return obj, segm
     else:
