@@ -114,8 +114,8 @@ def get_objects_sep(
     :param mask: Image mask as a boolean array (True values will be masked), optional
     :param err: Image noise map as a NumPy array, optional
     :param thresh: Detection threshold in sigmas above local background
-    :param aper: Circular aperture radius in pixels, to be used for flux measurement
-    :param bkgann: Background annulus (tuple with inner and outer radii) to be used for local background estimation. Inside the annulus, simple arithmetic mean of unmasked pixels is used for computing the background, and thus it is subject to some bias in crowded stellar fields. If not set, global background model is used instead.
+    :param aper: Circular aperture radius in pixels (or in units of FWHM if fwhm parameter is provided/estimated), to be used for flux measurement
+    :param bkgann: Background annulus (tuple with inner and outer radii, in pixels or FWHM units if fwhm parameter is provided/estimated) to be used for local background estimation. Inside the annulus, simple arithmetic mean of unmasked pixels is used for computing the background, and thus it is subject to some bias in crowded stellar fields. If not set, global background model is used instead.
     :param r0: Smoothing kernel size (sigma) to be used for improving object detection
     :param gain: Image gain, e/ADU
     :param edge: Reject all detected objects closer to image edge than this parameter
@@ -124,7 +124,7 @@ def get_objects_sep(
     :param relfluxradius:
     :param wcs: Astrometric solution to be used for assigning sky coordinates (`ra`/`dec`) to detected objects
     :param bg_size: Background grid size in pixels
-    :param fwhm: FWHM handling. If False (default), FWHM is estimated per-object for output but not used for photometry. If True, FWHM is estimated from detected objects and aperture is set to max(1.5*FWHM, aper). If numeric, this FWHM value is used directly (skips estimation).
+    :param fwhm: FWHM handling. If False (default), FWHM is estimated per-object for output but not used for photometry. If True, FWHM is estimated from detected objects and both aper and bkgann are scaled by FWHM (interpreted as being in FWHM units). If numeric, this FWHM value is used directly and aper/bkgann are scaled accordingly.
     :param optimal: If True, use optimal extraction photometry (sep.sum_circle_optimal) instead of aperture photometry. Requires FWHM to be provided or estimated. Only available in SEP 1.4+.
     :param centroid: If True, refine object positions using windowed centroiding (sep.winpos). Default is False as windowed positions can be biased in crowded fields. When SEP 1.4+ is available, uses maxstep=0.2*FWHM to cap position shift per iteration and avoid excessive drift in degenerate cases.
     :param use_mask_large: If True, filter out large objects (with footprints larger than `npix_large` pixels)
@@ -247,11 +247,13 @@ def get_objects_sep(
 
     # Handle FWHM parameter
     fwhm_value = None
+    scale_with_fwhm = False
+
     if isinstance(fwhm, (int, float)) and not isinstance(fwhm, bool) and fwhm > 0:
         # Numeric FWHM value provided directly
         fwhm_value = float(fwhm)
-        aper = max(1.5 * fwhm_value, aper)
-        log("Using provided FWHM = %.2g, aperture = %.2g" % (fwhm_value, aper))
+        scale_with_fwhm = True
+        log("Using provided FWHM = %.2g" % fwhm_value)
     elif fwhm is True or (optimal and fwhm is False):
         # Estimate FWHM from detected objects
         # (either explicitly requested or needed for optimal extraction)
@@ -271,10 +273,20 @@ def get_objects_sep(
         fwhm_value = np.median(fwhm_est)
 
         if fwhm is True:
-            # Update aperture only if fwhm=True (not when auto-estimating for optimal)
-            aper = max(1.5 * fwhm_value, aper)
+            # Scale aperture/annulus when explicitly requested (fwhm=True)
+            scale_with_fwhm = True
 
-        log("Estimated FWHM = %.2g, aperture = %.2g" % (fwhm_value, aper))
+        log("Estimated FWHM = %.2g" % fwhm_value)
+
+    # Scale aperture and background annulus with FWHM if requested
+    if scale_with_fwhm and fwhm_value is not None:
+        log("Scaling aperture and background annulus with FWHM")
+        aper *= fwhm_value
+        if bkgann is not None:
+            bkgann = (bkgann[0] * fwhm_value, bkgann[1] * fwhm_value)
+        log("  Aperture: %.2g pixels" % aper)
+        if bkgann is not None:
+            log("  Background annulus: (%.2g, %.2g) pixels" % bkgann)
 
     # Windowed positional parameters - use if requested
     if centroid:
