@@ -20,6 +20,7 @@ import astroscrappy
 
 from . import photometry
 from . import astrometry
+from . import astrometry_quad
 from . import catalogs
 from . import psf
 from . import utils
@@ -133,19 +134,19 @@ def refine_astrometry(
     n_iter=3,
     use_photometry=True,
     min_matches=5,
-    method='astropy',
+    method='quadhash',
     update=True,
     verbose=False,
     **kwargs
 ):
 
-    """Higher-level astrometric refinement routine that may use either SCAMP or pure Python based methods.
+    """Higher-level astrometric refinement routine that may use quad-hash, SCAMP, or pure Python based methods.
 
     :param obj: List of objects on the frame that should contain at least `x`, `y` and `flux` columns.
     :param cat: Reference astrometric catalogue
     :param sr: Matching radius in degrees
     :param wcs: Initial WCS
-    :param order: Polynomial order for SIP or PV distortion solution
+    :param order: Polynomial order for SIP or PV distortion solution (default: 0 for TAN, 2 recommended for quadhash)
     :param cat_col_mag: Catalogue column name for the magnitude in closest band
     :param cat_col_mag_err: Catalogue column name for the magnitude error
     :param cat_col_ra: Catalogue column name for Right Ascension
@@ -155,10 +156,10 @@ def refine_astrometry(
     :param n_iter: Number of iterations for Python-based matching
     :param use_photometry: Use photometry-assisted method in Python-based matching
     :param min_matches: Minimal number of good matches in Python-based matching
-    :param method: May be either 'scamp' or 'astropy' or 'astrometrynet'
+    :param method: May be 'quadhash' (default, 2-7× more accurate), 'scamp', 'astropy', or 'astrometrynet'
     :param update: If set, the object list will be updated in-place to contain correct `ra` and `dec` sky coordinates
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :param \\**kwargs: All other parameters will be directly passed to :func:`~stdpipe.astrometry.refine_wcs_scamp`
+    :param \\**kwargs: All other parameters will be directly passed to the respective refinement function
     :returns: Refined astrometric solution
 
     """
@@ -181,7 +182,26 @@ def refine_astrometry(
     if wcs is not None:
         obj['ra'], obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
 
-    if method == 'scamp':
+    if method == 'quadhash':
+        # Quad-hash pattern matching (default, 2-7× more accurate than SCAMP)
+        # Use order=2 for quadratic distortion if not specified
+        quad_order = order if order > 0 else 2
+
+        return astrometry_quad.refine_wcs_quadhash(
+            obj,
+            cat,
+            wcs=wcs,
+            sr=sr,
+            order=quad_order,
+            cat_col_ra=cat_col_ra,
+            cat_col_dec=cat_col_dec,
+            cat_col_mag=cat_col_mag,
+            update=update,
+            verbose=verbose,
+            **kwargs
+        )
+
+    elif method == 'scamp':
         # Fall-through to SCAMP-specific variant
         return astrometry.refine_wcs_scamp(
             obj,
