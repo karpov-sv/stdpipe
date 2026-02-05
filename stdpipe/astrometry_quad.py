@@ -203,17 +203,160 @@ def quad_descriptor(P: np.ndarray) -> Tuple[np.ndarray, float]:
     desc = np.array([pair[0, 0], pair[0, 1], pair[1, 0], pair[1, 1]], dtype=np.float64)
     return desc, L
 
+# Phase 2 Optimization: Vectorized quad descriptor calculation
+def quad_descriptor_batch(points: np.ndarray, quad_indices: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Vectorized quad descriptor calculation for multiple quads.
+
+    Args:
+        points: (N, 2) array of point coordinates
+        quad_indices: (M, 4) array of quad indices into points
+
+    Returns:
+        descs: (M, 4) array of descriptors
+        lens: (M,) array of baseline lengths
+    """
+    M = quad_indices.shape[0]
+    descs = np.full((M, 4), np.nan, dtype=np.float64)
+    lens = np.full(M, np.nan, dtype=np.float64)
+
+    if M == 0:
+        return descs, lens
+
+    # Gather all quad points: (M, 4, 2)
+    P = points[quad_indices]
+
+    # Compute pairwise distances for all quads: (M, 4, 4)
+    diff = P[:, None, :, :] - P[:, :, None, :]  # (M, 4, 4, 2)
+    d2 = np.sum(diff ** 2, axis=3)  # (M, 4, 4)
+
+    # Find longest baseline for each quad
+    flat_idx = np.argmax(d2.reshape(M, -1), axis=1)
+    i_idx = flat_idx // 4
+    j_idx = flat_idx % 4
+
+    # Check for degenerate quads (i == j)
+    valid = i_idx != j_idx
+
+    # Process only valid quads
+    if not np.any(valid):
+        return descs, lens
+
+    valid_mask = np.where(valid)[0]
+    M_valid = len(valid_mask)
+
+    # Extract baseline points for valid quads
+    A = P[valid_mask, i_idx[valid_mask]]  # (M_valid, 2)
+    B = P[valid_mask, j_idx[valid_mask]]  # (M_valid, 2)
+
+    # Compute baseline vectors and lengths
+    base = B - A  # (M_valid, 2)
+    L = np.hypot(base[:, 0], base[:, 1])  # (M_valid,)
+
+    # Filter out zero-length baselines
+    valid_L = L > 0
+    if not np.any(valid_L):
+        return descs, lens
+
+    final_mask = valid_mask[valid_L]
+    M_final = len(final_mask)
+
+    # Update for final valid quads
+    A = A[valid_L]
+    B = B[valid_L]
+    base = base[valid_L]
+    L = L[valid_L]
+    i_idx_final = i_idx[final_mask]
+    j_idx_final = j_idx[final_mask]
+    P_final = P[final_mask]
+
+    # Compute orthonormal basis
+    e1 = base / L[:, None]  # (M_final, 2)
+    e2 = np.stack([-e1[:, 1], e1[:, 0]], axis=1)  # (M_final, 2)
+
+    # Find the other two points (C, D) for each quad (vectorized)
+    # Create a mask for each quad indicating which indices are NOT i or j
+    all_indices = np.arange(4)
+    mask = np.ones((M_final, 4), dtype=bool)
+    mask[np.arange(M_final), i_idx_final] = False
+    mask[np.arange(M_final), j_idx_final] = False
+
+    # Find the two other indices for each quad
+    other_indices = np.where(mask)
+    # Reshape to (M_final, 2) - two "other" indices per quad
+    other_indices_reshaped = other_indices[1].reshape(M_final, 2)
+    C_indices = other_indices_reshaped[:, 0]
+    D_indices = other_indices_reshaped[:, 1]
+
+    C = P_final[np.arange(M_final), C_indices]  # (M_final, 2)
+    D = P_final[np.arange(M_final), D_indices]  # (M_final, 2)
+
+    # Project C and D onto basis and normalize by L
+    C_vec = C - A
+    D_vec = D - A
+
+    c_coords = np.stack([
+        np.sum(C_vec * e1, axis=1),
+        np.sum(C_vec * e2, axis=1)
+    ], axis=1) / L[:, None]  # (M_final, 2)
+
+    d_coords = np.stack([
+        np.sum(D_vec * e1, axis=1),
+        np.sum(D_vec * e2, axis=1)
+    ], axis=1) / L[:, None]  # (M_final, 2)
+
+    # Sort coordinates lexicographically for each quad (vectorized)
+    # Stack c and d coordinates: (M_final, 2, 2) - 2 points × 2 coords
+    pairs = np.stack([c_coords, d_coords], axis=1)  # (M_final, 2, 2)
+
+    # Determine which point should come first (lexicographic order)
+    # First compare x-coordinates ([:,0]), then y-coordinates ([:,1])
+    swap = ((pairs[:, 0, 0] > pairs[:, 1, 0]) |
+            ((pairs[:, 0, 0] == pairs[:, 1, 0]) & (pairs[:, 0, 1] > pairs[:, 1, 1])))
+
+    # Swap where needed
+    pairs[swap] = pairs[swap, ::-1, :]
+
+    # Flatten to descriptor format: [x1, y1, x2, y2]
+    descs[final_mask] = pairs.reshape(M_final, 4)
+    lens[final_mask] = L
+
+    return descs, lens
+
 def quantize_desc(desc: np.ndarray, eps: float) -> Tuple[int, int, int, int]:
     q = np.floor(desc / eps + 0.5).astype(np.int64)
     return int(q[0]), int(q[1]), int(q[2]), int(q[3])
 
+def reflect_desc(desc: np.ndarray) -> np.ndarray:
+    """Reflect quad descriptor across its baseline (flip y) with lexicographic re-ordering."""
+    x1, y1, x2, y2 = (float(desc[0]), float(desc[1]), float(desc[2]), float(desc[3]))
+    y1 = -y1
+    y2 = -y2
+    if (x1 > x2) or (x1 == x2 and y1 > y2):
+        x1, y1, x2, y2 = x2, y2, x1, y1
+    return np.array([x1, y1, x2, y2], dtype=np.float64)
+
+# Phase 1 Optimization: Pre-computed neighbor offsets cache
+_NEIGHBOR_OFFSETS_CACHE: Dict[int, np.ndarray] = {}
+
+def _get_neighbor_offsets(r: int) -> np.ndarray:
+    """Get pre-computed neighbor offsets for given radius."""
+    if r not in _NEIGHBOR_OFFSETS_CACHE:
+        x = np.arange(-r, r + 1, dtype=np.int32)
+        # Create meshgrid and reshape to (n_neighbors, 4)
+        grid = np.meshgrid(x, x, x, x, indexing='ij')
+        offsets = np.stack([g.ravel() for g in grid], axis=1)
+        _NEIGHBOR_OFFSETS_CACHE[r] = offsets
+    return _NEIGHBOR_OFFSETS_CACHE[r]
+
 def neighbors_bins(key: Tuple[int, int, int, int], r: int = 1) -> Iterable[Tuple[int, int, int, int]]:
-    a, b, c, d = key
-    for da in range(-r, r + 1):
-        for db in range(-r, r + 1):
-            for dc in range(-r, r + 1):
-                for dd in range(-r, r + 1):
-                    yield (a + da, b + db, c + dc, d + dd)
+    """Generate neighbor bins using optimized pre-computed offsets."""
+    offsets = _get_neighbor_offsets(r)
+    key_arr = np.array(key, dtype=np.int32)
+    neighbors = key_arr + offsets
+    # Return as tuples of Python ints for compatibility (important for dict keys)
+    for neighbor in neighbors:
+        yield tuple(int(x) for x in neighbor)
 
 def baseline_rank_bins(lengths: np.ndarray, n_bins: int) -> np.ndarray:
     """
@@ -241,38 +384,60 @@ class QuadEntry:
     bin_id: int
     mags: Optional[Tuple[float, float, float, float]] = None
 
-def build_quad_hash_multiscale(points: np.ndarray, mags: Optional[np.ndarray], k: int, eps: float, n_scale_bins: int
-                               ) -> Dict[Tuple[int, Tuple[int, int, int, int]], List[QuadEntry]]:
+def build_quad_hash_multiscale(
+    points: np.ndarray,
+    mags: Optional[np.ndarray],
+    k: int,
+    eps: float,
+    n_scale_bins: int,
+    allow_reflection: bool = True,
+) -> Dict[Tuple[int, Tuple[int, int, int, int]], List[QuadEntry]]:
     """
     Hash key: (scale_bin_id, quantized_descriptor)
+
+    Phase 2 Optimization: Uses vectorized quad descriptor calculation.
     """
     quads = make_local_quads(points, k=k)
     if not quads:
         return {}
 
-    descs = []
-    lens = []
-    for q in quads:
-        desc, L = quad_descriptor(points[list(q)])
-        descs.append(desc)
-        lens.append(L)
-    descs = np.asarray(descs, dtype=np.float64)
-    lens = np.asarray(lens, dtype=np.float64)
+    # Phase 2: Vectorized descriptor calculation
+    quad_array = np.array(quads, dtype=np.int32)
+    descs, lens = quad_descriptor_batch(points, quad_array)
 
+    # Phase 1: Use boolean indexing instead of list comprehension
     ok = np.isfinite(descs).all(axis=1) & np.isfinite(lens) & (lens > 0)
-    quads_ok = [quads[i] for i in range(len(quads)) if ok[i]]
+    quads_ok = quad_array[ok]  # Keep as numpy array
     descs_ok = descs[ok]
     lens_ok = lens[ok]
 
+    if len(quads_ok) == 0:
+        return {}
+
     bins = baseline_rank_bins(lens_ok, n_bins=n_scale_bins)
 
+    # Phase 1: Pre-allocate and use numpy operations
     H: Dict[Tuple[int, Tuple[int, int, int, int]], List[QuadEntry]] = {}
-    for q, desc, b in zip(quads_ok, descs_ok, bins):
-        key = (int(b), quantize_desc(desc, eps))
+    for i in range(len(quads_ok)):
+        q = tuple(quads_ok[i])  # Convert to tuple for QuadEntry
+        desc = descs_ok[i]
+        b = int(bins[i])
+
         me = None
         if mags is not None:
-            me = tuple(float(m) for m in mags[list(q)])
-        H.setdefault(key, []).append(QuadEntry(idxs=q, desc=desc, bin_id=int(b), mags=me))
+            me = tuple(float(mags[idx]) for idx in q)
+        entry = QuadEntry(idxs=q, desc=desc, bin_id=b, mags=me)
+
+        # Insert descriptor and its reflected counterpart to handle parity flips
+        key = (b, quantize_desc(desc, eps))
+        H.setdefault(key, []).append(entry)
+
+        if allow_reflection:
+            desc_ref = reflect_desc(desc)
+            key_ref = (b, quantize_desc(desc_ref, eps))
+            if key_ref != key:
+                H.setdefault(key_ref, []).append(entry)
+
     return H
 
 # -----------------------------
@@ -293,6 +458,11 @@ class AstrometryConfig:
 
     allow_reflection: bool = True
     use_mag_signature: bool = True
+
+    # WCS prior constraints (use initial WCS to filter hypotheses)
+    use_wcs_prior: bool = True
+    scale_tolerance: float = 0.30  # fractional, e.g. 0.30 = +/-30%
+    enforce_parity: bool = True
 
     # Two-stage scoring
     stage1_n_det: int = 50              # cheap scoring uses only brightest subset of selected detections
@@ -361,32 +531,61 @@ class QuadHashAstrometry:
         if len(det_xy) < 8 or len(ref_uv) < 8:
             raise RuntimeError("Not enough points after selection.")
 
+        # WCS prior: expected scale/parity from initial WCS (used to filter hypotheses)
+        expected_scale = None  # radians per pixel in tangent plane
+        expected_parity = None  # sign of determinant
+        if self.cfg.use_wcs_prior:
+            try:
+                # Estimate local linear transform from pixel to tangent plane around CRPIX
+                crpix = np.asarray(wcs_init.wcs.crpix, dtype=np.float64)
+                if crpix.size == 2 and np.all(np.isfinite(crpix)):
+                    px = np.array([crpix[0], crpix[0] + 1.0, crpix[0]], dtype=np.float64)
+                    py = np.array([crpix[1], crpix[1], crpix[1] + 1.0], dtype=np.float64)
+                    ra_s, dec_s = wcs_init.all_pix2world(px, py, 1)
+                    u_s, v_s = tan_project_deg(ra_s, dec_s, ra0, dec0)
+                    # Jacobian: columns are du/dx, du/dy; dv/dx, dv/dy
+                    J = np.array([
+                        [u_s[1] - u_s[0], u_s[2] - u_s[0]],
+                        [v_s[1] - v_s[0], v_s[2] - v_s[0]],
+                    ], dtype=np.float64)
+                    det_j = float(np.linalg.det(J))
+                    if np.isfinite(det_j) and det_j != 0:
+                        expected_scale = np.sqrt(abs(det_j))
+                        expected_parity = 1.0 if det_j > 0 else -1.0
+            except Exception:
+                expected_scale = None
+                expected_parity = None
+
         # Reference multiscale hash
         ref_hash = build_quad_hash_multiscale(
             ref_uv, ref_mag,
             k=self.cfg.neighbor_k,
             eps=self.cfg.eps_desc,
-            n_scale_bins=self.cfg.n_scale_bins
+            n_scale_bins=self.cfg.n_scale_bins,
+            allow_reflection=self.cfg.allow_reflection,
         )
 
         # Detection quads + their baseline bins
+        # Phase 2: Use vectorized quad descriptor calculation
         det_quads = make_local_quads(det_xy, k=self.cfg.neighbor_k)
         if not det_quads:
             raise RuntimeError("Not enough detections for quad matching.")
 
-        det_descs = []
-        det_lens = []
-        for q in det_quads:
-            desc, L = quad_descriptor(det_xy[list(q)])
-            det_descs.append(desc)
-            det_lens.append(L)
-        det_descs = np.asarray(det_descs, dtype=np.float64)
-        det_lens = np.asarray(det_lens, dtype=np.float64)
+        # Vectorized descriptor calculation
+        det_quad_array = np.array(det_quads, dtype=np.int32)
+        det_descs, det_lens = quad_descriptor_batch(det_xy, det_quad_array)
+
+        # Phase 1: Use boolean indexing
         okq = np.isfinite(det_descs).all(axis=1) & np.isfinite(det_lens) & (det_lens > 0)
-        det_quads = [det_quads[i] for i in range(len(det_quads)) if okq[i]]
+        det_quads = det_quad_array[okq]  # Keep as numpy array
         det_descs = det_descs[okq]
         det_lens = det_lens[okq]
         det_bins = baseline_rank_bins(det_lens, n_bins=self.cfg.n_scale_bins)
+
+        # Phase 1: Pre-compute quantized descriptors (cache for stage 1 loop)
+        det_quads_quantized = np.array([
+            quantize_desc(desc, self.cfg.eps_desc) for desc in det_descs
+        ], dtype=object)
 
         # Trees for scoring (tangent plane)
         ref_tree = cKDTree(ref_uv)
@@ -421,12 +620,13 @@ class QuadHashAstrometry:
                 top_hyp[worst_i] = (score, R, t, s)
 
         # --- Stage 1: cheap scoring
+        # Phase 1: Pre-compute neighbor bins to avoid repeated computation
         for qi in q_order:
             q = det_quads[qi]
-            desc = det_descs[qi]
             bin_id = int(det_bins[qi])
 
-            key0 = (bin_id, quantize_desc(desc, self.cfg.eps_desc))
+            # Phase 1: Use cached quantized descriptor
+            key0 = (bin_id, det_quads_quantized[qi])
 
             # Gather candidates from neighboring descriptor bins (same scale bin)
             candidates: List[QuadEntry] = []
@@ -440,7 +640,8 @@ class QuadHashAstrometry:
                 continue
 
             # Optional quad mag signature
-            det_sig = mag_signature(det_mag[list(q)]) if self.cfg.use_mag_signature else None
+            # Phase 1: Avoid repeated list() conversion
+            det_sig = mag_signature(det_mag[q]) if self.cfg.use_mag_signature else None
 
             rng.shuffle(candidates)
             for ce in candidates[: self.cfg.max_candidates_per_bucket]:
@@ -448,13 +649,26 @@ class QuadHashAstrometry:
                     if mag_signature(np.array(ce.mags)) != det_sig:
                         continue
 
-                P = det_xy[list(q)]
+                # Phase 1: Direct array indexing (q is already numpy array)
+                P = det_xy[q]
                 Q = ref_uv[list(ce.idxs)]
 
                 try:
                     R, t, s = estimate_similarity_2d(P, Q, allow_reflection=self.cfg.allow_reflection)
                 except Exception:
                     continue
+
+                # Filter by WCS prior scale/parity if requested
+                if expected_scale is not None and self.cfg.scale_tolerance is not None:
+                    tol = float(self.cfg.scale_tolerance)
+                    if tol >= 0:
+                        if not (expected_scale * (1 - tol) <= s <= expected_scale * (1 + tol)):
+                            continue
+                if (expected_parity is not None and self.cfg.enforce_parity
+                        and self.cfg.allow_reflection):
+                    detR = float(np.linalg.det(R))
+                    if not np.isfinite(detR) or np.sign(detR) != expected_parity:
+                        continue
 
                 # Cheap score on stage1 subset
                 det_uv1 = apply_similarity(det_xy_stage1, R, t, s)
@@ -476,6 +690,16 @@ class QuadHashAstrometry:
         best = {"inliers": -1, "R": None, "t": None, "s": None, "pairs": None}
 
         for (score1, R, t, s) in top_hyp:
+            if expected_scale is not None and self.cfg.scale_tolerance is not None:
+                tol = float(self.cfg.scale_tolerance)
+                if tol >= 0:
+                    if not (expected_scale * (1 - tol) <= s <= expected_scale * (1 + tol)):
+                        continue
+            if (expected_parity is not None and self.cfg.enforce_parity
+                    and self.cfg.allow_reflection):
+                detR = float(np.linalg.det(R))
+                if not np.isfinite(detR) or np.sign(detR) != expected_parity:
+                    continue
             det_uv = apply_similarity(det_xy, R, t, s)
             dist, nn = ref_tree.query(det_uv, k=1, distance_upper_bound=r2)
             ok = np.isfinite(dist) & (dist < r2) & (nn < len(ref_uv))
@@ -505,13 +729,18 @@ class QuadHashAstrometry:
                                f"Try loosening stage2_radius_arcsec or increasing top_k_hypotheses.")
 
         # Build match list for final fit
+        # Phase 1: Use numpy operations instead of list comprehensions
         pairs = best["pairs"]
-        det_x = det_xy[[p[0] for p in pairs], 0]
-        det_y = det_xy[[p[0] for p in pairs], 1]
-        ref_ra = ra[cat_sub_idx[[p[1] for p in pairs]]]
-        ref_dec = dec[cat_sub_idx[[p[1] for p in pairs]]]
-        ref_m = m_cat[cat_sub_idx[[p[1] for p in pairs]]]
-        det_m = det_mag[[p[0] for p in pairs]]
+        pairs_arr = np.array(pairs, dtype=np.int32)
+        det_indices = pairs_arr[:, 0]
+        ref_indices = pairs_arr[:, 1]
+
+        det_x = det_xy[det_indices, 0]
+        det_y = det_xy[det_indices, 1]
+        ref_ra = ra[cat_sub_idx[ref_indices]]
+        ref_dec = dec[cat_sub_idx[ref_indices]]
+        ref_m = m_cat[cat_sub_idx[ref_indices]]
+        det_m = det_mag[det_indices]
 
         # Final refinement via fit_wcs_from_points + clipping
         sky = SkyCoord(ref_ra * u.deg, ref_dec * u.deg, frame="icrs")
@@ -611,6 +840,10 @@ def refine_wcs_quadhash(
     n_det: int = 150,
     n_ref: int = 600,
     max_quads_tested: int = 8000,
+    allow_reflection: bool = True,
+    use_wcs_prior: bool = True,
+    scale_tolerance: float = 0.30,
+    enforce_parity: bool = True,
     get_header: bool = False,
     update: bool = False,
     verbose: bool = False,
@@ -635,6 +868,10 @@ def refine_wcs_quadhash(
     :param n_det: Number of brightest detections to use for matching (default 150)
     :param n_ref: Number of brightest catalog stars to use for matching (default 600)
     :param max_quads_tested: Maximum number of detection quads to test (default 8000)
+    :param allow_reflection: Allow reflected quad matches (default True)
+    :param use_wcs_prior: Use initial WCS to filter hypotheses by scale/parity (default True)
+    :param scale_tolerance: Fractional tolerance for scale filtering (default 0.30)
+    :param enforce_parity: Enforce parity consistency with initial WCS (default True)
     :param get_header: If True, function will return the FITS header object instead of WCS solution
     :param update: If set, the object list will be updated in-place to contain correct `ra` and `dec` sky coordinates
     :param verbose: Whether to show verbose messages during the run. May be either boolean, or a `print`-like function.
@@ -754,6 +991,10 @@ def refine_wcs_quadhash(
         stage2_radius_arcsec=sr * 3600,  # Stage 2: use requested radius
         top_k_hypotheses=80,
         max_quads_tested=max_quads_tested,
+        allow_reflection=allow_reflection,
+        use_wcs_prior=use_wcs_prior,
+        scale_tolerance=scale_tolerance,
+        enforce_parity=enforce_parity,
         sip_degree=max(0, min(3, order)),  # Clamp to 0-3
         refine_clip_sigma=4.0,
         refine_max_iter=5,
