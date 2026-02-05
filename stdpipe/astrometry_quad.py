@@ -1,15 +1,16 @@
 """
-Quad-hash astrometry solver (Python-only) with two practical upgrades:
+Quad-hash astrometry solver (Python-only) with practical upgrades:
 
 1) Multi-scale quad pools:
    - quads are partitioned into baseline-length *rank bins* (e.g. 6 bins)
-   - matching is done only within the same bin, which reduces ambiguity in crowded fields
+   - consistent binning between detection and reference sets via shared edges
+   - matching is done only within the same bin, reducing ambiguity
 
-2) Two-stage hypothesis scoring:
-   - Stage 1: cheap scoring on a small subset of detections (top-N bright)
-   - Keep only top-K hypotheses
-   - Stage 2: full scoring on all selected detections with one-to-one matches
-   - Then final WCS refinement via astropy.wcs.utils.fit_wcs_from_points
+2) Two-stage hypothesis scoring with accuracy enhancements:
+   - Stage 1: weighted scoring on a small subset with multi-probe hashing
+   - Stage 2: mutual nearest-neighbor matching with weighted scoring
+   - Iterative affine re-matching to grow the match set
+   - Progressive sigma-clipping in final WCS refinement
 
 Inputs
 ------
@@ -145,6 +146,85 @@ def estimate_similarity_2d(A: np.ndarray, B: np.ndarray, allow_reflection: bool 
 def apply_similarity(xy: np.ndarray, R: np.ndarray, t: np.ndarray, s: float) -> np.ndarray:
     xy = np.asarray(xy, dtype=np.float64)
     return (s * (xy @ R.T)) + t
+
+# -----------------------------
+# Affine transform
+# -----------------------------
+
+def estimate_affine_2d(A: np.ndarray, B: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Fit affine transform B = A @ M.T + t via least squares (6 DOF).
+
+    More flexible than similarity (4 DOF) - handles shear and non-square pixels.
+    Returns (M, t) where M is (2,2) linear part and t is (2,) translation.
+    """
+    A = np.asarray(A, dtype=np.float64)
+    B = np.asarray(B, dtype=np.float64)
+    n = A.shape[0]
+    if n < 3:
+        raise ValueError("Need at least 3 points for affine fit")
+    A_aug = np.hstack([A, np.ones((n, 1))])  # (n, 3)
+    cond = np.linalg.cond(A_aug)
+    if cond > 1e12:
+        raise ValueError(f"Degenerate affine fit (condition number {cond:.1e})")
+    X, _, _, _ = np.linalg.lstsq(A_aug, B, rcond=None)
+    M = X[:2].T  # (2, 2)
+    t = X[2]     # (2,)
+    if not (np.all(np.isfinite(M)) and np.all(np.isfinite(t))):
+        raise ValueError("Degenerate affine fit (non-finite values)")
+    return M, t
+
+def apply_affine(xy: np.ndarray, M: np.ndarray, t: np.ndarray) -> np.ndarray:
+    """Apply affine transform: result = xy @ M.T + t
+
+    Raises ValueError if the result contains non-finite values.
+    """
+    xy = np.asarray(xy, dtype=np.float64)
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        result = xy @ M.T + t
+    if not np.all(np.isfinite(result)):
+        raise ValueError("Affine transform produced non-finite values")
+    return result
+
+# -----------------------------
+# Mutual nearest-neighbor matching
+# -----------------------------
+
+def _mutual_nearest_neighbor(
+    xy_a: np.ndarray,
+    xy_b: np.ndarray,
+    radius: float,
+    tree_b: Optional[cKDTree] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Find mutual nearest-neighbor pairs between two point sets within radius.
+
+    Returns (idx_a, idx_b) arrays of matched indices where each pair is
+    the mutual closest match within the given radius.
+
+    Args:
+        xy_a: (N, 2) first point set
+        xy_b: (M, 2) second point set
+        radius: maximum matching distance
+        tree_b: optional pre-built cKDTree for xy_b (avoids rebuilding)
+    """
+    if len(xy_a) == 0 or len(xy_b) == 0:
+        return np.array([], dtype=np.int32), np.array([], dtype=np.int32)
+
+    tree_a = cKDTree(xy_a)
+    if tree_b is None:
+        tree_b = cKDTree(xy_b)
+
+    # Forward: for each point in A, find nearest in B
+    dist_fwd, nn_fwd = tree_b.query(xy_a, k=1, distance_upper_bound=radius)
+    # Reverse: for each point in B, find nearest in A
+    dist_rev, nn_rev = tree_a.query(xy_b, k=1, distance_upper_bound=radius)
+
+    ok_fwd = np.isfinite(dist_fwd) & (dist_fwd < radius) & (nn_fwd < len(xy_b))
+    a_ids = np.nonzero(ok_fwd)[0]
+    b_ids = nn_fwd[a_ids].astype(int)
+
+    # Mutual check: B's nearest neighbor back to A must be the same point
+    mutual = nn_rev[b_ids] == a_ids
+    return a_ids[mutual], b_ids[mutual]
 
 # -----------------------------
 # Quad generation & descriptors
@@ -358,10 +438,74 @@ def neighbors_bins(key: Tuple[int, int, int, int], r: int = 1) -> Iterable[Tuple
     for neighbor in neighbors:
         yield tuple(int(x) for x in neighbor)
 
-def baseline_rank_bins(lengths: np.ndarray, n_bins: int) -> np.ndarray:
+def multiprobe_desc_keys(desc: np.ndarray, eps: float, threshold: float = 0.3) -> List[Tuple[int, int, int, int]]:
+    """Multi-probe hashing: return the primary quantized key plus keys for nearby
+    bins where the descriptor is close to a bin boundary.
+
+    Instead of searching all (2r+1)^4 = 81 neighboring bins, this probes only
+    the bins that the descriptor might fall into due to quantization noise.
+    Typically returns 1-8 keys instead of 81.
+
+    Args:
+        desc: 4D descriptor array
+        eps: quantization step size
+        threshold: fraction of eps within which a boundary is considered "near"
+    """
+    q = desc / eps + 0.5
+    base = np.floor(q).astype(np.int64)
+    frac = q - base  # fractional part in [0, 1)
+
+    primary = tuple(int(x) for x in base)
+    keys = [primary]
+
+    # Find dimensions near bin boundaries
+    near_dims = []
+    offsets_per_dim = {}
+
+    for d in range(4):
+        if frac[d] < threshold:
+            near_dims.append(d)
+            offsets_per_dim[d] = -1
+        elif frac[d] > (1.0 - threshold):
+            near_dims.append(d)
+            offsets_per_dim[d] = 1
+
+    # Single-dimension probes
+    for d in near_dims:
+        alt = list(base)
+        alt[d] += offsets_per_dim[d]
+        keys.append(tuple(int(x) for x in alt))
+
+    # Two-dimension combination probes
+    for i in range(len(near_dims)):
+        for j in range(i + 1, len(near_dims)):
+            d1, d2 = near_dims[i], near_dims[j]
+            alt = list(base)
+            alt[d1] += offsets_per_dim[d1]
+            alt[d2] += offsets_per_dim[d2]
+            keys.append(tuple(int(x) for x in alt))
+
+    return keys
+
+def compute_bin_edges(lengths: np.ndarray, n_bins: int) -> Optional[np.ndarray]:
+    """Compute quantile-based bin edges from a set of baseline lengths.
+
+    Returns array of (n_bins+1) edge values, or None if binning not possible.
+    """
+    lengths = np.asarray(lengths, dtype=np.float64)
+    if len(lengths) == 0 or n_bins <= 1:
+        return None
+    qs = np.quantile(lengths, q=np.linspace(0, 1, n_bins + 1))
+    for i in range(1, len(qs)):
+        if qs[i] <= qs[i - 1]:
+            qs[i] = np.nextafter(qs[i - 1], np.inf)
+    return qs
+
+def baseline_rank_bins(lengths: np.ndarray, n_bins: int, edges: Optional[np.ndarray] = None) -> np.ndarray:
     """
     Assign each length to a *rank* bin based on quantiles.
-    This avoids needing absolute scale consistency between pixels and tangent plane.
+    If edges are provided, use those instead of computing from the data.
+    This allows consistent binning between detection and reference sets.
     """
     lengths = np.asarray(lengths, dtype=np.float64)
     n = len(lengths)
@@ -369,6 +513,9 @@ def baseline_rank_bins(lengths: np.ndarray, n_bins: int) -> np.ndarray:
         return np.zeros(0, dtype=np.int16)
     if n_bins <= 1:
         return np.zeros(n, dtype=np.int16)
+    if edges is not None:
+        b = np.searchsorted(edges[1:-1], lengths, side="right")
+        return np.clip(b, 0, n_bins - 1).astype(np.int16)
     qs = np.quantile(lengths, q=np.linspace(0, 1, n_bins + 1))
     # make strictly increasing to avoid pathological equal-quantile edges
     for i in range(1, len(qs)):
@@ -391,9 +538,14 @@ def build_quad_hash_multiscale(
     eps: float,
     n_scale_bins: int,
     allow_reflection: bool = True,
+    bin_edges: Optional[np.ndarray] = None,
 ) -> Dict[Tuple[int, Tuple[int, int, int, int]], List[QuadEntry]]:
     """
     Hash key: (scale_bin_id, quantized_descriptor)
+
+    If bin_edges is provided, use those for baseline binning instead of
+    computing quantiles from the data. This enables consistent binning
+    between detection and reference sets.
 
     Phase 2 Optimization: Uses vectorized quad descriptor calculation.
     """
@@ -414,7 +566,7 @@ def build_quad_hash_multiscale(
     if len(quads_ok) == 0:
         return {}
 
-    bins = baseline_rank_bins(lens_ok, n_bins=n_scale_bins)
+    bins = baseline_rank_bins(lens_ok, n_bins=n_scale_bins, edges=bin_edges)
 
     # Phase 1: Pre-allocate and use numpy operations
     H: Dict[Tuple[int, Tuple[int, int, int, int]], List[QuadEntry]] = {}
@@ -472,10 +624,21 @@ class AstrometryConfig:
     max_quads_tested: int = 5000        # max detection quads to try
     max_candidates_per_bucket: int = 60 # cap ref candidates pulled per hash bucket
 
+    # Multi-probe hashing: probe only nearby bins instead of all (2r+1)^4
+    use_multiprobe: bool = True
+
     # Final fit
     sip_degree: int = 3
     refine_clip_sigma: float = 4.0
+    refine_clip_sigma_start: float = 5.0    # progressive clipping: start value
+    refine_min_match_fraction: float = 0.5  # keep at least this fraction of initial matches
     refine_max_iter: int = 5
+    refine_rematch_iters: int = 2           # iterative affine re-matching rounds
+    # Optional expanded refinement pool (use many more objects for final fit)
+    refine_use_all: bool = False
+    refine_n_det: Optional[int] = None
+    refine_n_ref: Optional[int] = None
+    refine_match_radius_arcsec: Optional[float] = None
 
 
 class QuadHashAstrometry:
@@ -556,17 +719,28 @@ class QuadHashAstrometry:
                 expected_scale = None
                 expected_parity = None
 
-        # Reference multiscale hash
+        # --- Consistent baseline binning (#8) ---
+        # Compute ref quad baselines first, derive shared bin edges
+        ref_quads_raw = make_local_quads(ref_uv, k=self.cfg.neighbor_k)
+        ref_bin_edges = None
+        if ref_quads_raw:
+            ref_qa = np.array(ref_quads_raw, dtype=np.int32)
+            _, ref_lens_raw = quad_descriptor_batch(ref_uv, ref_qa)
+            ok_ref = np.isfinite(ref_lens_raw) & (ref_lens_raw > 0)
+            if np.any(ok_ref):
+                ref_bin_edges = compute_bin_edges(ref_lens_raw[ok_ref], self.cfg.n_scale_bins)
+
+        # Reference multiscale hash (using shared bin edges)
         ref_hash = build_quad_hash_multiscale(
             ref_uv, ref_mag,
             k=self.cfg.neighbor_k,
             eps=self.cfg.eps_desc,
             n_scale_bins=self.cfg.n_scale_bins,
             allow_reflection=self.cfg.allow_reflection,
+            bin_edges=ref_bin_edges,
         )
 
         # Detection quads + their baseline bins
-        # Phase 2: Use vectorized quad descriptor calculation
         det_quads = make_local_quads(det_xy, k=self.cfg.neighbor_k)
         if not det_quads:
             raise RuntimeError("Not enough detections for quad matching.")
@@ -575,14 +749,19 @@ class QuadHashAstrometry:
         det_quad_array = np.array(det_quads, dtype=np.int32)
         det_descs, det_lens = quad_descriptor_batch(det_xy, det_quad_array)
 
-        # Phase 1: Use boolean indexing
         okq = np.isfinite(det_descs).all(axis=1) & np.isfinite(det_lens) & (det_lens > 0)
         det_quads = det_quad_array[okq]  # Keep as numpy array
         det_descs = det_descs[okq]
         det_lens = det_lens[okq]
-        det_bins = baseline_rank_bins(det_lens, n_bins=self.cfg.n_scale_bins)
 
-        # Phase 1: Pre-compute quantized descriptors (cache for stage 1 loop)
+        # Scale detection baselines to tangent-plane units for consistent binning (#8)
+        if expected_scale is not None and expected_scale > 0 and ref_bin_edges is not None:
+            det_lens_for_binning = det_lens * expected_scale
+            det_bins = baseline_rank_bins(det_lens_for_binning, n_bins=self.cfg.n_scale_bins, edges=ref_bin_edges)
+        else:
+            det_bins = baseline_rank_bins(det_lens, n_bins=self.cfg.n_scale_bins)
+
+        # Pre-compute quantized descriptors (cache for stage 1 loop)
         det_quads_quantized = np.array([
             quantize_desc(desc, self.cfg.eps_desc) for desc in det_descs
         ], dtype=object)
@@ -599,9 +778,8 @@ class QuadHashAstrometry:
         det_stage1_ids = order_det[: min(self.cfg.stage1_n_det, len(order_det))]
         det_xy_stage1 = det_xy[det_stage1_ids]
 
-        # Hypothesis storage: keep top-K by stage1 score
-        # Store tuples (score, R, t, s)
-        top_hyp: List[Tuple[int, np.ndarray, np.ndarray, float]] = []
+        # Hypothesis storage: keep top-K by stage1 score (now float for weighted scoring)
+        top_hyp: List[Tuple[float, np.ndarray, np.ndarray, float]] = []
 
         rng = np.random.default_rng(12345)
 
@@ -609,7 +787,7 @@ class QuadHashAstrometry:
         rng.shuffle(q_order)
         q_order = q_order[: min(self.cfg.max_quads_tested, len(q_order))]
 
-        def _try_insert(score: int, R: np.ndarray, t: np.ndarray, s: float):
+        def _try_insert(score: float, R: np.ndarray, t: np.ndarray, s: float):
             nonlocal top_hyp
             if len(top_hyp) < self.cfg.top_k_hypotheses:
                 top_hyp.append((score, R, t, s))
@@ -619,28 +797,30 @@ class QuadHashAstrometry:
             if score > top_hyp[worst_i][0]:
                 top_hyp[worst_i] = (score, R, t, s)
 
-        # --- Stage 1: cheap scoring
-        # Phase 1: Pre-compute neighbor bins to avoid repeated computation
+        # --- Stage 1: cheap scoring with multi-probe hashing (#7) and weighted scoring (#5) ---
         for qi in q_order:
             q = det_quads[qi]
             bin_id = int(det_bins[qi])
 
-            # Phase 1: Use cached quantized descriptor
-            key0 = (bin_id, det_quads_quantized[qi])
+            kdesc = det_quads_quantized[qi]
 
-            # Gather candidates from neighboring descriptor bins (same scale bin)
+            # Gather candidates: multi-probe (#7) or full neighbor search
             candidates: List[QuadEntry] = []
-            _, kdesc = key0
-            for kdesc2 in neighbors_bins(kdesc, r=self.cfg.bin_neighbor_radius):
-                kk = (bin_id, kdesc2)
-                if kk in ref_hash:
-                    candidates.extend(ref_hash[kk])
+            if self.cfg.use_multiprobe:
+                for kdesc2 in multiprobe_desc_keys(det_descs[qi], self.cfg.eps_desc):
+                    kk = (bin_id, kdesc2)
+                    if kk in ref_hash:
+                        candidates.extend(ref_hash[kk])
+            else:
+                for kdesc2 in neighbors_bins(kdesc, r=self.cfg.bin_neighbor_radius):
+                    kk = (bin_id, kdesc2)
+                    if kk in ref_hash:
+                        candidates.extend(ref_hash[kk])
 
             if not candidates:
                 continue
 
             # Optional quad mag signature
-            # Phase 1: Avoid repeated list() conversion
             det_sig = mag_signature(det_mag[q]) if self.cfg.use_mag_signature else None
 
             rng.shuffle(candidates)
@@ -649,7 +829,6 @@ class QuadHashAstrometry:
                     if mag_signature(np.array(ce.mags)) != det_sig:
                         continue
 
-                # Phase 1: Direct array indexing (q is already numpy array)
                 P = det_xy[q]
                 Q = ref_uv[list(ce.idxs)]
 
@@ -670,24 +849,27 @@ class QuadHashAstrometry:
                     if not np.isfinite(detR) or np.sign(detR) != expected_parity:
                         continue
 
-                # Cheap score on stage1 subset
+                # Weighted score on stage1 subset (#5)
                 det_uv1 = apply_similarity(det_xy_stage1, R, t, s)
                 dist, nn = ref_tree.query(det_uv1, k=1, distance_upper_bound=r1)
                 ok = np.isfinite(dist) & (dist < r1) & (nn < len(ref_uv))
-                score = int(np.sum(ok))
-                if score <= 0:
+                if not np.any(ok):
                     continue
+
+                # Quadratic weight: closer matches score higher
+                weights = 1.0 - (dist[ok] / r1) ** 2
+                score = float(np.sum(weights))
 
                 _try_insert(score, R, t, s)
 
         if not top_hyp:
             raise RuntimeError("Pattern matching failed at stage 1. Try increasing n_det/n_ref, eps_desc, or stage1_radius_arcsec.")
 
-        # --- Stage 2: full scoring of top hypotheses
+        # --- Stage 2: full scoring with mutual nearest-neighbor (#3) and weighted scoring (#5) ---
         # Sort hypotheses by stage1 score descending
         top_hyp.sort(key=lambda x: x[0], reverse=True)
 
-        best = {"inliers": -1, "R": None, "t": None, "s": None, "pairs": None}
+        best = {"score": -1.0, "inliers": -1, "R": None, "t": None, "s": None, "pairs": None}
 
         for (score1, R, t, s) in top_hyp:
             if expected_scale is not None and self.cfg.scale_tolerance is not None:
@@ -700,56 +882,153 @@ class QuadHashAstrometry:
                 detR = float(np.linalg.det(R))
                 if not np.isfinite(detR) or np.sign(detR) != expected_parity:
                     continue
+
             det_uv = apply_similarity(det_xy, R, t, s)
-            dist, nn = ref_tree.query(det_uv, k=1, distance_upper_bound=r2)
-            ok = np.isfinite(dist) & (dist < r2) & (nn < len(ref_uv))
-            if not np.any(ok):
+
+            # Mutual nearest-neighbor matching (#3)
+            det_ids, ref_ids = _mutual_nearest_neighbor(det_uv, ref_uv, r2, tree_b=ref_tree)
+
+            if len(det_ids) == 0:
                 continue
 
-            det_ids = np.nonzero(ok)[0]
-            ref_ids = nn[ok].astype(int)
-            order = np.argsort(dist[ok])
-            det_ids = det_ids[order]
-            ref_ids = ref_ids[order]
+            # Weighted score (#5): closer matches count more
+            dists = np.hypot(
+                det_uv[det_ids, 0] - ref_uv[ref_ids, 0],
+                det_uv[det_ids, 1] - ref_uv[ref_ids, 1]
+            )
+            weights = 1.0 - (dists / r2) ** 2
+            score = float(np.sum(weights))
 
-            # One-to-one greedy
-            seen = set()
-            pairs = []
-            for di, rj in zip(det_ids, ref_ids):
-                if rj in seen:
-                    continue
-                seen.add(rj)
-                pairs.append((int(di), int(rj)))
+            pairs = list(zip(det_ids.tolist(), ref_ids.tolist()))
 
-            if len(pairs) > best["inliers"]:
-                best = {"inliers": len(pairs), "R": R, "t": t, "s": s, "pairs": pairs}
+            if score > best["score"]:
+                best = {"score": score, "inliers": len(pairs), "R": R, "t": t, "s": s, "pairs": pairs}
 
         if best["inliers"] < 8:
             raise RuntimeError(f"Pattern matching failed at stage 2 (best inliers={best['inliers']}). "
                                f"Try loosening stage2_radius_arcsec or increasing top_k_hypotheses.")
 
-        # Build match list for final fit
-        # Phase 1: Use numpy operations instead of list comprehensions
+        # --- Iterative affine re-matching (#1, #2) ---
+        # Refine the match set by fitting an affine from current inliers,
+        # re-projecting all detections, and re-matching with mutual NN
         pairs = best["pairs"]
+        r_rematch = r2
+
+        for rematch_it in range(self.cfg.refine_rematch_iters):
+            if len(pairs) < 6:
+                break
+
+            pairs_arr = np.array(pairs, dtype=np.int32)
+            A_pts = det_xy[pairs_arr[:, 0]]
+            B_pts = ref_uv[pairs_arr[:, 1]]
+
+            try:
+                M_affine, t_affine = estimate_affine_2d(A_pts, B_pts)
+                # Re-project all detections using affine
+                det_uv_affine = apply_affine(det_xy, M_affine, t_affine)
+            except Exception:
+                break
+
+            # Tighten radius on later iterations
+            r_iter = r_rematch * (0.8 if rematch_it > 0 else 1.0)
+
+            # Mutual NN re-matching
+            new_det_ids, new_ref_ids = _mutual_nearest_neighbor(
+                det_uv_affine, ref_uv, r_iter, tree_b=ref_tree
+            )
+
+            if len(new_det_ids) < max(8, int(len(pairs) * 0.6)):
+                break
+
+            pairs = list(zip(new_det_ids.tolist(), new_ref_ids.tolist()))
+
+        # Build match list for final fit
         pairs_arr = np.array(pairs, dtype=np.int32)
         det_indices = pairs_arr[:, 0]
         ref_indices = pairs_arr[:, 1]
 
-        det_x = det_xy[det_indices, 0]
-        det_y = det_xy[det_indices, 1]
-        ref_ra = ra[cat_sub_idx[ref_indices]]
-        ref_dec = dec[cat_sub_idx[ref_indices]]
-        ref_m = m_cat[cat_sub_idx[ref_indices]]
-        det_m = det_mag[det_indices]
+        det_match_idx = obj_sub_idx[det_indices]
+        ref_match_idx = cat_sub_idx[ref_indices]
 
-        # Final refinement via fit_wcs_from_points + clipping
+        seed_matches = int(len(det_match_idx))
+        used_expanded = False
+        refine_pool_det = int(len(det_match_idx))
+        refine_pool_ref = int(len(ref_match_idx))
+
+        # Optional: expand refinement pool using many more detections/catalog entries
+        if self.cfg.refine_use_all:
+            det_pool_idx = np.arange(len(x))
+            if self.cfg.refine_n_det is not None and self.cfg.refine_n_det > 0:
+                det_pool_idx = np.argsort(m_obj)[: min(self.cfg.refine_n_det, len(m_obj))]
+            ref_pool_idx = np.arange(len(ra))
+            if self.cfg.refine_n_ref is not None and self.cfg.refine_n_ref > 0:
+                ref_pool_idx = np.argsort(m_cat)[: min(self.cfg.refine_n_ref, len(m_cat))]
+
+            if len(det_pool_idx) >= 8 and len(ref_pool_idx) >= 8:
+                det_xy_pool = np.column_stack([x[det_pool_idx], y[det_pool_idx]])
+                ref_u_all, ref_v_all = tan_project_deg(
+                    ra[ref_pool_idx], dec[ref_pool_idx], ra0, dec0
+                )
+                ref_uv_all = np.column_stack([ref_u_all, ref_v_all])
+
+                # Use affine from last rematch iteration for better projection
+                try:
+                    _pa = np.array(pairs, dtype=np.int32)
+                    _A = det_xy[_pa[:, 0]]
+                    _B = ref_uv[_pa[:, 1]]
+                    M_exp, t_exp = estimate_affine_2d(_A, _B)
+                    det_uv_pool = apply_affine(det_xy_pool, M_exp, t_exp)
+                except Exception:
+                    det_uv_pool = apply_similarity(det_xy_pool, best["R"], best["t"], best["s"])
+
+                r_match_arcsec = self.cfg.refine_match_radius_arcsec
+                if r_match_arcsec is None:
+                    r_match_arcsec = self.cfg.stage2_radius_arcsec
+                r_match = (float(r_match_arcsec) * u.arcsec).to_value(u.rad)
+
+                # Mutual nearest-neighbor for expanded pool
+                exp_det_ids, exp_ref_ids = _mutual_nearest_neighbor(
+                    det_uv_pool, ref_uv_all, r_match
+                )
+
+                if len(exp_det_ids) >= 8:
+                    det_match_idx = det_pool_idx[exp_det_ids]
+                    ref_match_idx = ref_pool_idx[exp_ref_ids]
+                    used_expanded = True
+                    refine_pool_det = int(len(det_pool_idx))
+                    refine_pool_ref = int(len(ref_pool_idx))
+
+        det_x = x[det_match_idx]
+        det_y = y[det_match_idx]
+        ref_ra = ra[ref_match_idx]
+        ref_dec = dec[ref_match_idx]
+        ref_m = m_cat[ref_match_idx]
+        det_m = m_obj[det_match_idx]
+        refine_matches_preclip = int(len(det_match_idx))
+
+        # Minimum match floor (#6): don't clip below this count
+        min_matches = max(8, int(refine_matches_preclip * self.cfg.refine_min_match_fraction))
+
+        # --- Progressive sigma-clipping refinement (#6) ---
         sky = SkyCoord(ref_ra * u.deg, ref_dec * u.deg, frame="icrs")
         xy = np.vstack([det_x, det_y])  # (2,N)
 
         refined_wcs = None
         keep = np.ones(xy.shape[1], dtype=bool)
 
-        for it in range(self.cfg.refine_max_iter):
+        # Progressive clipping: interpolate from start to end sigma
+        clip_start = self.cfg.refine_clip_sigma_start
+        clip_end = self.cfg.refine_clip_sigma
+        n_iter = self.cfg.refine_max_iter
+
+        for it in range(n_iter):
+            # Linearly interpolate clip threshold from start (loose) to end (tight)
+            if n_iter > 1:
+                frac = it / (n_iter - 1)
+            else:
+                frac = 1.0
+            clip_sigma = clip_start + (clip_end - clip_start) * frac
+
             xy_use = xy[:, keep]
             sky_use = sky[keep]
 
@@ -778,12 +1057,19 @@ class QuadHashAstrometry:
             if not np.isfinite(sig) or sig <= 0:
                 break
 
-            thresh = self.cfg.refine_clip_sigma * sig
+            thresh = clip_sigma * sig
             dr_full = np.full(keep.shape[0], np.nan, dtype=np.float64)
             dr_full[keep] = dr
             keep_new = keep & np.isfinite(dr_full) & (dr_full < thresh)
 
-            if keep_new.sum() == keep.sum() or keep_new.sum() < 8:
+            # Enforce minimum match floor (#6)
+            if keep_new.sum() < min_matches:
+                # Don't clip further if we'd go below the minimum
+                if keep_new.sum() >= 8:
+                    keep = keep_new
+                break
+
+            if keep_new.sum() == keep.sum():
                 keep = keep_new
                 break
             keep = keep_new
@@ -815,6 +1101,11 @@ class QuadHashAstrometry:
             "rough_center_deg": (float(ra0), float(dec0)),
             "stage1_hypotheses_kept": int(len(top_hyp)),
             "pattern_inliers_stage2": int(best["inliers"]),
+            "seed_matches": int(seed_matches),
+            "refine_used_expanded": bool(used_expanded),
+            "refine_pool_det": int(refine_pool_det),
+            "refine_pool_ref": int(refine_pool_ref),
+            "refine_matches_preclip": int(refine_matches_preclip),
             "final_matches": int(len(match)),
             "rms_dr_arcsec": float(np.sqrt(np.mean(match["dr_arcsec"] ** 2))) if len(match) else np.nan,
             "mad_dr_arcsec": float(_robust_sigma(_as_float_array(match["dr_arcsec"]))) if len(match) else np.nan,
@@ -844,6 +1135,10 @@ def refine_wcs_quadhash(
     use_wcs_prior: bool = True,
     scale_tolerance: float = 0.30,
     enforce_parity: bool = True,
+    refine_use_all: bool = False,
+    refine_n_det: Optional[int] = None,
+    refine_n_ref: Optional[int] = None,
+    refine_match_radius_arcsec: Optional[float] = None,
     get_header: bool = False,
     update: bool = False,
     verbose: bool = False,
@@ -872,6 +1167,10 @@ def refine_wcs_quadhash(
     :param use_wcs_prior: Use initial WCS to filter hypotheses by scale/parity (default True)
     :param scale_tolerance: Fractional tolerance for scale filtering (default 0.30)
     :param enforce_parity: Enforce parity consistency with initial WCS (default True)
+    :param refine_use_all: If True, expand final refinement to a larger pool of objects/catalog entries
+    :param refine_n_det: Max number of detections to use in expanded refinement pool (None = all)
+    :param refine_n_ref: Max number of catalog stars to use in expanded refinement pool (None = all)
+    :param refine_match_radius_arcsec: Matching radius (arcsec) for expanded refinement pool (default: stage2 radius)
     :param get_header: If True, function will return the FITS header object instead of WCS solution
     :param update: If set, the object list will be updated in-place to contain correct `ra` and `dec` sky coordinates
     :param verbose: Whether to show verbose messages during the run. May be either boolean, or a `print`-like function.
@@ -879,8 +1178,8 @@ def refine_wcs_quadhash(
 
     .. note::
         This is a pure Python implementation with no external dependencies (only numpy, scipy, astropy).
-        It typically achieves sub-arcsecond accuracy but is ~4× slower than SCAMP (~2s vs ~0.5s).
-        However, it is 2-7× more accurate than SCAMP, especially for challenging conditions.
+        It typically achieves sub-arcsecond accuracy but is ~4x slower than SCAMP (~2s vs ~0.5s).
+        However, it is 2-7x more accurate than SCAMP, especially for challenging conditions.
 
     Example:
         >>> from stdpipe.astrometry_quad import refine_wcs_quadhash
@@ -987,7 +1286,7 @@ def refine_wcs_quadhash(
         eps_desc=0.02,
         n_scale_bins=6,
         stage1_n_det=min(60, len(obj_std)),
-        stage1_radius_arcsec=max(20.0, sr * 3600 * 2),  # Stage 1: 2× looser
+        stage1_radius_arcsec=max(20.0, sr * 3600 * 2),  # Stage 1: 2x looser
         stage2_radius_arcsec=sr * 3600,  # Stage 2: use requested radius
         top_k_hypotheses=80,
         max_quads_tested=max_quads_tested,
@@ -995,9 +1294,16 @@ def refine_wcs_quadhash(
         use_wcs_prior=use_wcs_prior,
         scale_tolerance=scale_tolerance,
         enforce_parity=enforce_parity,
-        sip_degree=max(0, min(3, order)),  # Clamp to 0-3
+        sip_degree=max(0, min(5, order)),  # Clamp to 0-5
         refine_clip_sigma=4.0,
+        refine_clip_sigma_start=5.0,
+        refine_min_match_fraction=0.5,
         refine_max_iter=5,
+        refine_rematch_iters=2,
+        refine_use_all=refine_use_all,
+        refine_n_det=refine_n_det,
+        refine_n_ref=refine_n_ref,
+        refine_match_radius_arcsec=refine_match_radius_arcsec,
     )
 
     try:

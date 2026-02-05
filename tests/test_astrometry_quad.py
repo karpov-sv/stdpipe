@@ -24,6 +24,11 @@ from stdpipe.astrometry_quad import (
     reflect_desc,
     estimate_similarity_2d,
     apply_similarity,
+    estimate_affine_2d,
+    apply_affine,
+    _mutual_nearest_neighbor,
+    multiprobe_desc_keys,
+    compute_bin_edges,
     tan_project_deg,
     baseline_rank_bins,
     mag_signature,
@@ -387,6 +392,275 @@ class TestSimilarityTransform:
         expected = np.array([[5, 5], [5, 7], [3, 5]], dtype=np.float64)
 
         assert np.allclose(result, expected, atol=1e-10)
+
+
+class TestAffineTransform:
+    """Test affine transformation (6 DOF)."""
+
+    @pytest.mark.unit
+    def test_affine_identity(self):
+        """Test affine with identical point sets."""
+        np.random.seed(42)
+        A = np.random.random((10, 2)) * 100
+        B = A.copy()
+
+        M, t = estimate_affine_2d(A, B)
+
+        assert np.allclose(M, np.eye(2), atol=1e-6)
+        assert np.allclose(t, 0, atol=1e-6)
+
+    @pytest.mark.unit
+    def test_affine_with_shear(self):
+        """Test affine recovers shear transform."""
+        np.random.seed(42)
+        A = np.random.random((20, 2)) * 100
+
+        # Apply shear + scale + translation
+        M_true = np.array([[1.5, 0.3], [-0.2, 1.1]])
+        t_true = np.array([10.0, -5.0])
+        B = A @ M_true.T + t_true
+
+        M, t = estimate_affine_2d(A, B)
+
+        assert np.allclose(M, M_true, atol=1e-6)
+        assert np.allclose(t, t_true, atol=1e-6)
+
+    @pytest.mark.unit
+    def test_affine_with_noise(self):
+        """Test affine with small noise."""
+        np.random.seed(42)
+        A = np.random.random((50, 2)) * 100
+
+        M_true = np.array([[1.2, 0.1], [-0.1, 0.9]])
+        t_true = np.array([5.0, 3.0])
+        B = A @ M_true.T + t_true + np.random.normal(0, 0.1, (50, 2))
+
+        M, t = estimate_affine_2d(A, B)
+
+        assert np.allclose(M, M_true, atol=0.02)
+        assert np.allclose(t, t_true, atol=1.0)
+
+    @pytest.mark.unit
+    def test_apply_affine(self):
+        """Test applying affine transform."""
+        points = np.array([[1, 0], [0, 1]], dtype=np.float64)
+        M = np.array([[2, 1], [0, 3]], dtype=np.float64)
+        t = np.array([10, 20], dtype=np.float64)
+
+        result = apply_affine(points, M, t)
+
+        expected = points @ M.T + t
+        assert np.allclose(result, expected, atol=1e-10)
+
+    @pytest.mark.unit
+    def test_affine_too_few_points(self):
+        """Test affine raises with too few points."""
+        A = np.array([[0, 0], [1, 1]], dtype=np.float64)
+        B = A.copy()
+
+        with pytest.raises(ValueError, match="at least 3"):
+            estimate_affine_2d(A, B)
+
+    @pytest.mark.unit
+    def test_apply_affine_nonfinite_raises(self):
+        """Test that apply_affine raises on non-finite result."""
+        points = np.array([[1e300, 1e300], [1, 1]], dtype=np.float64)
+        M = np.array([[1e300, 0], [0, 1e300]], dtype=np.float64)
+        t = np.array([0, 0], dtype=np.float64)
+
+        with pytest.raises(ValueError, match="non-finite"):
+            apply_affine(points, M, t)
+
+    @pytest.mark.unit
+    def test_affine_degenerate_collinear(self):
+        """Test affine raises for collinear points (degenerate)."""
+        # All points on a line - ill-conditioned
+        A = np.array([[0, 0], [1, 1], [2, 2]], dtype=np.float64)
+        B = np.array([[0, 0], [1, 0], [2, 0]], dtype=np.float64)
+
+        with pytest.raises(ValueError):
+            estimate_affine_2d(A, B)
+
+
+class TestMutualNearestNeighbor:
+    """Test mutual nearest-neighbor matching."""
+
+    @pytest.mark.unit
+    def test_perfect_match(self):
+        """Test mutual NN with perfectly overlapping sets."""
+        A = np.array([[0, 0], [10, 0], [0, 10], [10, 10]], dtype=np.float64)
+        B = A.copy()
+
+        idx_a, idx_b = _mutual_nearest_neighbor(A, B, radius=1.0)
+
+        assert len(idx_a) == 4
+        assert np.array_equal(np.sort(idx_a), [0, 1, 2, 3])
+        assert np.array_equal(idx_a, idx_b)
+
+    @pytest.mark.unit
+    def test_with_offset(self):
+        """Test mutual NN with small offset within radius."""
+        A = np.array([[0, 0], [10, 0], [0, 10]], dtype=np.float64)
+        B = A + 0.1  # small offset
+
+        idx_a, idx_b = _mutual_nearest_neighbor(A, B, radius=1.0)
+
+        assert len(idx_a) == 3
+
+    @pytest.mark.unit
+    def test_beyond_radius(self):
+        """Test mutual NN returns empty when beyond radius."""
+        A = np.array([[0, 0], [10, 0]], dtype=np.float64)
+        B = np.array([[100, 100], [200, 200]], dtype=np.float64)
+
+        idx_a, idx_b = _mutual_nearest_neighbor(A, B, radius=1.0)
+
+        assert len(idx_a) == 0
+        assert len(idx_b) == 0
+
+    @pytest.mark.unit
+    def test_non_mutual_rejected(self):
+        """Test that non-mutual matches are rejected."""
+        # A has two points close together, B has one nearby
+        A = np.array([[0, 0], [0.5, 0], [10, 10]], dtype=np.float64)
+        B = np.array([[0.2, 0], [10, 10]], dtype=np.float64)
+
+        idx_a, idx_b = _mutual_nearest_neighbor(A, B, radius=2.0)
+
+        # Only mutual matches should survive
+        # B[0] is nearest to A[0] (dist 0.2) and A[1] (dist 0.3)
+        # B[0]'s nearest in A is A[0] (dist 0.2), so A[0]-B[0] is mutual
+        # A[1]'s nearest in B is B[0] (dist 0.3), but B[0]'s nearest in A is A[0], not A[1]
+        # So A[1]-B[0] is NOT mutual
+        assert 1 not in idx_a or idx_b[idx_a == 1][0] != 0  # A[1] should not match B[0]
+
+    @pytest.mark.unit
+    def test_empty_inputs(self):
+        """Test with empty arrays."""
+        A = np.empty((0, 2), dtype=np.float64)
+        B = np.array([[0, 0]], dtype=np.float64)
+
+        idx_a, idx_b = _mutual_nearest_neighbor(A, B, radius=1.0)
+
+        assert len(idx_a) == 0
+        assert len(idx_b) == 0
+
+
+class TestMultiprobeHashing:
+    """Test multi-probe descriptor hashing."""
+
+    @pytest.mark.unit
+    def test_primary_key_always_included(self):
+        """Test that primary quantized key is always returned."""
+        desc = np.array([0.5, 0.5, 0.5, 0.5], dtype=np.float64)
+        eps = 0.1
+
+        keys = multiprobe_desc_keys(desc, eps)
+
+        from stdpipe.astrometry_quad import quantize_desc
+        primary = quantize_desc(desc, eps)
+        assert primary in keys
+
+    @pytest.mark.unit
+    def test_center_of_bin_single_key(self):
+        """Test descriptor at center of bin returns just primary key."""
+        # desc/eps + 0.5 = 1.5 for all dims, floor = 1, frac = 0.5 (center of bin)
+        desc = np.array([0.1, 0.1, 0.1, 0.1], dtype=np.float64)
+        eps = 0.1
+
+        keys = multiprobe_desc_keys(desc, eps, threshold=0.3)
+
+        # With frac = 0.5 for all dimensions, no boundaries are near
+        assert len(keys) == 1  # just the primary
+
+    @pytest.mark.unit
+    def test_near_boundary_probes_neighbor(self):
+        """Test descriptor near bin boundary probes adjacent bin."""
+        # Choose value so frac is near 0 (close to lower boundary)
+        eps = 1.0
+        # desc/eps + 0.5 = desc + 0.5; for desc=0.4, q=0.9, frac=0.9 -> near upper
+        desc = np.array([0.4, 0.0, 0.0, 0.0], dtype=np.float64)
+
+        keys = multiprobe_desc_keys(desc, eps, threshold=0.3)
+
+        # Should have more than just primary
+        assert len(keys) >= 2
+
+    @pytest.mark.unit
+    def test_fewer_keys_than_full_neighbor_search(self):
+        """Test multi-probe returns far fewer keys than full neighbor search."""
+        desc = np.array([0.123, 0.456, 0.789, 0.012], dtype=np.float64)
+        eps = 0.015
+
+        keys = multiprobe_desc_keys(desc, eps)
+
+        # Full neighbor search with r=1 produces 3^4 = 81 keys
+        # Multi-probe should produce far fewer
+        assert len(keys) <= 15  # generous upper bound
+
+
+class TestComputeBinEdges:
+    """Test compute_bin_edges function."""
+
+    @pytest.mark.unit
+    def test_basic_edges(self):
+        """Test basic edge computation."""
+        lengths = np.array([1, 2, 3, 4, 5, 6, 7, 8], dtype=np.float64)
+
+        edges = compute_bin_edges(lengths, n_bins=4)
+
+        assert edges is not None
+        assert len(edges) == 5  # n_bins + 1
+        assert edges[0] <= lengths.min()
+        assert edges[-1] >= lengths.max()
+        # Edges should be monotonically increasing
+        assert np.all(np.diff(edges) > 0)
+
+    @pytest.mark.unit
+    def test_single_bin_returns_none(self):
+        """Test that single bin returns None."""
+        lengths = np.array([1, 2, 3], dtype=np.float64)
+
+        edges = compute_bin_edges(lengths, n_bins=1)
+
+        assert edges is None
+
+    @pytest.mark.unit
+    def test_empty_returns_none(self):
+        """Test empty array returns None."""
+        edges = compute_bin_edges(np.array([]), n_bins=4)
+
+        assert edges is None
+
+
+class TestBaselineRankBinsWithEdges:
+    """Test baseline_rank_bins with pre-computed edges."""
+
+    @pytest.mark.unit
+    def test_shared_edges(self):
+        """Test binning with shared edges produces consistent bins."""
+        ref_lengths = np.array([1, 2, 3, 4, 5, 6, 7, 8], dtype=np.float64)
+        edges = compute_bin_edges(ref_lengths, n_bins=4)
+
+        # Bin ref and det with same edges
+        ref_bins = baseline_rank_bins(ref_lengths, n_bins=4, edges=edges)
+        det_lengths = np.array([1.5, 3.5, 5.5, 7.5], dtype=np.float64)
+        det_bins = baseline_rank_bins(det_lengths, n_bins=4, edges=edges)
+
+        assert len(ref_bins) == len(ref_lengths)
+        assert len(det_bins) == len(det_lengths)
+        # All bins should be in valid range
+        assert np.all(ref_bins >= 0) and np.all(ref_bins < 4)
+        assert np.all(det_bins >= 0) and np.all(det_bins < 4)
+
+    @pytest.mark.unit
+    def test_backward_compatible_without_edges(self):
+        """Test that baseline_rank_bins still works without edges."""
+        lengths = np.array([1, 2, 3, 4, 5, 6, 7, 8], dtype=np.float64)
+
+        bins = baseline_rank_bins(lengths, n_bins=4)
+
+        assert len(np.unique(bins)) == 4
 
 
 class TestQuadDescriptor:
