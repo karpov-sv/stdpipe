@@ -1040,6 +1040,8 @@ def measure_objects_sep(
     centroid_iter=0,
     keep_negative=True,
     get_bg=False,
+    clip_sigma=3.0,
+    clip_iters=5,
     verbose=False,
 ):
     """Photometry at the positions of already detected objects using SEP routines.
@@ -1075,6 +1077,9 @@ def measure_objects_sep(
     :param centroid_iter: Number of centroiding iterations (uses SEP's built-in iteration)
     :param keep_negative: If not set, measurements with negative fluxes will be discarded
     :param get_bg: If True, also return estimated background and noise images
+    :param clip_sigma: Sigma value for clipping when ``bkgann`` is provided. Default is 3.0.
+    :param clip_iters: Maximum number of clipping iterations when ``bkgann`` is provided.
+                       Default is 5. Set to 0 to disable clipping.
     :param verbose: Whether to show verbose messages. May be boolean or print-like function.
     :returns: Copy of table with flux/mag columns from SEP measurements.
     """
@@ -1249,7 +1254,9 @@ def measure_objects_sep(
                 gain=gain if gain else 1.0,
                 mask=mask | mask0,
                 bkgann=bkgann_pix,  # SEP handles sigma-clipped background
-                grouped=group_sources
+                grouped=group_sources,
+                clip_sigma=clip_sigma,
+                clip_iters=clip_iters
             )
 
             obj['flux'][valid_pos] = flux
@@ -1268,7 +1275,9 @@ def measure_objects_sep(
                 err=err,
                 gain=gain if gain else 1.0,
                 mask=mask | mask0,
-                bkgann=None  # Handle separately for aperture photometry
+                bkgann=None,  # Handle separately for aperture photometry
+                clip_sigma=clip_sigma,
+                clip_iters=clip_iters
             )
 
             obj['flux'][valid_pos] = flux
@@ -1286,8 +1295,8 @@ def measure_objects_sep(
                     bkgann_pix[0],
                     bkgann_pix[1],
                     mask=mask | mask0,
-                    clip_sigma=3.0,
-                    clip_iters=5
+                    clip_sigma=clip_sigma,
+                    clip_iters=clip_iters
                 )
 
                 # Subtract local background (use median)

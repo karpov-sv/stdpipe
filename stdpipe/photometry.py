@@ -92,6 +92,8 @@ def get_objects_sep(
     get_segmentation=False,
     deblend_fwhm=0,
     deblend_method='watershed',
+    clip_sigma=3.0,
+    clip_iters=5,
     verbose=True,
     **kwargs
 ):
@@ -134,6 +136,8 @@ def get_objects_sep(
     :param get_segmentation: If set, segmentation map will also be returned. The output table will include 'seg_id' column with segmentation map IDs (sequential object number + 1).
     :param deblend_fwhm: If > 0, use a fixed circular Gaussian with this FWHM (in pixels) when assigning ambiguous pixels during deblending. This uses a deterministic max-weight assignment and is less sensitive to moment estimates in crowded fields. Default is 0.0 (use adaptive shapes and stochastic assignment). When deblend_method='watershed', this also enforces a minimum peak separation of 0.5*FWHM. Only available in SEP 1.4+.
     :param deblend_method: Deblending algorithm. 'watershed' (default) seeds local maxima and applies watershed assignment within each detection footprint. 'threshold' uses the traditional multi-threshold method. Only available in SEP 1.4+.
+    :param clip_sigma: Sigma value for sigma-clipping when ``bkgann`` is provided. Default is 3.0. Only used in SEP 1.4+.
+    :param clip_iters: Maximum number of sigma-clipping iterations when ``bkgann`` is provided. Default is 5. Set to 0 to disable clipping. Only used in SEP 1.4+.
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
     :returns: astropy.table.Table object with detected objects, or tuple of (table, segmentation_map) if get_segmentation=True
 
@@ -335,6 +339,8 @@ def get_objects_sep(
             gain=gain,
             mask=mask | mask_bg | mask_segm,
             bkgann=bkgann,
+            clip_sigma=clip_sigma,
+            clip_iters=clip_iters,
         )
     else:
         if optimal and not _HAS_SEP_OPTIMAL:
@@ -348,6 +354,8 @@ def get_objects_sep(
             gain=gain,
             mask=mask | mask_bg | mask_segm,
             bkgann=bkgann,
+            clip_sigma=clip_sigma,
+            clip_iters=clip_iters,
         )
 
     # For debug purposes, let's make also the same aperture photometry on the background map
@@ -359,6 +367,8 @@ def get_objects_sep(
         err=bg.rms(),
         gain=gain,
         mask=mask | mask_bg | mask_segm,
+        clip_sigma=clip_sigma,
+        clip_iters=clip_iters,
     )
 
     bgnorm = bgflux / np.pi / aper ** 2
