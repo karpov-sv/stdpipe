@@ -1255,6 +1255,7 @@ def measure_objects_sep(
                 mask=mask | mask0,
                 bkgann=bkgann_pix,  # SEP handles sigma-clipped background
                 grouped=group_sources,
+                group_radius_factor=1.2, # Empirical
                 clip_sigma=clip_sigma,
                 clip_iters=clip_iters
             )

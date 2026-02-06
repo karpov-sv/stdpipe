@@ -84,6 +84,7 @@ def get_objects_sep(
     bg_size=64,
     fwhm=False,
     optimal=False,
+    group_sources=True,
     centroid=False,
     use_mask_large=False,
     subtract_bg=True,
@@ -128,6 +129,7 @@ def get_objects_sep(
     :param bg_size: Background grid size in pixels
     :param fwhm: FWHM handling. If False (default), FWHM is estimated per-object for output but not used for photometry. If True, FWHM is estimated from detected objects and both aper and bkgann are scaled by FWHM (interpreted as being in FWHM units). If numeric, this FWHM value is used directly and aper/bkgann are scaled accordingly.
     :param optimal: If True, use optimal extraction photometry (sep.sum_circle_optimal) instead of aperture photometry. Requires FWHM to be provided or estimated. Only available in SEP 1.4+.
+    :param group_sources: If True and optimal=True, use grouped optimal extraction for overlapping sources. Fits nearby sources simultaneously for better accuracy in crowded fields. Default is True (recommended). Only available in SEP 1.4+.
     :param centroid: If True, refine object positions using windowed centroiding (sep.winpos). Default is False as windowed positions can be biased in crowded fields. When SEP 1.4+ is available, uses maxstep=0.2*FWHM to cap position shift per iteration and avoid excessive drift in degenerate cases.
     :param use_mask_large: If True, filter out large objects (with footprints larger than `npix_large` pixels)
     :param npix_large: Threshold for rejecting large objects (if `use_mask_large` is set)
@@ -160,12 +162,14 @@ def get_objects_sep(
     - **aper**: Aperture radius used for photometry (pixels)
     - **bkgann**: Background annulus used (tuple of inner/outer radii, or None)
     - **optimal**: Whether optimal extraction was used (bool)
+    - **group_sources**: Whether grouped optimal extraction was used (bool)
     - **fwhm_phot**: FWHM value used for photometry (if provided or estimated for optimal extraction)
 
     **Notes:**
 
     - FWHM estimation prefers SEP's built-in method (ported from SExtractor). Falls back to 2nd moments (FWHM = 2*sqrt(ln(2)*(a**2+b**2))) for older SEP versions - it is exact for Gaussian PSF, approximate for others.
     - Optimal extraction assumes Gaussian PSF. For ground-based data with Moffat PSF, bias varies with crowding.
+    - Grouped optimal extraction (enabled by default when optimal=True) fits nearby sources simultaneously for better accuracy in crowded fields. Dramatically improves flux accuracy for close pairs compared to single-source extraction.
     - Watershed deblending (default) provides often better completeness for close pairs (<2 FWHM) compared to threshold method.
     - Object detection is performed on background-subtracted image. Photometry includes local or global background estimation.
     - S/N cut is applied after photometry: only objects with magerr < 1/sn are returned.
@@ -328,7 +332,10 @@ def get_objects_sep(
 
     # Choose photometry method
     if optimal and _HAS_SEP_OPTIMAL:
-        log("Using optimal extraction")
+        if group_sources:
+            log("Using grouped optimal extraction")
+        else:
+            log("Using optimal extraction")
         flux, fluxerr, flag = sep.sum_circle_optimal(
             image1,
             xwin[idx],
@@ -339,6 +346,8 @@ def get_objects_sep(
             gain=gain,
             mask=mask | mask_bg | mask_segm,
             bkgann=bkgann,
+            grouped=group_sources,
+            group_radius_factor=1.2,  # Empirical
             clip_sigma=clip_sigma,
             clip_iters=clip_iters,
         )
@@ -432,6 +441,7 @@ def get_objects_sep(
     obj.meta['aper'] = aper
     obj.meta['bkgann'] = bkgann
     obj.meta['optimal'] = optimal and _HAS_SEP_OPTIMAL
+    obj.meta['group_sources'] = group_sources and optimal and _HAS_SEP_OPTIMAL
     if fwhm_value is not None:
         obj.meta['fwhm_phot'] = fwhm_value
 
