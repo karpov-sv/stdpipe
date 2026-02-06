@@ -38,7 +38,7 @@ def create_psf_model(
     :param psf_type: Type of PSF model ('gaussian' or 'moffat')
     :param beta: Moffat beta parameter (default 2.5, only used for psf_type='moffat')
     :param size: Output stamp size in pixels (after downsampling). If None, automatically sized to capture ~99% of PSF flux (≥8*FWHM)
-    :param oversampling: Oversampling factor (default 4)
+    :param oversampling: Oversampling factor (default 2)
     :param defocus: Zernike Z4 defocus coefficient in waves (default 0.0)
     :param astigmatism_x: Zernike Z5 oblique astigmatism coefficient in waves (default 0.0)
     :param astigmatism_y: Zernike Z6 vertical astigmatism coefficient in waves (default 0.0)
