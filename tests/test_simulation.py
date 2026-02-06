@@ -397,11 +397,12 @@ class TestOpticalGhosts:
         x0, y0 = size // 2, size // 2
         source_flux = 100000
 
-        ghost = simulation.create_optical_ghost(
+        result = simulation.create_optical_ghost(
             size, x0, y0, source_flux, ghost_fraction=0.05, offset=(30, 30)
         )
+        ghost = result['stamp']
 
-        assert ghost.shape == (size, size)
+        assert ghost.shape[0] >= size and ghost.shape[1] >= size
         assert np.sum(ghost) > 0, "Ghost should have positive flux"
 
         # Ghost should be small fraction of source

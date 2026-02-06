@@ -14,11 +14,10 @@ from __future__ import absolute_import, division, print_function, unicode_litera
 
 import numpy as np
 from astropy.table import Table
-from scipy.special import erf
 from scipy.ndimage import rotate, gaussian_filter
 
 
-def create_psf_model(fwhm=3.0, psf_type='gaussian', beta=2.5, size=None, oversampling=4):
+def create_psf_model(fwhm=3.0, psf_type='gaussian', beta=2.5, size=None, oversampling=2):
     """
     Create an oversampled PSF model compatible with PSFEx format.
 
@@ -93,23 +92,16 @@ def create_psf_model(fwhm=3.0, psf_type='gaussian', beta=2.5, size=None, oversam
 
         alpha = fwhm / (2 * np.sqrt(2 ** (1.0 / beta) - 1))
 
-        # Use 5x supersampling for pixel integration
+        # Use 5x supersampling for pixel integration (vectorized)
         supersample = 5
+        offsets = np.linspace(-0.5 + 0.5 / supersample, 0.5 - 0.5 / supersample, supersample)
+
         psf_data = np.zeros((psf_data_size, psf_data_size))
-
-        for i in range(psf_data_size):
-            for j in range(psf_data_size):
-                # Create supersampled grid for this pixel
-                y_sub = np.linspace(i - 0.5, i + 0.5, supersample)
-                x_sub = np.linspace(j - 0.5, j + 0.5, supersample)
-                yy_sub, xx_sub = np.meshgrid(y_sub, x_sub, indexing='ij')
-
-                # Evaluate Moffat at subpixel positions
-                r_sub = np.sqrt((xx_sub - center) ** 2 + (yy_sub - center) ** 2)
-                moffat_sub = 1.0 / (1 + (r_sub / alpha) ** 2) ** beta
-
-                # Average over subpixels (numerical integration)
-                psf_data[i, j] = np.mean(moffat_sub)
+        for dy in offsets:
+            for dx in offsets:
+                r = np.sqrt((x + dx - center) ** 2 + (y + dy - center) ** 2)
+                psf_data += 1.0 / (1 + (r / alpha) ** 2) ** beta
+        psf_data /= supersample ** 2
 
     else:
         raise ValueError(
@@ -204,7 +196,7 @@ def create_sersic_profile(
 
 
 def place_galaxy(
-    image, x0, y0, flux, r_eff=5.0, n=1.0, ellipticity=0.0, position_angle=0.0, gain=None
+    image, x0, y0, flux, r_eff=5.0, n=1.0, ellipticity=0.0, position_angle=0.0
 ):
     """
     Place a galaxy with Sersic profile into an image.
@@ -222,7 +214,6 @@ def place_galaxy(
     :param n: Sersic index
     :param ellipticity: Ellipticity (0 = circular, 1 = line)
     :param position_angle: Position angle in degrees
-    :param gain: Image gain value. If set, applies Poissonian noise to the galaxy.
 
     """
 
@@ -249,11 +240,6 @@ def place_galaxy(
         stamp = stamp / stamp_sum * flux
     else:
         return  # Degenerate profile
-
-    # Apply Poissonian noise if gain is provided
-    if gain is not None:
-        idx = stamp > 0
-        stamp[idx] = np.random.poisson(stamp[idx] * gain) / gain
 
     # Integer coordinates inside the stamp
     y, x = np.mgrid[0 : stamp.shape[0], 0 : stamp.shape[1]]
@@ -307,15 +293,14 @@ def create_cosmic_ray(length, width, angle, max_intensity, profile='sharp'):
         canvas[y_start:y_end, x_start:x_end] = max_intensity
 
     elif profile == 'tapered':
-        # Tapered track (intensity decreases toward ends)
+        # Tapered track (intensity decreases toward ends, symmetric)
         y_start = cy - track_width // 2
         y_end = y_start + track_width
         x_start = cx - track_length // 2
         x_end = x_start + track_length
-        taper = np.linspace(0.2, 1.0, track_length // 2)
-        taper = np.concatenate([taper, taper[::-1]])
-        if len(taper) < track_length:
-            taper = np.pad(taper, (0, track_length - len(taper)), constant_values=1.0)
+        # Symmetric taper: ramps from 0.2 at edges to 1.0 at center
+        taper = np.linspace(-1.0, 1.0, track_length)
+        taper = 0.2 + 0.8 * (1.0 - np.abs(taper))
         canvas[y_start:y_end, x_start:x_end] = max_intensity * taper[None, :]
 
     elif profile == 'worm':
@@ -471,15 +456,20 @@ def add_hot_pixels(
 
             pixels.append({'x': x, 'y': y, 'intensity': intensity, 'type': 'hot_pixel', 'is_real': False})
     else:
-        # Clustered hot pixels
-        n_clusters = max(1, n_pixels // cluster_size)
+        # Clustered hot pixels — produce exactly n_pixels total
+        cluster_size = max(1, cluster_size)
+        n_clusters = max(1, int(np.ceil(n_pixels / cluster_size)))
+        placed = 0
         for i in range(n_clusters):
             # Cluster center
             cx = np.random.randint(0, width)
             cy = np.random.randint(0, height)
 
-            # Add pixels around center
+            # Add pixels around center (stop at n_pixels total)
             for j in range(cluster_size):
+                if placed >= n_pixels:
+                    break
+
                 x = cx + np.random.randint(-2, 3)
                 y = cy + np.random.randint(-2, 3)
 
@@ -493,6 +483,7 @@ def add_hot_pixels(
                 pixels.append(
                     {'x': x, 'y': y, 'intensity': intensity, 'type': 'hot_pixel', 'is_real': False}
                 )
+                placed += 1
 
     return Table(pixels)
 
@@ -799,39 +790,134 @@ def create_optical_ghost(
     :param ghost_fraction: Fraction of source flux appearing in ghost (typically 0.01-0.1)
     :param offset: (dx, dy) offset of ghost from source in pixels
     :param blur_sigma: Gaussian blur sigma for the ghost
-    :returns: 2D numpy array with optical ghost
+    :returns: Dictionary with 'stamp' (2D array) and 'source_pos' (x, y) giving the
+        source position within the stamp (needed to align stamp onto the image)
 
     """
 
-    # Calculate required stamp size to accommodate both source and ghost
-    # Ghost position relative to source
+    # Calculate required stamp size to accommodate both source and ghost.
+    # For negative offsets, the ghost lies at coordinates < source position,
+    # so we need to shift the origin so all coordinates are non-negative.
     gx = x0 + offset[0]
     gy = y0 + offset[1]
 
-    # Expand stamp if needed to contain the ghost (with some margin for blur)
+    # Compute origin shift so the leftmost/topmost point is at the margin
     margin = int(blur_sigma * 3)  # 3-sigma margin for Gaussian blur
-    min_width = int(max(x0, gx) + margin + 1)
-    min_height = int(max(y0, gy) + margin + 1)
+    shift_x = max(0, margin - int(min(x0, gx)))
+    shift_y = max(0, margin - int(min(y0, gy)))
 
-    # Use at least the requested size, but expand if needed
-    actual_width = max(size, min_width)
-    actual_height = max(size, min_height)
+    # Apply shift to both source and ghost coordinates
+    x0_s = x0 + shift_x
+    y0_s = y0 + shift_y
+    gx_s = gx + shift_x
+    gy_s = gy + shift_y
+
+    # Stamp must contain both positions plus margin on all sides
+    actual_width = max(size, int(max(x0_s, gx_s) + margin + 1))
+    actual_height = max(size, int(max(y0_s, gy_s) + margin + 1))
 
     stamp = np.zeros((actual_height, actual_width))
 
     # Place point source at ghost position
-    if 0 <= gx < actual_width and 0 <= gy < actual_height:
-        ix, iy = int(np.round(gx)), int(np.round(gy))
+    ix, iy = int(np.round(gx_s)), int(np.round(gy_s))
+    if 0 <= ix < actual_width and 0 <= iy < actual_height:
         stamp[iy, ix] = source_flux * ghost_fraction
 
         # Blur to simulate defocus
         stamp = gaussian_filter(stamp, sigma=blur_sigma)
-    else:
-        # This should not happen with the size calculation above, but just in case
-        # Return empty stamp of requested size
-        stamp = np.zeros((size, size))
 
-    return stamp
+    return {'stamp': stamp, 'source_pos': (x0_s, y0_s)}
+
+
+def add_close_companions_to_catalog(
+    catalog,
+    fwhm,
+    fraction=0.2,
+    min_separation_fwhm=1.0,
+    max_separation_fwhm=3.0,
+    flux_variation=(0.5, 1.5),
+    image_shape=None,
+    edge=10,
+):
+    """
+    Add close companions to stars in a catalog (before image placement).
+
+    This function creates a new catalog with additional companion stars placed
+    near existing stars to simulate crowded fields. Companions are only added
+    to sources with type='star'.
+
+    :param catalog: Input catalog (astropy Table) with 'x', 'y', 'flux', 'type' columns
+    :param fwhm: FWHM of the PSF in pixels (used to calculate separations)
+    :param fraction: Fraction of stars (0-1) that will have companions
+    :param min_separation_fwhm: Minimum separation in FWHM units
+    :param max_separation_fwhm: Maximum separation in FWHM units
+    :param flux_variation: (min, max) flux ratio for companion relative to primary
+    :param image_shape: (height, width) tuple for bounds checking, or None to skip
+    :param edge: Minimum distance from edges when bounds checking
+    :returns: New catalog with companions added (original catalog unchanged)
+
+    """
+    from astropy.table import vstack, Table
+
+    # Select only stars for companion addition
+    stars = catalog[catalog['type'] == 'star']
+
+    if len(stars) == 0 or fraction <= 0:
+        return catalog.copy()
+
+    # Randomly select stars to give companions
+    n_companions = int(len(stars) * fraction)
+    if n_companions == 0:
+        return catalog.copy()
+
+    companion_indices = np.random.choice(len(stars), size=n_companions, replace=False)
+
+    companions_added = []
+    min_separation = min_separation_fwhm * fwhm
+    max_separation = max_separation_fwhm * fwhm
+
+    for idx in companion_indices:
+        source = stars[idx]
+
+        # Random separation and position angle
+        separation = np.random.uniform(min_separation, max_separation)
+        angle = np.random.uniform(0, 2 * np.pi)
+
+        # Companion position
+        comp_x = source['x'] + separation * np.cos(angle)
+        comp_y = source['y'] + separation * np.sin(angle)
+
+        # Check if companion is within image bounds
+        if image_shape is not None:
+            height, width = image_shape
+            if not (edge < comp_x < width - edge and edge < comp_y < height - edge):
+                continue
+
+        # Companion flux (similar to primary, with variation)
+        comp_flux = source['flux'] * np.random.uniform(*flux_variation)
+
+        # Build companion entry matching the catalog structure
+        companion = {
+            'x': comp_x,
+            'y': comp_y,
+            'flux': comp_flux,
+            'type': 'star',
+            'is_real': True,
+        }
+
+        # Copy additional columns from source if they exist
+        for col in ['fwhm', 'psf_type']:
+            if col in source.colnames:
+                companion[col] = source[col]
+
+        companions_added.append(companion)
+
+    # Return extended catalog
+    if companions_added:
+        comp_table = Table(companions_added)
+        return vstack([catalog, comp_table])
+    else:
+        return catalog.copy()
 
 
 def add_stars(
@@ -842,7 +928,6 @@ def add_stars(
     psf='gaussian',
     beta=2.5,
     edge=0,
-    gain=None,
     saturation=None,
     diffraction_spikes=False,
     spike_threshold=50000,
@@ -860,7 +945,6 @@ def add_stars(
     :param psf: PSF specification - either a string ('gaussian', 'moffat') or a PSF model dictionary (PSFEx format)
     :param beta: Moffat beta parameter (only used if psf='moffat')
     :param edge: Minimum distance from image edges
-    :param gain: Image gain (for Poisson noise)
     :param saturation: Saturation level in ADU
     :param diffraction_spikes: If True, add diffraction spikes to bright stars
     :param spike_threshold: Flux threshold for adding diffraction spikes
@@ -912,7 +996,7 @@ def add_stars(
         x, y, flux = star['x'], star['y'], star['flux']
 
         # Use psf.place_psf_stamp for fast, accurate placement with sub-pixel positioning
-        psf_module.place_psf_stamp(image, psf_model, x, y, flux=flux, gain=gain)
+        psf_module.place_psf_stamp(image, psf_model, x, y, flux=flux)
 
         # Add diffraction spikes if enabled and star is bright enough
         if diffraction_spikes and flux > spike_threshold:
@@ -946,17 +1030,19 @@ def add_stars(
             x0_ghost = size // 2 + dx_sub
             y0_ghost = size // 2 + dy_sub
 
-            ghost = create_optical_ghost(size, x0_ghost, y0_ghost, flux)
+            ghost_result = create_optical_ghost(size, x0_ghost, y0_ghost, flux)
+            ghost = ghost_result['stamp']
+            src_x, src_y = ghost_result['source_pos']
 
             # Place ghost on image
-            # The source position within the stamp (x0_ghost, y0_ghost) should align
+            # The source position within the stamp (src_x, src_y) should align
             # with the star position in the image (ix, iy)
             y_grid, x_grid = np.mgrid[0 : ghost.shape[0], 0 : ghost.shape[1]]
             y1, x1 = np.mgrid[0 : ghost.shape[0], 0 : ghost.shape[1]]
 
-            # Offset so that stamp position (x0_ghost, y0_ghost) maps to image position (ix, iy)
-            x1 += ix - int(np.round(x0_ghost))
-            y1 += iy - int(np.round(y0_ghost))
+            # Offset so that stamp position (src_x, src_y) maps to image position (ix, iy)
+            x1 += ix - int(np.round(src_x))
+            y1 += iy - int(np.round(src_y))
 
             idx = (x1 >= 0) & (x1 < image.shape[1])
             idx &= (y1 >= 0) & (y1 < image.shape[0])
@@ -978,7 +1064,6 @@ def add_galaxies(
     n_range=(0.5, 4.0),
     ellipticity_range=(0.0, 0.7),
     edge=0,
-    gain=None,
     wcs=None,
 ):
     """
@@ -991,7 +1076,6 @@ def add_galaxies(
     :param n_range: (min, max) Sersic index
     :param ellipticity_range: (min, max) ellipticity
     :param edge: Minimum distance from image edges
-    :param gain: Image gain (for Poisson noise)
     :param wcs: WCS object for computing RA/Dec
     :returns: Catalog (astropy Table) of added galaxies
 
@@ -1011,7 +1095,7 @@ def add_galaxies(
         position_angle = np.random.uniform(0, 180)
 
         # Place galaxy
-        place_galaxy(image, x, y, flux, r_eff, sersic_n, ellipticity, position_angle, gain)
+        place_galaxy(image, x, y, flux, r_eff, sersic_n, ellipticity, position_angle)
 
         # Catalog entry
         galaxy = {
@@ -1066,6 +1150,10 @@ def simulate_image(
     spike_threshold=50000,
     optical_ghosts=False,
     ghost_threshold=100000,
+    add_companions=False,
+    companion_fraction=0.2,
+    companion_separation_fwhm=(1.0, 3.0),
+    companion_flux_ratio=(0.5, 1.5),
     background=1000.0,
     readnoise=10.0,
     gain=1.0,
@@ -1073,6 +1161,7 @@ def simulate_image(
     wcs=None,
     return_catalog=True,
     return_masks=False,
+    seed=None,
     verbose=False,
 ):
     """
@@ -1085,7 +1174,8 @@ def simulate_image(
     :param n_stars: Number of stars to add
     :param star_flux_range: (min, max) star flux in ADU
     :param star_fwhm: FWHM of stellar PSF in pixels
-    :param star_psf: PSF type ('gaussian', 'moffat')
+    :param star_psf: PSF type - either a string ('gaussian', 'moffat') or a PSF model dict
+        (from create_psf_model). Use dict to specify aberrated PSFs.
     :param star_beta: Moffat beta parameter (if star_psf='moffat')
     :param n_galaxies: Number of galaxies to add
     :param galaxy_flux_range: (min, max) galaxy flux in ADU
@@ -1109,6 +1199,10 @@ def simulate_image(
     :param spike_threshold: Flux threshold for diffraction spikes
     :param optical_ghosts: Add optical ghosts to very bright stars
     :param ghost_threshold: Flux threshold for optical ghosts
+    :param add_companions: If True, add close stellar companions to simulate crowded fields
+    :param companion_fraction: Fraction of stars (0-1) that will have companions
+    :param companion_separation_fwhm: (min, max) companion separation in FWHM units
+    :param companion_flux_ratio: (min, max) companion flux relative to primary star
     :param background: Background level in ADU
     :param readnoise: Read noise in ADU
     :param gain: Detector gain in e-/ADU
@@ -1116,12 +1210,16 @@ def simulate_image(
     :param wcs: WCS object for computing sky coordinates
     :param return_catalog: If True, return catalog of all injected sources
     :param return_masks: If True, return separate masks for each artifact type
+    :param seed: Random seed for reproducibility. If set, calls np.random.seed(seed).
     :param verbose: Enable verbose output
     :returns: Dictionary with 'image', 'catalog' (if requested), 'masks' (if requested), 'background', 'noise'
 
     """
 
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
+
+    if seed is not None:
+        np.random.seed(seed)
 
     log(f"Simulating {width}x{height} image with {n_stars} stars and {n_galaxies} galaxies")
 
@@ -1134,21 +1232,82 @@ def simulate_image(
     # Add stars
     if n_stars > 0:
         log(f"Adding {n_stars} stars...")
-        cat_stars = add_stars(
-            image,
-            n=n_stars,
-            flux_range=star_flux_range,
-            fwhm=star_fwhm,
-            psf=star_psf,
-            beta=star_beta,
-            edge=edge,
-            gain=gain,
-            diffraction_spikes=diffraction_spikes,
-            spike_threshold=spike_threshold,
-            optical_ghosts=optical_ghosts,
-            ghost_threshold=ghost_threshold,
-            wcs=wcs,
-        )
+
+        # Resolve effective FWHM: if star_psf is a dict with its own fwhm, use that
+        effective_fwhm = star_fwhm
+        if isinstance(star_psf, dict) and 'fwhm' in star_psf:
+            effective_fwhm = star_psf['fwhm']
+
+        # Add companions to catalog before placement if requested
+        if add_companions:
+            # First add the base stars
+            cat_stars = add_stars(
+                image,
+                n=n_stars,
+                flux_range=star_flux_range,
+                fwhm=star_fwhm,
+                psf=star_psf,
+                beta=star_beta,
+                edge=edge,
+                diffraction_spikes=diffraction_spikes,
+                spike_threshold=spike_threshold,
+                optical_ghosts=optical_ghosts,
+                ghost_threshold=ghost_threshold,
+                wcs=wcs,
+            )
+
+            # Get number of companions before adding
+            n_before = len(cat_stars)
+
+            # Add companions to catalog
+            cat_stars_with_companions = add_close_companions_to_catalog(
+                cat_stars,
+                fwhm=effective_fwhm,
+                fraction=companion_fraction,
+                min_separation_fwhm=companion_separation_fwhm[0],
+                max_separation_fwhm=companion_separation_fwhm[1],
+                flux_variation=companion_flux_ratio,
+                image_shape=(height, width),
+                edge=edge,
+            )
+
+            n_companions = len(cat_stars_with_companions) - n_before
+            if n_companions > 0:
+                log(f"  Added {n_companions} close companions")
+
+                # Place only the companion stars (primaries already placed)
+                # Determine PSF model for companions
+                if isinstance(star_psf, str):
+                    psf_model = create_psf_model(fwhm=star_fwhm, psf_type=star_psf, beta=star_beta)
+                else:
+                    psf_model = star_psf
+
+                # Place companions
+                from . import psf as psf_module
+                for companion in cat_stars_with_companions[n_before:]:
+                    psf_module.place_psf_stamp(
+                        image, psf_model, companion['x'], companion['y'],
+                        flux=companion['flux']
+                    )
+
+            cat_stars = cat_stars_with_companions
+        else:
+            # No companions - use standard add_stars
+            cat_stars = add_stars(
+                image,
+                n=n_stars,
+                flux_range=star_flux_range,
+                fwhm=star_fwhm,
+                psf=star_psf,
+                beta=star_beta,
+                edge=edge,
+                diffraction_spikes=diffraction_spikes,
+                spike_threshold=spike_threshold,
+                optical_ghosts=optical_ghosts,
+                ghost_threshold=ghost_threshold,
+                wcs=wcs,
+            )
+
         catalogs.append(cat_stars)
 
     # Add galaxies
@@ -1162,7 +1321,6 @@ def simulate_image(
             n_range=galaxy_n_range,
             ellipticity_range=galaxy_ellipticity_range,
             edge=edge,
-            gain=gain,
             wcs=wcs,
         )
         catalogs.append(cat_galaxies)
@@ -1206,16 +1364,18 @@ def simulate_image(
         )
         catalogs.append(cat_satellites)
 
-    # Add noise
+    # Apply Poisson noise to entire image (sources + background) in one shot.
+    # Physically correct: noise from photon counting on total signal per pixel.
     log("Adding noise...")
+    if gain is not None and gain > 0:
+        image_e = image * gain
+        idx = image_e > 0
+        image_e[idx] = np.random.poisson(image_e[idx].astype(np.float64))
+        image = image_e / gain
+
+    # Add readnoise (Gaussian, after Poisson — correct physical order)
     noise_map = np.random.normal(0, readnoise, (height, width))
     image += noise_map
-
-    # Poisson noise from sources (if gain is set, already applied to individual sources)
-    # Add Poisson noise from background
-    if gain is not None:
-        poisson_noise = np.random.poisson(background * gain, (height, width)) / gain - background
-        image += poisson_noise
 
     # Prepare output
     result = {'image': image, 'background': np.ones((height, width)) * background, 'noise': noise_map}
@@ -1254,6 +1414,13 @@ def generate_realbogus_training_data(
     cutout_radius=15,
     augment=True,
     real_source_types=['star'],
+    close_pair_fraction=0.2,
+    min_separation_fwhm=1.0,
+    max_separation_fwhm=3.0,
+    aberration_fraction=0.0,
+    readnoise_range=(5.0, 20.0),
+    gain_range=(0.5, 2.0),
+    seed=None,
     verbose=False,
 ):
     """
@@ -1267,6 +1434,21 @@ def generate_realbogus_training_data(
     5. Extracting and preprocessing cutouts
     6. Optionally applying data augmentation
 
+    Flux ranges are automatically calculated for each image based on the background
+    noise level to ensure sources are detectable:
+    - Minimum flux = detection_threshold × noise (e.g., 3σ for detectability)
+    - Maximum flux = 1000 × noise (bright sources)
+    This prevents generating sources that are too faint to detect or unrealistically bright.
+
+    Close pairs are automatically added to ensure the classifier learns to accept
+    crowded sources. A fraction of stars will have stellar companions added at
+    controlled separations (e.g., 1-3 FWHM). Companions are only added to stars,
+    not galaxies.
+
+    PSF diversity can be included in training data by setting aberration_fraction > 0.
+    A fraction of images will use Moffat PSFs with randomized beta (1.5-4.5) instead
+    of perfect Gaussians, helping the classifier handle realistic PSF variations.
+
     :param n_images: Number of simulated images to generate
     :param image_size: (width, height) of simulated images
     :param n_stars_range: (min, max) number of stars per image
@@ -1276,13 +1458,24 @@ def generate_realbogus_training_data(
     :param n_cosmic_rays_range: (min, max) cosmic rays per image
     :param n_hot_pixels_range: (min, max) hot pixels per image
     :param n_satellites_range: (min, max) satellite trails per image
-    :param detection_threshold: Detection threshold in sigma
+    :param detection_threshold: Detection threshold in sigma (also used for min flux calculation)
     :param match_radius: Matching radius in pixels for truth matching
     :param cutout_radius: Cutout radius in pixels
     :param augment: Apply data augmentation (rotations, flips)
     :param real_source_types: List of source types to consider 'real'.
         Default: ['star'] treats only stars as real and galaxies as bogus.
         Use ['star', 'galaxy'] to treat both stars and galaxies as real sources.
+    :param close_pair_fraction: Fraction of sources (0-1) that will have close companions added.
+        Default: 0.2 (20% of sources get companions)
+    :param min_separation_fwhm: Minimum separation for companions in FWHM units.
+        Default: 1.0 (1× FWHM)
+    :param max_separation_fwhm: Maximum separation for companions in FWHM units.
+        Default: 3.0 (3× FWHM)
+    :param aberration_fraction: Fraction of images (0-1) with Moffat PSFs instead of Gaussian.
+        Default: 0.0 (all Gaussian)
+    :param readnoise_range: (min, max) read noise in ADU (randomized per image)
+    :param gain_range: (min, max) detector gain in e-/ADU (randomized per image)
+    :param seed: Random seed for reproducibility. If set, calls np.random.seed(seed).
     :param verbose: Print progress
     :returns: Dictionary with 'X' (cutouts), 'y' (labels), 'fwhm' (FWHM values), 'metadata'
 
@@ -1291,6 +1484,9 @@ def generate_realbogus_training_data(
     from . import realbogus
 
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
+
+    if seed is not None:
+        np.random.seed(seed)
 
     log(f"Generating training data from {n_images} simulated images...")
 
@@ -1312,20 +1508,66 @@ def generate_realbogus_training_data(
         n_hot_pixels = np.random.randint(*n_hot_pixels_range)
         n_satellites = np.random.randint(*n_satellites_range) if n_satellites_range[1] > 0 else 0
 
-        log(f"Image {img_idx+1}/{n_images}: FWHM={fwhm:.2f}, BG={background:.1f}, "
-            f"stars={n_stars}, gal={n_galaxies}, CR={n_cosmic_rays}, hot={n_hot_pixels}")
+        # Randomize readnoise and gain for diversity
+        readnoise = np.random.uniform(*readnoise_range)
+        gain = np.random.uniform(*gain_range)
+        aperture_radius = fwhm
+        n_pix = np.pi * aperture_radius**2
 
-        # Simulate image
+        # Noise in aperture (photon noise + readnoise)
+        noise_aperture = np.sqrt(n_pix * (background / gain + readnoise**2))
+
+        # Set flux ranges based on S/N ratio
+        # min_flux: detectable at threshold (e.g., 3 sigma)
+        # max_flux: very bright sources (1000 sigma)
+        min_sn = detection_threshold
+        max_sn = 1000.0
+
+        star_flux_range = (
+            min_sn * noise_aperture,
+            max_sn * noise_aperture
+        )
+        galaxy_flux_range = (
+            min_sn * noise_aperture,
+            max_sn * noise_aperture
+        )
+
+        # Optionally use non-Gaussian PSF for this image to add diversity
+        psf_type_str = 'gaussian'
+        if aberration_fraction > 0 and np.random.random() < aberration_fraction:
+            # Use Moffat PSF with randomized beta as proxy for non-ideal optics.
+            # Lower beta values produce broader wings, mimicking aberrated PSFs.
+            beta = np.random.uniform(1.5, 4.5)
+            star_psf = create_psf_model(fwhm=fwhm, psf_type='moffat', beta=beta)
+            psf_type_str = f'moffat(beta={beta:.1f})'
+        else:
+            # Use standard Gaussian PSF
+            star_psf = 'gaussian'
+
+        log(f"Image {img_idx+1}/{n_images}: FWHM={fwhm:.2f}, BG={background:.1f}, "
+            f"stars={n_stars}, gal={n_galaxies}, CR={n_cosmic_rays}, hot={n_hot_pixels}, "
+            f"flux_range={star_flux_range[0]:.0f}-{star_flux_range[1]:.0f}, PSF={psf_type_str}")
+
+        # Simulate image with companions (cleaner, unified approach)
         sim = simulate_image(
             width=width,
             height=height,
             n_stars=n_stars,
+            star_flux_range=star_flux_range,
             star_fwhm=fwhm,
+            star_psf=star_psf,  # Can be string or PSF model dict
             n_galaxies=n_galaxies,
+            galaxy_flux_range=galaxy_flux_range,
             n_cosmic_rays=n_cosmic_rays,
             n_hot_pixels=n_hot_pixels,
             n_satellites=n_satellites,
+            add_companions=close_pair_fraction > 0,
+            companion_fraction=close_pair_fraction,
+            companion_separation_fwhm=(min_separation_fwhm, max_separation_fwhm),
+            companion_flux_ratio=(0.5, 1.5),
             background=background,
+            readnoise=readnoise,
+            gain=gain,
             return_catalog=True,
             verbose=False,
         )
@@ -1338,7 +1580,7 @@ def generate_realbogus_training_data(
             detected = photometry.get_objects_sep(
                 image,
                 thresh=detection_threshold,
-                aper=2.5 * fwhm,
+                aper=fwhm,
                 minarea=5,
                 verbose=False,
             )
@@ -1446,7 +1688,7 @@ def generate_realbogus_training_data(
     return result
 
 
-def _augment_training_data(X, y, fwhm, augment_factor=4, verbose=False):
+def _augment_training_data(X, y, fwhm, augment_factor=8, verbose=False):
     """
     Apply data augmentation to training cutouts.
 
