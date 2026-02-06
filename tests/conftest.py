@@ -475,7 +475,7 @@ def realbogus_minimal_model(realbogus_training_data_small):
 
         # Train for just 1 epoch (minimal training for testing)
         model.fit(
-            [realbogus_training_data_small['X'], realbogus_training_data_small['fwhm']],
+            realbogus_training_data_small['X'],
             realbogus_training_data_small['y'],
             epochs=1,
             batch_size=32,
