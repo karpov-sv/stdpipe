@@ -12,11 +12,16 @@ Usage Examples:
     # Train classifier that includes galaxies as real sources
     python train_realbogus.py train --include-galaxies --n-images 500 --output full_model.h5
 
-    # Test on single image (interactive)
-    python train_realbogus.py test --model model.h5 --image test.fits --interactive
+    # Test on single image with optical aberrations (interactive)
+    python train_realbogus.py test --model model.h5 --enable-aberrations --interactive
 
-    # Evaluate on multiple images
-    python train_realbogus.py evaluate --model model.h5 --n-images 50 --output results/
+    # Evaluate with aberrated PSFs (30% of images)
+    python train_realbogus.py evaluate --model model.h5 --n-images 50 --enable-aberrations \\
+        --aberration-fraction 0.3 --output results/
+
+    # Evaluate with strong aberrations
+    python train_realbogus.py evaluate --model model.h5 --enable-aberrations \\
+        --defocus-max 3.0 --astigmatism-max 2.0 --coma-max 1.5 --output results_aberrated/
 
 Author: STDPipe Contributors
 """
@@ -46,6 +51,74 @@ except ImportError as e:
     sys.exit(1)
 
 
+def create_aberrated_psf_model(fwhm, enable_aberrations=False, aberration_params=None):
+    """
+    Create a PSF model with optional random optical aberrations.
+
+    Parameters
+    ----------
+    fwhm : float
+        Full width at half maximum in pixels
+    enable_aberrations : bool
+        Whether to add optical aberrations
+    aberration_params : dict, optional
+        Dictionary with aberration ranges:
+        - defocus_range: (min, max) in waves
+        - astigmatism_range: (min, max) in waves
+        - coma_range: (min, max) in waves
+        - fraction: fraction of PSFs that have aberrations (default 1.0)
+
+    Returns
+    -------
+    psf_model : dict
+        PSFEx-compatible PSF model
+    """
+    if not enable_aberrations or aberration_params is None:
+        # Return standard Gaussian PSF
+        return simulation.create_psf_model(fwhm=fwhm, psf_type='gaussian')
+
+    # Check if this PSF should have aberrations
+    fraction = aberration_params.get('fraction', 1.0)
+    if np.random.random() > fraction:
+        # Return standard PSF (no aberrations)
+        return simulation.create_psf_model(fwhm=fwhm, psf_type='gaussian')
+
+    # Random aberrations within specified ranges
+    defocus_range = aberration_params.get('defocus_range', (0.0, 0.0))
+    astigmatism_range = aberration_params.get('astigmatism_range', (0.0, 0.0))
+    coma_range = aberration_params.get('coma_range', (0.0, 0.0))
+
+    # Random aberration coefficients
+    defocus = np.random.uniform(*defocus_range) if defocus_range[1] > 0 else 0.0
+    astigmatism_x = np.random.uniform(*astigmatism_range) if astigmatism_range[1] > 0 else 0.0
+    astigmatism_y = np.random.uniform(*astigmatism_range) if astigmatism_range[1] > 0 else 0.0
+    coma_x = np.random.uniform(*coma_range) if coma_range[1] > 0 else 0.0
+    coma_y = np.random.uniform(*coma_range) if coma_range[1] > 0 else 0.0
+
+    # Random orientation for directional aberrations (astigmatism, coma)
+    # Rotate the aberration vector randomly
+    angle = np.random.uniform(0, 2 * np.pi)
+    astig_mag = np.sqrt(astigmatism_x**2 + astigmatism_y**2)
+    coma_mag = np.sqrt(coma_x**2 + coma_y**2)
+
+    astigmatism_x = astig_mag * np.cos(angle)
+    astigmatism_y = astig_mag * np.sin(angle)
+    coma_x = coma_mag * np.cos(angle)
+    coma_y = coma_mag * np.sin(angle)
+
+    # Create aberrated PSF
+    return simulation.create_psf_model(
+        fwhm=fwhm,
+        psf_type='gaussian',
+        defocus=defocus,
+        astigmatism_x=astigmatism_x,
+        astigmatism_y=astigmatism_y,
+        coma_x=coma_x,
+        coma_y=coma_y,
+        wavelength=550e-9,  # V-band
+    )
+
+
 def train_classifier(args):
     """Train a real-bogus classifier on simulated data."""
     print("=" * 80)
@@ -69,6 +142,17 @@ def train_classifier(args):
     print(f"  Batch size: {args.batch_size}")
     print(f"  Validation split: {args.val_split:.2f}")
     print(f"  Real source types: {real_source_types}")
+    print(f"  Asinh softening: {args.asinh_softening_sigma:.2f} sigma")
+
+    # Aberration parameters
+    if args.enable_aberrations:
+        print(f"\nOptical Aberrations: ENABLED")
+        print(f"  Defocus range: {args.defocus_min:.2f} - {args.defocus_max:.2f} waves")
+        print(f"  Astigmatism range: {args.astigmatism_min:.2f} - {args.astigmatism_max:.2f} waves")
+        print(f"  Coma range: {args.coma_min:.2f} - {args.coma_max:.2f} waves")
+        print(f"  Aberration fraction: {args.aberration_fraction:.0%} of images")
+    else:
+        print(f"\nOptical Aberrations: DISABLED")
 
     # Generate or load training data
     if args.data is None:
@@ -86,6 +170,11 @@ def train_classifier(args):
             n_hot_pixels_range=(args.n_hot_min, args.n_hot_max),
             real_source_types=real_source_types,
             augment=not args.no_augment,
+            aberration_fraction=args.aberration_fraction if args.enable_aberrations else 0.0,
+            defocus_range=(args.defocus_min, args.defocus_max) if args.enable_aberrations else (0.0, 0.0),
+            astigmatism_range=(args.astigmatism_min, args.astigmatism_max) if args.enable_aberrations else (0.0, 0.0),
+            coma_range=(args.coma_min, args.coma_max) if args.enable_aberrations else (0.0, 0.0),
+            asinh_softening=args.asinh_softening_sigma,
             verbose=True
         )
 
@@ -93,24 +182,38 @@ def train_classifier(args):
         print(f"  Real sources: {int(np.sum(data['y']))} ({100*np.mean(data['y']):.1f}%)")
         print(f"  Bogus sources: {int(len(data['y']) - np.sum(data['y']))} ({100*(1-np.mean(data['y'])):.1f}%)")
 
+        # Show detection efficiency summary
+        if 'detection_efficiency' in data:
+            eff_stats = data['detection_efficiency']
+            if 'mean' in eff_stats:
+                print(f"\nDetection Efficiency:")
+                print(f"  Mean: {eff_stats['mean']:.1%}")
+                print(f"  Range: {eff_stats['min']:.1%} - {eff_stats['max']:.1%}")
+                if eff_stats['n_flux_adjustments'] > 0:
+                    print(f"  Flux adjustments: {eff_stats['n_flux_adjustments']}")
+                    print(f"  Final star flux range: {eff_stats['final_star_flux_range']}")
+                    print(f"  Final galaxy flux range: {eff_stats['final_galaxy_flux_range']}")
+
         # Optionally save training data
         if args.save_data:
             data_file = Path(args.output).with_suffix('.npz')
             print(f"\nSaving training data to {data_file}")
-            np.savez_compressed(
-                data_file,
-                X=data['X'],
-                y=data['y'],
-                fwhm=data['fwhm']
-            )
+            save_payload = {
+                'X': data['X'],
+                'y': data['y'],
+            }
+            if 'fwhm' in data:
+                save_payload['fwhm'] = data['fwhm']
+            np.savez_compressed(data_file, **save_payload)
     else:
         print(f"\nLoading training data from {args.data}")
         loaded = np.load(args.data)
         data = {
             'X': loaded['X'],
             'y': loaded['y'],
-            'fwhm': loaded['fwhm']
         }
+        if 'fwhm' in loaded:
+            data['fwhm'] = loaded['fwhm']
         print(f"Loaded {len(data['X'])} samples")
 
     # Train model
@@ -199,11 +302,36 @@ def test_single_image(args):
         truth_catalog = None
     else:
         print("\nSimulating test image...")
+
+        # Create PSF model (with aberrations if enabled)
+        if args.enable_aberrations:
+            print("  Creating PSF with optical aberrations...")
+            aberration_params = {
+                'defocus_range': (args.defocus_min, args.defocus_max),
+                'astigmatism_range': (args.astigmatism_min, args.astigmatism_max),
+                'coma_range': (args.coma_min, args.coma_max),
+                'fraction': 1.0  # Always use aberrations for test
+            }
+            psf_model = create_aberrated_psf_model(
+                args.fwhm,
+                enable_aberrations=True,
+                aberration_params=aberration_params
+            )
+            if 'aberrations' in psf_model:
+                print(f"    Defocus: {psf_model['aberrations']['defocus']:.2f} waves")
+                print(f"    Astigmatism: ({psf_model['aberrations']['astigmatism_x']:.2f}, "
+                      f"{psf_model['aberrations']['astigmatism_y']:.2f}) waves")
+                print(f"    Coma: ({psf_model['aberrations']['coma_x']:.2f}, "
+                      f"{psf_model['aberrations']['coma_y']:.2f}) waves")
+        else:
+            psf_model = 'gaussian'  # Use default
+
         sim = simulation.simulate_image(
             width=args.image_size,
             height=args.image_size,
             n_stars=50,
             star_fwhm=args.fwhm,
+            star_psf=psf_model,
             n_galaxies=15,
             n_cosmic_rays=10,
             n_hot_pixels=20,
@@ -232,6 +360,7 @@ def test_single_image(args):
         threshold=args.rb_threshold,
         add_score=True,
         flag_bogus=False,  # Keep all for visualization
+        asinh_softening=args.asinh_softening_sigma,
         verbose=True
     )
 
@@ -443,19 +572,58 @@ def evaluate_classifier(args):
     # Evaluation loop
     print(f"\nEvaluating on {args.n_images} simulated images...")
 
+    if args.enable_aberrations:
+        print(f"Optical aberrations: ENABLED ({args.aberration_fraction:.0%} of images)")
+        print(f"  Defocus: {args.defocus_min:.2f}-{args.defocus_max:.2f} waves")
+        print(f"  Astigmatism: {args.astigmatism_min:.2f}-{args.astigmatism_max:.2f} waves")
+        print(f"  Coma: {args.coma_min:.2f}-{args.coma_max:.2f} waves")
+    else:
+        print("Optical aberrations: DISABLED")
+
     all_metrics = []
     all_scores_real = []
     all_scores_bogus = []
     sample_data = []  # Store sample images for interactive display
 
+    # Detection efficiency tracking
+    detection_efficiencies = []
+    n_flux_adjustments = 0
+    low_efficiency_count = 0
+
+    # Dynamic flux ranges (will be adjusted based on detection efficiency)
+    star_flux_range = (100, 10000)
+    galaxy_flux_range = (500, 5000)
+
     for i in range(args.n_images):
-        # Simulate image
+        # Random FWHM for this image
+        fwhm = np.random.uniform(args.fwhm_min, args.fwhm_max)
+
+        # Create PSF model (with aberrations if enabled)
+        if args.enable_aberrations:
+            aberration_params = {
+                'defocus_range': (args.defocus_min, args.defocus_max),
+                'astigmatism_range': (args.astigmatism_min, args.astigmatism_max),
+                'coma_range': (args.coma_min, args.coma_max),
+                'fraction': args.aberration_fraction
+            }
+            psf_model = create_aberrated_psf_model(
+                fwhm,
+                enable_aberrations=True,
+                aberration_params=aberration_params
+            )
+        else:
+            psf_model = 'gaussian'  # Use default
+
+        # Simulate image (with dynamic flux ranges)
         sim = simulation.simulate_image(
             width=args.image_size,
             height=args.image_size,
             n_stars=np.random.randint(args.n_stars_min, args.n_stars_max + 1),
-            star_fwhm=np.random.uniform(args.fwhm_min, args.fwhm_max),
+            star_flux_range=star_flux_range,
+            star_fwhm=fwhm,
+            star_psf=psf_model,
             n_galaxies=np.random.randint(args.n_galaxies_min, args.n_galaxies_max + 1),
+            galaxy_flux_range=galaxy_flux_range,
             n_cosmic_rays=np.random.randint(args.n_cr_min, args.n_cr_max + 1),
             n_hot_pixels=np.random.randint(args.n_hot_min, args.n_hot_max + 1),
             background=10**np.random.uniform(np.log10(args.bg_min), np.log10(args.bg_max)),
@@ -485,11 +653,69 @@ def evaluate_classifier(args):
             model=model,
             add_score=True,
             flag_bogus=False,
+            asinh_softening=args.asinh_softening_sigma,
             verbose=False
         )
 
+        # Calculate detection efficiency (before computing metrics)
+        # Count real sources in truth catalog (stars and galaxies, not artifacts)
+        truth_real = truth[(truth['type'] == 'star') | (truth['type'] == 'galaxy')]
+        n_simulated_real = len(truth_real)
+
+        # Match detections to real sources
+        n_detected_real = 0
+        for obj in obj_scored:
+            dx = truth_real['x'] - obj['x']
+            dy = truth_real['y'] - obj['y']
+            dist = np.sqrt(dx**2 + dy**2)
+            if len(dist) > 0 and np.min(dist) < args.match_radius:
+                n_detected_real += 1
+
+        if n_simulated_real > 0:
+            detection_efficiency = n_detected_real / n_simulated_real
+            detection_efficiencies.append(detection_efficiency)
+
+            # Check if efficiency is too low
+            if detection_efficiency < args.min_detection_efficiency:
+                low_efficiency_count += 1
+
+                # If efficiency has been low for 3 consecutive images, adjust flux
+                if (low_efficiency_count >= 3 and
+                    n_flux_adjustments < args.max_flux_adjustments):
+
+                    old_star_min = star_flux_range[0]
+                    old_galaxy_min = galaxy_flux_range[0]
+
+                    # Increase minimum flux to improve detection rate
+                    star_flux_range = (
+                        star_flux_range[0] * args.flux_adjustment_factor,
+                        star_flux_range[1]
+                    )
+                    galaxy_flux_range = (
+                        galaxy_flux_range[0] * args.flux_adjustment_factor,
+                        galaxy_flux_range[1]
+                    )
+
+                    n_flux_adjustments += 1
+                    low_efficiency_count = 0  # Reset counter
+
+                    print(f"\n  ⚠️  Detection efficiency low for 3 images - adjusting flux ranges:")
+                    print(f"      Stars: {old_star_min:.0f}-{star_flux_range[1]:.0f} → "
+                          f"{star_flux_range[0]:.0f}-{star_flux_range[1]:.0f}")
+                    print(f"      Galaxies: {old_galaxy_min:.0f}-{galaxy_flux_range[1]:.0f} → "
+                          f"{galaxy_flux_range[0]:.0f}-{galaxy_flux_range[1]:.0f}\n")
+            else:
+                low_efficiency_count = 0  # Reset if efficiency is good
+
         # Match to truth for metrics
         metrics = compute_metrics(obj_scored, truth, args.rb_threshold, args.match_radius)
+
+        # Add detection efficiency to metrics
+        if n_simulated_real > 0:
+            metrics['detection_efficiency'] = detection_efficiency
+            metrics['n_simulated_real'] = n_simulated_real
+            metrics['n_detected_real'] = n_detected_real
+
         all_metrics.append(metrics)
 
         # Collect scores by true class
@@ -507,12 +733,39 @@ def evaluate_classifier(args):
         if (i + 1) % 10 == 0:
             print(f"  Processed {i+1}/{args.n_images} images...")
 
+    # Print detection efficiency summary
+    if detection_efficiencies:
+        mean_efficiency = np.mean(detection_efficiencies)
+        median_efficiency = np.median(detection_efficiencies)
+        min_efficiency = np.min(detection_efficiencies)
+        max_efficiency = np.max(detection_efficiencies)
+
+        print("\n" + "=" * 80)
+        print("Detection Efficiency Summary")
+        print("=" * 80)
+        print(f"  Mean:   {mean_efficiency:.1%}")
+        print(f"  Median: {median_efficiency:.1%}")
+        print(f"  Range:  {min_efficiency:.1%} - {max_efficiency:.1%}")
+        if n_flux_adjustments > 0:
+            print(f"  Flux adjustments made: {n_flux_adjustments}")
+            print(f"  Final star flux range: {star_flux_range[0]:.0f} - {star_flux_range[1]:.0f}")
+            print(f"  Final galaxy flux range: {galaxy_flux_range[0]:.0f} - {galaxy_flux_range[1]:.0f}")
+
     # Aggregate metrics
     print("\n" + "=" * 80)
     print("Evaluation Results")
     print("=" * 80)
 
     aggregate_metrics = aggregate_results(all_metrics)
+
+    # Add detection efficiency to aggregate metrics
+    if detection_efficiencies:
+        aggregate_metrics['detection_efficiency_mean'] = np.mean(detection_efficiencies)
+        aggregate_metrics['detection_efficiency_std'] = np.std(detection_efficiencies)
+        aggregate_metrics['detection_efficiency_median'] = np.median(detection_efficiencies)
+        aggregate_metrics['n_flux_adjustments'] = n_flux_adjustments
+        aggregate_metrics['final_star_flux_range'] = star_flux_range
+        aggregate_metrics['final_galaxy_flux_range'] = galaxy_flux_range
 
     print(f"\nPerformance Metrics (threshold = {args.rb_threshold}):")
     print(f"  Precision: {aggregate_metrics['precision']:.3f} ± {aggregate_metrics['precision_std']:.3f}")
@@ -897,11 +1150,16 @@ Examples:
   # Train classifier that includes galaxies as real sources
   %(prog)s train --include-galaxies --n-images 500 --output full_model.h5
 
-  # Test on single image (interactive)
-  %(prog)s test --model model.h5 --image test.fits --interactive
+  # Test with optical aberrations (interactive)
+  %(prog)s test --model model.h5 --enable-aberrations --interactive
 
-  # Evaluate on multiple images
-  %(prog)s evaluate --model model.h5 --n-images 50 --output results/
+  # Evaluate with aberrated PSFs (30%% of images have aberrations)
+  %(prog)s evaluate --model model.h5 --n-images 50 --enable-aberrations \\
+    --aberration-fraction 0.3 --output results/
+
+  # Evaluate robustness to strong aberrations
+  %(prog)s evaluate --model model.h5 --enable-aberrations \\
+    --defocus-max 3.0 --astigmatism-max 2.0 --coma-max 1.5 --output results_aberrated/
         """
     )
 
@@ -938,6 +1196,9 @@ Examples:
                             help='Minimum FWHM in pixels (default: 2.0)')
     train_parser.add_argument('--fwhm-max', type=float, default=6.0,
                             help='Maximum FWHM in pixels (default: 6.0)')
+    train_parser.add_argument('--asinh-softening-sigma', type=float,
+                            default=realbogus.DEFAULT_ASINH_SOFTENING_SIGMA,
+                            help='Asinh softening in units of background sigma')
 
     # Artifact parameters
     train_parser.add_argument('--n-cr-min', type=int, default=5,
@@ -966,6 +1227,24 @@ Examples:
     train_parser.add_argument('--no-augment', action='store_true',
                             help='Disable data augmentation')
 
+    # Optical aberrations
+    train_parser.add_argument('--enable-aberrations', action='store_true',
+                            help='Enable optical aberrations in simulated PSFs')
+    train_parser.add_argument('--defocus-min', type=float, default=0.0,
+                            help='Minimum defocus aberration in waves (default: 0.0)')
+    train_parser.add_argument('--defocus-max', type=float, default=2.0,
+                            help='Maximum defocus aberration in waves (default: 2.0)')
+    train_parser.add_argument('--astigmatism-min', type=float, default=0.0,
+                            help='Minimum astigmatism aberration in waves (default: 0.0)')
+    train_parser.add_argument('--astigmatism-max', type=float, default=1.5,
+                            help='Maximum astigmatism aberration in waves (default: 1.5)')
+    train_parser.add_argument('--coma-min', type=float, default=0.0,
+                            help='Minimum coma aberration in waves (default: 0.0)')
+    train_parser.add_argument('--coma-max', type=float, default=1.0,
+                            help='Maximum coma aberration in waves (default: 1.0)')
+    train_parser.add_argument('--aberration-fraction', type=float, default=0.3,
+                            help='Fraction of images with aberrations (default: 0.3)')
+
     # Output
     train_parser.add_argument('--output', type=str, default='realbogus_model.h5',
                             help='Output model file (default: realbogus_model.h5)')
@@ -985,10 +1264,31 @@ Examples:
                            help='Simulated image size if no image provided (default: 1024)')
     test_parser.add_argument('--fwhm', type=float, default=3.5,
                            help='FWHM for detection/simulation (default: 3.5)')
+    test_parser.add_argument('--asinh-softening-sigma', type=float,
+                           default=realbogus.DEFAULT_ASINH_SOFTENING_SIGMA,
+                           help='Asinh softening in units of background sigma')
     test_parser.add_argument('--threshold', type=float, default=3.0,
                            help='Detection threshold in sigma (default: 3.0)')
     test_parser.add_argument('--rb-threshold', type=float, default=0.5,
                            help='Real-bogus classification threshold (default: 0.5)')
+
+    # Optical aberrations
+    test_parser.add_argument('--enable-aberrations', action='store_true',
+                           help='Enable optical aberrations in simulated PSF')
+    test_parser.add_argument('--defocus-min', type=float, default=0.0,
+                           help='Minimum defocus aberration in waves (default: 0.0)')
+    test_parser.add_argument('--defocus-max', type=float, default=2.0,
+                           help='Maximum defocus aberration in waves (default: 2.0)')
+    test_parser.add_argument('--astigmatism-min', type=float, default=0.0,
+                           help='Minimum astigmatism aberration in waves (default: 0.0)')
+    test_parser.add_argument('--astigmatism-max', type=float, default=1.5,
+                           help='Maximum astigmatism aberration in waves (default: 1.5)')
+    test_parser.add_argument('--coma-min', type=float, default=0.0,
+                           help='Minimum coma aberration in waves (default: 0.0)')
+    test_parser.add_argument('--coma-max', type=float, default=1.0,
+                           help='Maximum coma aberration in waves (default: 1.0)')
+
+    # Output
     test_parser.add_argument('--interactive', action='store_true',
                            help='Show interactive plot window')
     test_parser.add_argument('--output', type=str, default='test_result.png',
@@ -1009,6 +1309,9 @@ Examples:
                            help='Minimum FWHM (default: 2.0)')
     eval_parser.add_argument('--fwhm-max', type=float, default=6.0,
                            help='Maximum FWHM (default: 6.0)')
+    eval_parser.add_argument('--asinh-softening-sigma', type=float,
+                           default=realbogus.DEFAULT_ASINH_SOFTENING_SIGMA,
+                           help='Asinh softening in units of background sigma')
     eval_parser.add_argument('--threshold', type=float, default=3.0,
                            help='Detection threshold in sigma (default: 3.0)')
     eval_parser.add_argument('--rb-threshold', type=float, default=0.5,
@@ -1039,6 +1342,32 @@ Examples:
                            help='Minimum background level (default: 100)')
     eval_parser.add_argument('--bg-max', type=float, default=10000,
                            help='Maximum background level (default: 10000)')
+
+    # Optical aberrations
+    eval_parser.add_argument('--enable-aberrations', action='store_true',
+                           help='Enable optical aberrations in simulated PSFs')
+    eval_parser.add_argument('--defocus-min', type=float, default=0.0,
+                           help='Minimum defocus aberration in waves (default: 0.0)')
+    eval_parser.add_argument('--defocus-max', type=float, default=2.0,
+                           help='Maximum defocus aberration in waves (default: 2.0)')
+    eval_parser.add_argument('--astigmatism-min', type=float, default=0.0,
+                           help='Minimum astigmatism aberration in waves (default: 0.0)')
+    eval_parser.add_argument('--astigmatism-max', type=float, default=1.5,
+                           help='Maximum astigmatism aberration in waves (default: 1.5)')
+    eval_parser.add_argument('--coma-min', type=float, default=0.0,
+                           help='Minimum coma aberration in waves (default: 0.0)')
+    eval_parser.add_argument('--coma-max', type=float, default=1.0,
+                           help='Maximum coma aberration in waves (default: 1.0)')
+    eval_parser.add_argument('--aberration-fraction', type=float, default=0.3,
+                           help='Fraction of images with aberrations (default: 0.3)')
+
+    # Detection efficiency diagnostics
+    eval_parser.add_argument('--min-detection-efficiency', type=float, default=0.3,
+                           help='Minimum detection efficiency (0-1) before flux adjustment (default: 0.3)')
+    eval_parser.add_argument('--flux-adjustment-factor', type=float, default=1.5,
+                           help='Factor to multiply min flux by when adjusting (default: 1.5)')
+    eval_parser.add_argument('--max-flux-adjustments', type=int, default=3,
+                           help='Maximum number of flux adjustments (default: 3)')
 
     # Interactive visualization
     eval_parser.add_argument('--interactive', action='store_true',
