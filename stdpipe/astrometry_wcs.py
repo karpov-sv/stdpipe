@@ -93,6 +93,13 @@ def fit_zpn_wcs_from_points(
     -------
     wcs_best : astropy.wcs.WCS
     result : scipy OptimizeResult (or None if SciPy not available)
+
+    Notes
+    -----
+    For stability, the solver runs in two stages when *fit_pv* is True:
+    it first fits CRPIX/CRVAL/CD with PV fixed, then fits all free
+    parameters (including PV) with conservative bounds to prevent
+    invalid projections.
     """
     xy = np.asarray(xy, dtype=float)
     if xy.ndim != 2 or xy.shape[1] != 2:
@@ -107,45 +114,152 @@ def fit_zpn_wcs_from_points(
         frame=sky.frame
     )
 
-    p0 = _pack_params(wcs_init, pv_deg=pv_deg)
+    def _estimate_theta_max_deg(w: WCS) -> float | None:
+        if w.pixel_shape is None:
+            return None
 
-    # Build a mask over parameters to optionally freeze blocks
-    mask = np.ones_like(p0, dtype=bool)
-    # indices: 0..1 CRPIX, 2..3 CRVAL, 4..7 CD, 8.. PV
-    if not fit_crpix:
-        mask[0:2] = False
-    if not fit_crval:
-        mask[2:4] = False
-    if not fit_cd:
-        mask[4:8] = False
-    if not fit_pv:
-        mask[8:] = False
+        nx, ny = w.pixel_shape
+        if nx is None or ny is None:
+            return None
 
-    # Reduced parameter vector (only free params)
-    free0 = p0[mask]
+        # Prefer a pixel-scale estimate (robust to projection issues)
+        pixel_scale_deg = None
+        try:
+            pscales = w.proj_plane_pixel_scales()
+            if hasattr(pscales[0], "to_value"):
+                pixel_scale_deg = float(np.mean([s.to_value(u.deg) for s in pscales]))
+            else:
+                pixel_scale_deg = float(np.mean(pscales))
+        except Exception:
+            pixel_scale_deg = None
 
-    # Optional: simple, conservative bounds (you can tighten if you want)
-    # CRPIX: unbounded; CRVAL: RA wrap handled by residual frame; CD: unbounded
-    # PV: usually PV2_1 > 0 (scale), others modest. We’ll keep wide bounds.
-    lb = np.full_like(free0, -np.inf, dtype=float)
-    ub = np.full_like(free0, +np.inf, dtype=float)
+        if pixel_scale_deg is not None and np.isfinite(pixel_scale_deg) and pixel_scale_deg > 0:
+            r_pix = 0.5 * np.hypot(nx, ny)
+            return max(float(pixel_scale_deg * r_pix), 0.01)
 
-    # If PV is free, you can enforce PV2_1 > 0 (common sanity constraint)
-    # Find where PV2_1 sits in the FREE vector (if present)
-    if fit_pv and pv_deg >= 1:
-        full_idx_pv1 = 8 + 1
-        if mask[full_idx_pv1]:
-            free_idx = np.flatnonzero(mask).tolist().index(full_idx_pv1)
-            lb[free_idx] = 0.0  # positive radial scale
+        # Fallback: estimate from footprint if possible
+        try:
+            crpix = np.array(w.wcs.crpix, dtype=float)
+            corners = np.array(
+                [[0.0, 0.0], [nx - 1.0, 0.0], [0.0, ny - 1.0], [nx - 1.0, ny - 1.0]],
+                dtype=float,
+            )
+            ra_c, dec_c = w.all_pix2world(crpix[0], crpix[1], 0)
+            ra_k, dec_k = w.all_pix2world(corners[:, 0], corners[:, 1], 0)
+            if np.isfinite(ra_c) and np.isfinite(dec_c) and np.all(np.isfinite(ra_k)) and np.all(
+                np.isfinite(dec_k)
+            ):
+                center = SkyCoord(ra_c * u.deg, dec_c * u.deg, frame="icrs")
+                sky_k = SkyCoord(ra_k * u.deg, dec_k * u.deg, frame="icrs")
+                theta = float(np.max(center.separation(sky_k).to_value(u.deg)))
+                return max(theta, 0.01)
+        except Exception:
+            pass
 
-    def make_wcs_from_free(free: np.ndarray) -> WCS:
-        p = p0.copy()
-        p[mask] = free
-        return _unpack_params_to_wcs(wcs_init, p, pv_deg=pv_deg)
+        return None
 
-    def fun(free: np.ndarray) -> np.ndarray:
-        w = make_wcs_from_free(free)
-        return _sky_residuals_arcsec(w, xy, sky, center)
+    def _make_bounds(p0: np.ndarray, mask: np.ndarray, base: WCS, allow_pv: bool) -> tuple:
+        # CRPIX/CRVAL/CD unbounded by default
+        free0 = p0[mask]
+        lb = np.full_like(free0, -np.inf, dtype=float)
+        ub = np.full_like(free0, +np.inf, dtype=float)
+
+        if not allow_pv or pv_deg < 1:
+            return lb, ub
+
+        # PV bounds: keep solution in a physically plausible neighborhood
+        pv0 = float(p0[8 + 0])
+        pv1 = float(p0[8 + 1]) if pv_deg >= 1 else 1.0
+        if not np.isfinite(pv1) or pv1 == 0:
+            pv1 = 1.0
+
+        theta_max_deg = _estimate_theta_max_deg(base)
+        pv1_abs = abs(pv1) if np.isfinite(pv1) else 1.0
+
+        # PV2_0 ~ 0 (allow small drift; keep init inside bounds)
+        full_idx = 8 + 0
+        if mask[full_idx]:
+            free_idx = np.flatnonzero(mask).tolist().index(full_idx)
+            pv0_abs = max(1e-3, abs(pv0) * 2.0)
+            lb[free_idx] = pv0 - pv0_abs
+            ub[free_idx] = pv0 + pv0_abs
+
+        # PV2_1 positive scale, near initial value
+        full_idx = 8 + 1
+        if mask[full_idx]:
+            free_idx = np.flatnonzero(mask).tolist().index(full_idx)
+            if np.isfinite(pv1) and pv1 > 0:
+                lb[free_idx] = max(0.0, pv1 * 0.5)
+                ub[free_idx] = pv1 * 2.0
+            else:
+                lb[free_idx] = 0.0
+                ub[free_idx] = np.inf
+
+        # Higher-order PV terms: limit contribution at field edge
+        pv_frac = 0.3  # allow ~30% of linear term at the edge
+        for m in range(2, pv_deg + 1):
+            full_idx = 8 + m
+            if not mask[full_idx]:
+                continue
+            pv_m = float(p0[full_idx])
+            if theta_max_deg is not None and np.isfinite(theta_max_deg) and theta_max_deg > 0:
+                abs_bound = pv_frac * pv1_abs / (theta_max_deg ** (m - 1))
+            else:
+                abs_bound = max(abs(pv_m) * 5.0, 1e-6)
+            # Keep initial value inside bounds
+            abs_bound = max(abs_bound, abs(pv_m) * 2.0)
+            free_idx = np.flatnonzero(mask).tolist().index(full_idx)
+            lb[free_idx] = pv_m - abs_bound
+            ub[free_idx] = pv_m + abs_bound
+
+        return lb, ub
+
+    def _fit_with_mask(base: WCS, allow_pv: bool):
+        p0 = _pack_params(base, pv_deg=pv_deg)
+
+        # Build a mask over parameters to optionally freeze blocks
+        mask = np.ones_like(p0, dtype=bool)
+        # indices: 0..1 CRPIX, 2..3 CRVAL, 4..7 CD, 8.. PV
+        if not fit_crpix:
+            mask[0:2] = False
+        if not fit_crval:
+            mask[2:4] = False
+        if not fit_cd:
+            mask[4:8] = False
+        if not allow_pv:
+            mask[8:] = False
+
+        if not np.any(mask):
+            return base, None
+
+        free0 = p0[mask]
+        lb, ub = _make_bounds(p0, mask, base, allow_pv=allow_pv)
+
+        def make_wcs_from_free(free: np.ndarray) -> WCS:
+            p = p0.copy()
+            p[mask] = free
+            return _unpack_params_to_wcs(base, p, pv_deg=pv_deg)
+
+        def fun(free: np.ndarray) -> np.ndarray:
+            w = make_wcs_from_free(free)
+            res = _sky_residuals_arcsec(w, xy, sky, center)
+            if not np.all(np.isfinite(res)):
+                res = np.nan_to_num(res, nan=1e6, posinf=1e6, neginf=-1e6)
+            return res
+
+        res = least_squares(
+            fun,
+            free0,
+            bounds=(lb, ub),
+            loss=robust_loss,
+            f_scale=float(f_scale_arcsec),
+            max_nfev=int(max_nfev),
+            x_scale="jac",
+            verbose=0,
+        )
+
+        w_best = make_wcs_from_free(res.x)
+        return w_best, res
 
     # Try SciPy; if unavailable, error with a clear message.
     try:
@@ -156,19 +270,16 @@ def fit_zpn_wcs_from_points(
             "Install scipy or tell me and I’ll provide a pure-numpy Gauss-Newton fallback."
         ) from e
 
-    res = least_squares(
-        fun,
-        free0,
-        bounds=(lb, ub),
-        loss=robust_loss,
-        f_scale=float(f_scale_arcsec),
-        max_nfev=int(max_nfev),
-        x_scale="jac",
-        verbose=0,
-    )
+    # Two-stage fit: first solve CRPIX/CRVAL/CD with PV fixed,
+    # then allow PV with conservative bounds.
+    w_curr = wcs_init
+    res_last = None
 
-    w_best = make_wcs_from_free(res.x)
-    return w_best, res
+    if fit_pv and (fit_crpix or fit_crval or fit_cd):
+        w_curr, res_last = _fit_with_mask(w_curr, allow_pv=False)
+
+    w_curr, res_last = _fit_with_mask(w_curr, allow_pv=fit_pv)
+    return w_curr, res_last
 
 
 def tan_wcs_to_zpn(
@@ -329,7 +440,7 @@ def fit_wcs_from_points(
     proj_point="center",
     projection=None,
     sip_degree=None,
-    pv_deg=5,
+    pv_deg=,
 ):
     """Drop-in wrapper around :func:`astropy.wcs.utils.fit_wcs_from_points`
     that also handles **ZPN** projection (which astropy does not natively fit).
@@ -346,11 +457,11 @@ def fit_wcs_from_points(
         Projection template.  If this is a WCS with ``RA---ZPN / DEC--ZPN``
         CTYPEs, :func:`fit_zpn_wcs_from_points` is used instead.
     sip_degree : int or None, optional
-        SIP polynomial degree (TAN only).  For ZPN this is ignored;
-        use *pv_deg* instead.
+        SIP polynomial degree (TAN only).  For ZPN this is used as the
+        PV polynomial degree when >0; otherwise *pv_deg* is used.
     pv_deg : int, optional
-        ZPN PV polynomial degree (``PV2_0 … PV2_pv_deg``).  Only used
-        when the projection is ZPN.  Default 5.
+        ZPN PV polynomial degree (``PV2_0 … PV2_pv_deg``).  Used for ZPN
+        when ``sip_degree`` is None or <= 0.  Default 5.
 
     Returns
     -------
@@ -379,8 +490,14 @@ def fit_wcs_from_points(
             # (2, N) -> (N, 2)
             xy_arr = xy_arr.T
 
+        # For ZPN, reuse sip_degree as the PV polynomial degree when provided
+        if sip_degree is not None and int(sip_degree) > 0:
+            zpn_deg = int(sip_degree)
+        else:
+            zpn_deg = int(pv_deg)
+
         wcs_best, _result = fit_zpn_wcs_from_points(
-            xy_arr, world_coords, wcs_init=projection, pv_deg=pv_deg
+            xy_arr, world_coords, wcs_init=projection, pv_deg=zpn_deg
         )
         return wcs_best
 
