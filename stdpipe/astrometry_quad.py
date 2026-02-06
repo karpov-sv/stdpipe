@@ -39,7 +39,7 @@ from astropy.coordinates import SkyCoord
 import astropy.units as u
 from astropy.table import Table
 from astropy.wcs import WCS
-from astropy.wcs.utils import fit_wcs_from_points
+from stdpipe.astrometry_wcs import fit_wcs_from_points
 
 
 # -----------------------------
@@ -694,13 +694,6 @@ class QuadHashAstrometry:
             raise RuntimeError("Could not determine pixel scale from WCS.")
         pixel_scale_arcsec = pixel_scale_deg * 3600.0
 
-        # Check projection type for SIP compatibility
-        try:
-            ctype0 = wcs_init.wcs.ctype[0]
-            is_tan_based = 'TAN' in ctype0
-        except Exception:
-            is_tan_based = False
-
         # Bright subsets
         obj_sub_idx = _pick_brightest_obj(Table({"x": x, "y": y, "mag": m_obj}), self.cfg.n_det)
         cat_sub_idx = _pick_brightest_cat(Table({"ra": ra, "dec": dec, "mag": m_cat}), self.cfg.n_ref)
@@ -1070,23 +1063,13 @@ class QuadHashAstrometry:
             xy_use = xy[:, keep]
             sky_use = sky[keep]
 
-            # SIP is only valid for TAN-based projections
-            sip_deg = int(self.cfg.sip_degree) if is_tan_based else 0
-
-            try:
-                refined_wcs = fit_wcs_from_points(
-                    xy_use,
-                    sky_use,
-                    projection=wcs_init,
-                    sip_degree=sip_deg,
-                )
-            except TypeError:
-                # Older astropy versions don't support sip_degree
-                refined_wcs = fit_wcs_from_points(
-                    xy_use,
-                    sky_use,
-                    projection=wcs_init,
-                )
+            # Wrapper handles SIP for TAN, PV for ZPN, linear for others
+            refined_wcs = fit_wcs_from_points(
+                xy_use,
+                sky_use,
+                projection=wcs_init,
+                sip_degree=int(self.cfg.sip_degree),
+            )
 
             # Residuals via spherical distance (projection-independent)
             ra_fit, dec_fit = refined_wcs.all_pix2world(xy_use[0], xy_use[1], 0)

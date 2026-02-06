@@ -1163,7 +1163,7 @@ class TestIntegration:
 
 
     @pytest.mark.unit
-    @pytest.mark.parametrize("proj_type", ["TAN", "ZEA", "SIN", "STG", "ARC"])
+    @pytest.mark.parametrize("proj_type", ["TAN", "ZEA", "SIN", "STG", "ARC", "ZPN"])
     def test_non_tan_projections(self, proj_type):
         """Test that refinement works with non-TAN projections."""
         np.random.seed(42)
@@ -1174,6 +1174,10 @@ class TestIntegration:
         wcs_true.wcs.crval = [180.0, 45.0]
         wcs_true.wcs.ctype = [f"RA---{proj_type}", f"DEC--{proj_type}"]
         wcs_true.wcs.cd = np.array([[-0.0002778, 0], [0, 0.0002778]])
+
+        if proj_type == "ZPN":
+            # ZPN needs PV2 coefficients; PV2_1=1 gives identity radial law
+            wcs_true.wcs.set_pv([(2, 0, 0.0), (2, 1, 1.0)])
 
         # Create catalog
         n_stars = 500
