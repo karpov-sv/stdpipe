@@ -404,9 +404,9 @@ def get_psf_stamp(psf, x=0, y=0, dx=None, dy=None, normalize=True):
 
     supersampled = get_supersampled_psf_stamp(psf, x, y, normalize=normalize)
 
-    # Supersampled stamp center, assuming odd-sized shape
-    ssx0 = np.floor(supersampled.shape[1] / 2)
-    ssy0 = np.floor(supersampled.shape[0] / 2)
+    # Supersampled stamp center (works for both even and odd-sized arrays)
+    ssx0 = (supersampled.shape[1] - 1) / 2.0
+    ssy0 = (supersampled.shape[0] - 1) / 2.0
 
     # Make odd-sized array to hold the result
     x0 = np.floor(psf['width'] * psf['sampling'] / 2)
