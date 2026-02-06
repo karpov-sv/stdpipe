@@ -17,7 +17,11 @@ from astropy.table import Table
 from scipy.ndimage import rotate, gaussian_filter
 
 
-def create_psf_model(fwhm=3.0, psf_type='gaussian', beta=2.5, size=None, oversampling=2):
+def create_psf_model(
+    fwhm=3.0, psf_type='gaussian', beta=2.5, size=None, oversampling=2,
+    defocus=0.0, astigmatism_x=0.0, astigmatism_y=0.0,
+    coma_x=0.0, coma_y=0.0, wavelength=550e-9, pupil_diameter=1.0,
+):
     """
     Create an oversampled PSF model compatible with PSFEx format.
 
@@ -25,16 +29,26 @@ def create_psf_model(fwhm=3.0, psf_type='gaussian', beta=2.5, size=None, oversam
     STDPipe routines. Uses oversampling for accurate flux conservation and fast
     evaluation with sub-pixel positioning.
 
+    Optical aberrations can be added via Zernike polynomial coefficients (Noll ordering).
+    When any aberration coefficient is non-zero, a diffraction PSF is computed via
+    Fourier optics and convolved with the atmospheric seeing PSF (Gaussian or Moffat).
+    When all coefficients are zero, the existing analytical path is used unchanged.
+
     :param fwhm: Full width at half maximum in pixels
     :param psf_type: Type of PSF model ('gaussian' or 'moffat')
     :param beta: Moffat beta parameter (default 2.5, only used for psf_type='moffat')
     :param size: Output stamp size in pixels (after downsampling). If None, automatically sized to capture ~99% of PSF flux (≥8*FWHM)
     :param oversampling: Oversampling factor (default 4)
+    :param defocus: Zernike Z4 defocus coefficient in waves (default 0.0)
+    :param astigmatism_x: Zernike Z5 oblique astigmatism coefficient in waves (default 0.0)
+    :param astigmatism_y: Zernike Z6 vertical astigmatism coefficient in waves (default 0.0)
+    :param coma_x: Zernike Z7 vertical coma coefficient in waves (default 0.0)
+    :param coma_y: Zernike Z8 horizontal coma coefficient in waves (default 0.0)
+    :param wavelength: Observation wavelength in meters (default 550e-9, affects diffraction scale)
+    :param pupil_diameter: Pupil diameter in meters (default 1.0, affects diffraction scale)
     :returns: Dictionary with PSFEx-compatible structure containing the PSF model
 
     """
-
-    # TODO: properly implement oversampling
 
     # Auto-size to capture full PSF if not specified
     # For Gaussian/Moffat PSF, significant flux extends to ~4 FWHM from center
@@ -44,42 +58,38 @@ def create_psf_model(fwhm=3.0, psf_type='gaussian', beta=2.5, size=None, oversam
         if size % 2 == 0:
             size += 1
 
-    # Create PSF directly at target pixel scale (no oversampling)
-    # This is simpler and avoids the complex PSFEx width/height/sampling relationship
-    # Oversampling will be handled internally by get_psf_stamp when needed
-    psf_data_size = size
-    psf_width = float(size)
-    psf_height = float(size)
-    psf_sampling = 1.0  # No oversampling in stored data
+    # Oversampled data grid following PSFEx convention:
+    # - data array has size * oversampling pixels per side
+    # - sampling = 1/oversampling (image pixels per data pixel; <1 means oversampled)
+    # - get_psf_stamp() output size: floor(width * sampling / 2) * 2 + 1 = size (constant)
+    psf_data_size = size * oversampling
+    psf_sampling = 1.0 / oversampling  # PSFEx convention: image pixels per data pixel
+    psf_width = float(psf_data_size)   # Data array dimension
+    psf_height = float(psf_data_size)
 
-    # Center of grid
+    # Center of the oversampled grid
     center = (psf_data_size - 1) / 2.0
 
-    # Create coordinate grid at target pixel scale
+    # Create coordinate grid in data-pixel space
     y, x = np.mgrid[0:psf_data_size, 0:psf_data_size]
 
     if psf_type.lower() == 'gaussian':
         # Pixel-integrated Gaussian PSF using error function
-        # This properly accounts for flux integrated over each pixel area
-        # Eliminates the ~2-3% bias from point-sampling
+        # This properly accounts for flux integrated over each data pixel area
+        # Data pixel [i-0.5, i+0.5] covers image space [(i-0.5)*sampling, (i+0.5)*sampling]
         from scipy.special import erf
 
-        sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+        sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))  # in image pixels
         sqrt2_sigma = np.sqrt(2) * sigma
 
-        # For each pixel, integrate Gaussian over pixel area [x-0.5, x+0.5] × [y-0.5, y+0.5]
-        # Using 2D Gaussian: G(x,y) = (1/(2π σ²)) exp(-(x²+y²)/(2σ²))
-        # Integral factorizes: I(x,y) = I_x(x) * I_y(y) where
-        # I_x(x) = (1/2) [erf((x+0.5-x0)/(√2 σ)) - erf((x-0.5-x0)/(√2 σ))]
-
-        # X-direction integration (centered at 'center')
-        erf_xp = erf((x + 0.5 - center) / sqrt2_sigma)
-        erf_xm = erf((x - 0.5 - center) / sqrt2_sigma)
+        # X-direction: integrate Gaussian over each data pixel, converting to image space
+        erf_xp = erf((x + 0.5 - center) * psf_sampling / sqrt2_sigma)
+        erf_xm = erf((x - 0.5 - center) * psf_sampling / sqrt2_sigma)
         integral_x = 0.5 * (erf_xp - erf_xm)
 
         # Y-direction integration
-        erf_yp = erf((y + 0.5 - center) / sqrt2_sigma)
-        erf_ym = erf((y - 0.5 - center) / sqrt2_sigma)
+        erf_yp = erf((y + 0.5 - center) * psf_sampling / sqrt2_sigma)
+        erf_ym = erf((y - 0.5 - center) * psf_sampling / sqrt2_sigma)
         integral_y = 0.5 * (erf_yp - erf_ym)
 
         # Combined 2D pixel-integrated PSF
@@ -93,13 +103,14 @@ def create_psf_model(fwhm=3.0, psf_type='gaussian', beta=2.5, size=None, oversam
         alpha = fwhm / (2 * np.sqrt(2 ** (1.0 / beta) - 1))
 
         # Use 5x supersampling for pixel integration (vectorized)
+        # Offsets are in data-pixel space; convert to image space with psf_sampling
         supersample = 5
         offsets = np.linspace(-0.5 + 0.5 / supersample, 0.5 - 0.5 / supersample, supersample)
 
         psf_data = np.zeros((psf_data_size, psf_data_size))
         for dy in offsets:
             for dx in offsets:
-                r = np.sqrt((x + dx - center) ** 2 + (y + dy - center) ** 2)
+                r = np.sqrt(((x + dx - center) * psf_sampling) ** 2 + ((y + dy - center) * psf_sampling) ** 2)
                 psf_data += 1.0 / (1 + (r / alpha) ** 2) ** beta
         psf_data /= supersample ** 2
 
@@ -110,6 +121,60 @@ def create_psf_model(fwhm=3.0, psf_type='gaussian', beta=2.5, size=None, oversam
 
     # Normalize
     psf_data /= np.sum(psf_data)
+
+    # Apply optical aberrations if any are non-zero
+    has_aberrations = any([defocus, astigmatism_x, astigmatism_y, coma_x, coma_y])
+
+    if has_aberrations:
+        from scipy.signal import fftconvolve
+
+        # Build pupil grid in polar coordinates on the unit disk
+        N = psf_data_size
+        coords = np.linspace(-1, 1, N)
+        xx, yy = np.meshgrid(coords, coords)
+        rho = np.sqrt(xx**2 + yy**2)
+        theta = np.arctan2(yy, xx)
+        aperture = (rho <= 1.0).astype(float)
+
+        # Wavefront from Noll-ordered Zernike polynomials Z4-Z8
+        W = np.zeros_like(rho)
+        if defocus:
+            # Z4: sqrt(3) * (2*rho^2 - 1)
+            W += defocus * np.sqrt(3) * (2 * rho**2 - 1)
+        if astigmatism_x:
+            # Z5: sqrt(6) * rho^2 * sin(2*theta)
+            W += astigmatism_x * np.sqrt(6) * rho**2 * np.sin(2 * theta)
+        if astigmatism_y:
+            # Z6: sqrt(6) * rho^2 * cos(2*theta)
+            W += astigmatism_y * np.sqrt(6) * rho**2 * np.cos(2 * theta)
+        if coma_x:
+            # Z7: sqrt(8) * (3*rho^3 - 2*rho) * sin(theta)
+            W += coma_x * np.sqrt(8) * (3 * rho**3 - 2 * rho) * np.sin(theta)
+        if coma_y:
+            # Z8: sqrt(8) * (3*rho^3 - 2*rho) * cos(theta)
+            W += coma_y * np.sqrt(8) * (3 * rho**3 - 2 * rho) * np.cos(theta)
+
+        # Scale wavefront by wavelength ratio to make PSF wavelength-dependent
+        # Reference wavelength is 550nm; different wavelengths scale the
+        # effective aberration strength (shorter wavelength = stronger effect)
+        wavelength_ref = 550e-9
+        W *= wavelength_ref / wavelength
+
+        # Complex pupil function
+        pupil = aperture * np.exp(2j * np.pi * W)
+
+        # Diffraction PSF via FFT
+        E = np.fft.fftshift(np.fft.fft2(np.fft.fftshift(pupil)))
+        psf_diffraction = np.abs(E)**2
+        psf_diffraction /= np.sum(psf_diffraction)
+
+        # Convolve diffraction PSF with seeing PSF (already computed as psf_data)
+        psf_data = fftconvolve(psf_diffraction, psf_data, mode='same')
+        psf_data /= np.sum(psf_data)
+
+        psf_type_name = psf_type.lower() + '_aberrated'
+    else:
+        psf_type_name = psf_type.lower()
 
     # Create PSFEx-compatible structure
     # Add polynomial dimension (ncoeffs=1 for constant PSF)
@@ -127,9 +192,20 @@ def create_psf_model(fwhm=3.0, psf_type='gaussian', beta=2.5, size=None, oversam
         'y0': 0.0,
         'sx': 1.0,  # Scaling factors
         'sy': 1.0,
-        'psf_type': psf_type,
+        'psf_type': psf_type_name,
         'beta': beta if psf_type.lower() == 'moffat' else None,
     }
+
+    if has_aberrations:
+        psf_model['aberrations'] = {
+            'defocus': defocus,
+            'astigmatism_x': astigmatism_x,
+            'astigmatism_y': astigmatism_y,
+            'coma_x': coma_x,
+            'coma_y': coma_y,
+            'wavelength': wavelength,
+            'pupil_diameter': pupil_diameter,
+        }
 
     return psf_model
 
@@ -1418,8 +1494,12 @@ def generate_realbogus_training_data(
     min_separation_fwhm=1.0,
     max_separation_fwhm=3.0,
     aberration_fraction=0.0,
+    defocus_range=(0.0, 2.0),
+    astigmatism_range=(0.0, 1.5),
+    coma_range=(0.0, 1.0),
     readnoise_range=(5.0, 20.0),
     gain_range=(0.5, 2.0),
+    asinh_softening=None,
     seed=None,
     verbose=False,
 ):
@@ -1446,8 +1526,9 @@ def generate_realbogus_training_data(
     not galaxies.
 
     PSF diversity can be included in training data by setting aberration_fraction > 0.
-    A fraction of images will use Moffat PSFs with randomized beta (1.5-4.5) instead
-    of perfect Gaussians, helping the classifier handle realistic PSF variations.
+    A fraction of images will use aberrated PSFs with randomized Zernike coefficients
+    (defocus, astigmatism, coma) computed via Fourier optics, helping the classifier
+    handle realistic PSF variations from optical aberrations.
 
     :param n_images: Number of simulated images to generate
     :param image_size: (width, height) of simulated images
@@ -1471,10 +1552,17 @@ def generate_realbogus_training_data(
         Default: 1.0 (1× FWHM)
     :param max_separation_fwhm: Maximum separation for companions in FWHM units.
         Default: 3.0 (3× FWHM)
-    :param aberration_fraction: Fraction of images (0-1) with Moffat PSFs instead of Gaussian.
-        Default: 0.0 (all Gaussian)
+    :param aberration_fraction: Fraction of images (0-1) with aberrated PSFs.
+        Default: 0.0 (all Gaussian). When > 0 and aberration ranges have non-zero
+        max values, uses Fourier optics with Zernike polynomials. Otherwise falls
+        back to Moffat PSFs as a simpler proxy.
+    :param defocus_range: (min, max) defocus aberration in waves (default: (0.0, 2.0))
+    :param astigmatism_range: (min, max) astigmatism aberration in waves (default: (0.0, 1.5))
+    :param coma_range: (min, max) coma aberration in waves (default: (0.0, 1.0))
     :param readnoise_range: (min, max) read noise in ADU (randomized per image)
     :param gain_range: (min, max) detector gain in e-/ADU (randomized per image)
+    :param asinh_softening: Asinh softening in units of background sigma for
+        realbogus preprocessing. If None, uses DEFAULT_ASINH_SOFTENING_SIGMA.
     :param seed: Random seed for reproducibility. If set, calls np.random.seed(seed).
     :param verbose: Print progress
     :returns: Dictionary with 'X' (cutouts), 'y' (labels), 'fwhm' (FWHM values), 'metadata'
@@ -1532,14 +1620,39 @@ def generate_realbogus_training_data(
             max_sn * noise_aperture
         )
 
-        # Optionally use non-Gaussian PSF for this image to add diversity
+        # Optionally use aberrated PSF for this image to add diversity
         psf_type_str = 'gaussian'
+        has_aberration_ranges = (defocus_range[1] > 0 or astigmatism_range[1] > 0
+                                 or coma_range[1] > 0)
         if aberration_fraction > 0 and np.random.random() < aberration_fraction:
-            # Use Moffat PSF with randomized beta as proxy for non-ideal optics.
-            # Lower beta values produce broader wings, mimicking aberrated PSFs.
-            beta = np.random.uniform(1.5, 4.5)
-            star_psf = create_psf_model(fwhm=fwhm, psf_type='moffat', beta=beta)
-            psf_type_str = f'moffat(beta={beta:.1f})'
+            if has_aberration_ranges:
+                # Use Fourier optics aberrations with random Zernike coefficients
+                defocus = np.random.uniform(*defocus_range) if defocus_range[1] > 0 else 0.0
+                astig_mag = np.random.uniform(*astigmatism_range) if astigmatism_range[1] > 0 else 0.0
+                coma_mag = np.random.uniform(*coma_range) if coma_range[1] > 0 else 0.0
+
+                # Random orientation for directional aberrations
+                angle = np.random.uniform(0, 2 * np.pi)
+                astigmatism_x = astig_mag * np.cos(angle)
+                astigmatism_y = astig_mag * np.sin(angle)
+                coma_x = coma_mag * np.cos(angle)
+                coma_y = coma_mag * np.sin(angle)
+
+                star_psf = create_psf_model(
+                    fwhm=fwhm,
+                    psf_type='gaussian',
+                    defocus=defocus,
+                    astigmatism_x=astigmatism_x,
+                    astigmatism_y=astigmatism_y,
+                    coma_x=coma_x,
+                    coma_y=coma_y,
+                )
+                psf_type_str = f'aberrated(def={defocus:.1f},ast={astig_mag:.1f},coma={coma_mag:.1f})'
+            else:
+                # Fall back to Moffat PSF as simpler proxy for non-ideal optics
+                beta = np.random.uniform(1.5, 4.5)
+                star_psf = create_psf_model(fwhm=fwhm, psf_type='moffat', beta=beta)
+                psf_type_str = f'moffat(beta={beta:.1f})'
         else:
             # Use standard Gaussian PSF
             star_psf = 'gaussian'
@@ -1633,6 +1746,7 @@ def generate_realbogus_training_data(
                 bg=background,
                 radius=cutout_radius,
                 fwhm=fwhm,
+                asinh_softening=asinh_softening,
                 verbose=False,
             )
         except Exception as e:

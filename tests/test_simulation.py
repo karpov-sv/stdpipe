@@ -86,29 +86,56 @@ class TestPSFModels:
         center_idx = psf_beta2['data'].shape[1] // 2
         assert psf_beta4['data'][0, center_idx, center_idx] > psf_beta2['data'][0, center_idx, center_idx], "Higher beta should have sharper peak"
 
-    @pytest.mark.skip(reason="Oversampling not implemented yet - see TODO in create_psf_model()")
     def test_oversampling_factor(self):
-        """Test that oversampling factor affects model resolution."""
-        # NOTE: Currently oversampling parameter is ignored and sampling=1.0 is always used
-        # This provides excellent flux conservation but no true oversampling
-        # See create_psf_model() for TODO comment
-        fwhm = 3.0
-        size = 25  # Fixed output size
+        """Test that oversampling factor produces correct PSFEx-convention models."""
+        from stdpipe import psf as psf_module
 
+        fwhm = 3.0
+        size = 25  # Fixed output size in image pixels
+
+        psf_1x = simulation.create_psf_model(fwhm=fwhm, psf_type='gaussian', size=size, oversampling=1)
         psf_2x = simulation.create_psf_model(fwhm=fwhm, psf_type='gaussian', size=size, oversampling=2)
         psf_4x = simulation.create_psf_model(fwhm=fwhm, psf_type='gaussian', size=size, oversampling=4)
-        psf_8x = simulation.create_psf_model(fwhm=fwhm, psf_type='gaussian', size=size, oversampling=8)
 
         # Higher oversampling should give larger data arrays
-        assert psf_2x['data'].size < psf_4x['data'].size < psf_8x['data'].size
+        assert psf_1x['data'].size < psf_2x['data'].size < psf_4x['data'].size
+        assert psf_2x['data'].shape == (1, 50, 50)
+        assert psf_4x['data'].shape == (1, 100, 100)
 
-        # All should have same target output size (width/height)
-        assert psf_2x['width'] == psf_4x['width'] == psf_8x['width']
+        # Sampling follows PSFEx convention: sampling = 1/oversampling
+        assert psf_1x['sampling'] == 1.0
+        assert psf_2x['sampling'] == 0.5
+        assert psf_4x['sampling'] == 0.25
 
-        # Sampling factors should differ
-        assert psf_2x['sampling'] == 2
-        assert psf_4x['sampling'] == 4
-        assert psf_8x['sampling'] == 8
+        # Width grows with oversampling (it's the data array dimension)
+        assert psf_2x['width'] == 50.0
+        assert psf_4x['width'] == 100.0
+
+        # But image-space footprint is constant: width * sampling = size
+        assert np.isclose(psf_1x['width'] * psf_1x['sampling'], size)
+        assert np.isclose(psf_2x['width'] * psf_2x['sampling'], size)
+        assert np.isclose(psf_4x['width'] * psf_4x['sampling'], size)
+
+        # All should be normalized
+        for p in [psf_1x, psf_2x, psf_4x]:
+            assert np.isclose(np.sum(p['data']), 1.0, rtol=1e-6)
+
+        # get_psf_stamp output should be consistent across oversampling levels
+        stamp_1x = psf_module.get_psf_stamp(psf_1x, x=50.3, y=50.7, normalize=True)
+        stamp_2x = psf_module.get_psf_stamp(psf_2x, x=50.3, y=50.7, normalize=True)
+        stamp_4x = psf_module.get_psf_stamp(psf_4x, x=50.3, y=50.7, normalize=True)
+
+        # Output stamp sizes should be identical
+        assert stamp_1x.shape == stamp_2x.shape == stamp_4x.shape
+
+        # Stamps should sum to 1.0
+        for s in [stamp_1x, stamp_2x, stamp_4x]:
+            assert np.isclose(np.sum(s), 1.0, rtol=1e-4)
+
+        # Higher oversampling should converge — 2x and 4x closer than 1x and 4x
+        diff_1x_4x = np.max(np.abs(stamp_1x - stamp_4x))
+        diff_2x_4x = np.max(np.abs(stamp_2x - stamp_4x))
+        assert diff_2x_4x < diff_1x_4x
 
 
 @pytest.mark.unit
@@ -723,7 +750,6 @@ class TestPhotometryIntegration:
 
 
 @pytest.mark.unit
-@pytest.mark.skip(reason="Aberrated PSF feature not implemented yet in create_psf_model()")
 class TestAberratedPSF:
     """Test PSF models with optical aberrations."""
 

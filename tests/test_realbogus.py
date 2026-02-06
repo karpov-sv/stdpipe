@@ -43,7 +43,9 @@ class TestModelArchitecture:
         model = realbogus.create_realbogus_model()
 
         assert model is not None
-        assert len(model.input_shape) == 2  # [image, fwhm] inputs
+        assert not isinstance(model.input_shape, list)
+        assert len(model.input_shape) == 4  # (batch, height, width, channels)
+        assert model.input_shape[-1] == 2  # 2-channel input
         assert model.output_shape == (None, 1)  # Binary output
 
         # Check parameter count (should be ~100k)
@@ -60,13 +62,13 @@ class TestModelArchitecture:
         assert n_params < 100000
 
     @pytest.mark.unit
-    def test_create_model_no_fwhm(self):
-        """Test creating model without FWHM auxiliary input."""
-        model = realbogus.create_realbogus_model(use_fwhm_feature=False)
+    def test_create_model_input_shape(self):
+        """Test model input shape is single 2-channel image."""
+        model = realbogus.create_realbogus_model()
 
-        # Should have single input
         assert not isinstance(model.input_shape, list)
-        assert len(model.input_shape) == 4  # (batch, height, width, channels)
+        assert len(model.input_shape) == 4
+        assert model.input_shape[-1] == 2
 
     @pytest.mark.unit
     def test_model_compilation(self):
@@ -81,10 +83,7 @@ class TestModelArchitecture:
 
         # Test that model can make predictions (ensures it's properly compiled)
         # Create dummy input
-        dummy_input = [
-            np.random.randn(1, 31, 31, 3).astype(np.float32),  # image
-            np.array([[3.0]], dtype=np.float32)  # fwhm
-        ]
+        dummy_input = np.random.randn(1, 31, 31, 2).astype(np.float32)
 
         # Should be able to make predictions
         prediction = model.predict(dummy_input, verbose=0)
@@ -178,15 +177,15 @@ class TestCutoutPreprocessing:
             normalize=True
         )
 
-        # Should be 3-channel output
-        assert preprocessed.shape == (31, 31, 3)
+        # Should be 2-channel output
+        assert preprocessed.shape == (31, 31, 2)
         assert preprocessed.dtype == np.float32
 
         # Should have applied 2x downscaling
         assert scale_factor == 2.0
 
         # Channels should be normalized
-        for ch in range(3):
+        for ch in range(2):
             assert abs(np.mean(preprocessed[:, :, ch])) < 1.0
 
     @pytest.mark.unit
@@ -202,7 +201,7 @@ class TestCutoutPreprocessing:
             normalize=True
         )
 
-        assert preprocessed.shape == (31, 31, 3)
+        assert preprocessed.shape == (31, 31, 2)
         assert scale_factor < 1.5  # No downscaling applied
 
 
@@ -212,10 +211,12 @@ class TestCutoutExtraction:
     @pytest.fixture
     def simple_image_with_objects(self):
         """Create simple image with known objects."""
+        np.random.seed(12345)
         # Simulate image with a few stars
         sim = simulation.simulate_image(
             width=512, height=512,
             n_stars=10,
+            star_flux_range=(5000, 10000),
             star_fwhm=3.0,
             n_galaxies=0,
             n_cosmic_rays=0,
@@ -251,7 +252,7 @@ class TestCutoutExtraction:
         assert len(cutouts) <= len(obj)
 
         # Check shapes
-        assert cutouts.shape[1:] == (31, 31, 3)  # 3 channels
+        assert cutouts.shape[1:] == (31, 31, 2)  # 2 channels
         assert fwhm_features.shape == (len(cutouts), 1)
         assert len(valid_indices) == len(cutouts)
 
@@ -322,7 +323,7 @@ class TestTrainingDataGeneration:
 
         assert len(X) == len(y) == len(fwhm)
         assert X.ndim == 4  # (N, H, W, C)
-        assert X.shape[-1] == 3  # 3 channels
+        assert X.shape[-1] == 2  # 2 channels
         assert y.ndim == 1
         assert fwhm.ndim == 2
 
@@ -354,7 +355,7 @@ class TestTrainingDataGeneration:
     def test_augment_training_data(self):
         """Test data augmentation function."""
         # Create dummy data
-        X = np.random.randn(10, 31, 31, 3).astype(np.float32)
+        X = np.random.randn(10, 31, 31, 2).astype(np.float32)
         y = np.array([1, 0, 1, 0, 1, 0, 1, 0, 1, 0])
         fwhm = np.random.randn(10, 1).astype(np.float32)
 
@@ -387,7 +388,7 @@ class TestClassification:
         # Create and train model (1 epoch just for testing)
         model = realbogus.create_realbogus_model()
         model.fit(
-            [data['X'], data['fwhm']],
+            data['X'],
             data['y'],
             epochs=1,
             batch_size=32,
@@ -556,7 +557,7 @@ class TestTraining:
     def test_train_class_weighting(self):
         """Test that class weighting is applied."""
         # Generate imbalanced data
-        X = np.random.randn(100, 31, 31, 3).astype(np.float32)
+        X = np.random.randn(100, 31, 31, 2).astype(np.float32)
         y = np.array([1] * 80 + [0] * 20, dtype=np.float32)  # 80% real, 20% bogus
         fwhm = np.random.randn(100, 1).astype(np.float32)
 
@@ -704,7 +705,7 @@ class TestEdgeCases:
             fwhm=0.5,
             target_fwhm=3.0
         )
-        assert preprocessed_small.shape == (31, 31, 3)
+        assert preprocessed_small.shape == (31, 31, 2)
 
         # Very large FWHM
         preprocessed_large, scale = realbogus.preprocess_cutout(
@@ -712,7 +713,7 @@ class TestEdgeCases:
             fwhm=20.0,
             target_fwhm=3.0
         )
-        assert preprocessed_large.shape == (31, 31, 3)
+        assert preprocessed_large.shape == (31, 31, 2)
         assert scale > 5.0  # Should be heavily downscaled
 
     @pytest.mark.unit

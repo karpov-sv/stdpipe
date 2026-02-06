@@ -6,8 +6,10 @@ This module provides a CNN-based classifier to distinguish real astronomical sou
 detected object catalogs.
 
 Key Features:
-- FWHM-invariant design using hybrid downscaling approach
-- 3-channel input: science, background-subtracted, SNR map
+- FWHM-invariant: Hybrid downscaling to canonical PSF size (no auxiliary FWHM input)
+- Brightness-invariant: Peak normalization generalizes to any flux level
+- Pure morphology: Classification based solely on source shape from 2-channel images
+- 2-channel input: background-subtracted (linear), asinh-scaled (dynamic range compression)
 - Lightweight 5-layer CNN (~100k parameters)
 - Batch processing for efficient inference
 - Optional TensorFlow dependency
@@ -55,6 +57,7 @@ except ImportError:
 DEFAULT_MODEL_DIR = os.path.expanduser('~/.stdpipe/models')
 DEFAULT_MODEL_NAME = 'realbogus_default.h5'
 TARGET_FWHM = 3.0  # Canonical FWHM for downscaling normalization
+DEFAULT_ASINH_SOFTENING_SIGMA = 3.0  # Asinh softening in units of background sigma
 
 
 def _check_tensorflow():
@@ -67,8 +70,7 @@ def _check_tensorflow():
 
 
 def create_realbogus_model(
-    input_shape=(31, 31, 3),
-    use_fwhm_feature=True,
+    input_shape=(31, 31, 2),
     filters=(32, 64, 128),
     dense_units=64,
     dropout_rate=0.5
@@ -79,17 +81,23 @@ def create_realbogus_model(
     Architecture:
         - 3-5 convolutional layers with batch normalization
         - Global average pooling (handles variable input sizes)
-        - Optional FWHM auxiliary input
         - Dense layer with dropout
         - Sigmoid output (binary classification)
+
+    Design Philosophy:
+        - FWHM-invariant: Images downscaled to canonical FWHM, no auxiliary FWHM input needed
+        - Brightness-invariant: Peak normalization allows generalization to any flux level
+        - Pure morphology: Classification based solely on source shape
+
+    Input Channels:
+        - Channel 0: Background-subtracted (linear scale), peak-normalized
+        - Channel 1: Asinh-scaled background-subtracted, peak-normalized
 
     Parameters
     ----------
     input_shape : tuple, optional
-        Input shape (height, width, channels). Default: (31, 31, 3)
+        Input shape (height, width, channels). Default: (31, 31, 2)
         Height/width can be None for variable-size inputs.
-    use_fwhm_feature : bool, optional
-        Include FWHM as auxiliary input feature. Default: True
     filters : tuple, optional
         Number of filters in each conv layer. Default: (32, 64, 128)
     dense_units : int, optional
@@ -104,7 +112,7 @@ def create_realbogus_model(
     """
     _check_tensorflow()
 
-    # Main image input (3 channels: science, bgsub, snr)
+    # Main image input (2 channels: background-subtracted linear, asinh-scaled)
     image_input = keras.Input(shape=input_shape, name='image_input')
 
     # Convolutional feature extraction
@@ -122,15 +130,7 @@ def create_realbogus_model(
     # Global pooling to handle variable input sizes
     x = layers.GlobalAveragePooling2D(name='global_pool')(x)
 
-    # Optional FWHM auxiliary input
-    if use_fwhm_feature:
-        fwhm_input = keras.Input(shape=(1,), name='fwhm_input')
-        x = layers.Concatenate(name='concat')([x, fwhm_input])
-        inputs = [image_input, fwhm_input]
-    else:
-        inputs = image_input
-
-    # Dense layers
+    # Dense layers (no auxiliary inputs - pure image-based classification)
     x = layers.Dense(dense_units, activation='relu', name='dense1')(x)
     x = layers.Dropout(dropout_rate, name='dropout')(x)
 
@@ -138,7 +138,7 @@ def create_realbogus_model(
     output = layers.Dense(1, activation='sigmoid', name='output')(x)
 
     # Create and compile model
-    model = keras.Model(inputs=inputs, outputs=output, name='realbogus_classifier')
+    model = keras.Model(inputs=image_input, outputs=output, name='realbogus_classifier')
 
     model.compile(
         optimizer=keras.optimizers.Adam(learning_rate=0.001),
@@ -188,8 +188,9 @@ def _downscale_cutout(cutout, scale_factor, mode='mean'):
     ----------
     cutout : ndarray
         2D image cutout
-    scale_factor : int
-        Downscaling factor (must be integer >= 1)
+    scale_factor : int or float
+        Downscaling factor (converted to integer, must be >= 1).
+        Typically passed as round(fwhm/target_fwhm) for robust hot pixel suppression.
     mode : str, optional
         Downscaling mode: 'mean' or 'median'. Default: 'mean'
 
@@ -221,6 +222,76 @@ def _downscale_cutout(cutout, scale_factor, mode='mean'):
         downscaled = np.mean(reshaped, axis=(1, 3))
 
     return downscaled
+
+
+def _infer_cutout_radius_from_model(model, default_radius=15, log=None):
+    """Infer cutout radius from model input shape."""
+    if log is None:
+        log = lambda *args, **kwargs: None
+
+    shape = model.input_shape
+    if isinstance(shape, list):
+        shape = shape[0] if shape else None
+
+    if shape is None or len(shape) < 4:
+        log(f"Model input shape unavailable; using default cutout size {2 * default_radius + 1} "
+            f"(radius {default_radius})")
+        return default_radius
+
+    height, width = shape[1], shape[2]
+    channels = shape[3]
+
+    if height is None or width is None:
+        log(f"Model input shape is dynamic; using default cutout size {2 * default_radius + 1} "
+            f"(radius {default_radius})")
+        return default_radius
+
+    if height != width:
+        raise ValueError(
+            f"Model input shape must be square for cutout extraction (got {height}x{width})."
+        )
+    if height % 2 == 0:
+        raise ValueError(
+            f"Model input size must be odd for symmetric cutouts (got {height})."
+        )
+
+    radius = int((height - 1) // 2)
+    log(f"Using cutout size {height}x{width} (radius {radius}) from model input shape")
+
+    if channels is not None and channels != 2:
+        log(f"Warning: model expects {channels} channels; realbogus generates 2-channel cutouts")
+
+    return radius
+
+
+def _upscale_cutout(cutout, scale_factor):
+    """
+    Upscale cutout by integer factor using pixel replication.
+
+    Parameters
+    ----------
+    cutout : ndarray
+        2D image cutout
+    scale_factor : int or float
+        Upscaling factor (converted to integer, must be >= 1).
+        Each pixel is replicated into scale_factor x scale_factor block.
+
+    Returns
+    -------
+    upscaled : ndarray
+        Upscaled cutout
+    """
+    if scale_factor <= 1:
+        return cutout
+
+    scale_factor = int(scale_factor)
+
+    # Use numpy repeat for integer upscaling
+    # Repeat along each axis
+    upscaled = np.repeat(cutout, scale_factor, axis=0)
+    upscaled = np.repeat(upscaled, scale_factor, axis=1)
+
+    return upscaled
 
 
 def _pad_to_size(cutout, target_size, mode='edge'):
@@ -274,25 +345,50 @@ def preprocess_cutout(
     target_fwhm=TARGET_FWHM,
     target_size=31,
     downscale_threshold=1.5,
-    normalize=True
+    normalize=True,
+    asinh_softening=None,
 ):
     """
     Preprocess cutout for CNN input.
 
     Steps:
-        1. Optional downscaling to canonical FWHM
-        2. Create 3-channel input (science, bgsub, SNR)
-        3. Normalize each channel
+        1. Optional scaling (downscale or upscale) to canonical FWHM
+        2. Create 2-channel input (background-subtracted linear, asinh-scaled)
+        3. Peak normalization (each channel normalized by its own peak value)
         4. Pad/crop to target size
+
+    FWHM Scaling Strategy (Symmetric):
+        - Downscaling (FWHM > target_fwhm × threshold): Integer block averaging
+        - No scaling (target_fwhm / threshold ≤ FWHM ≤ target_fwhm × threshold): Keep as-is
+        - Upscaling (FWHM < target_fwhm / threshold): Integer pixel replication
+
+        Default: target_fwhm=3.0, threshold=1.5
+        → Downscale if FWHM > 4.5, upscale if FWHM < 2.0, else unchanged
+
+        This ensures all PSFs normalized to approximately the same size regardless of
+        sharpness, eliminating FWHM as a confounding variable.
+
+    Channel Design:
+        - Channel 0: Background-subtracted (linear scale), peak-normalized
+        - Channel 1: Asinh-scaled background-subtracted, peak-normalized
+
+        Peak normalization makes the representation brightness-invariant: all sources
+        (faint to extremely bright) are scaled to [-1, 1] range based on their peak
+        value. This allows the CNN to learn pure morphological features that generalize
+        to ANY brightness level, including sources far brighter than the training set.
+
+        The asinh channel complements the linear channel by providing compressed
+        dynamic range information useful for distinguishing extended vs. compact sources.
 
     Parameters
     ----------
     cutout_sci : ndarray
-        Science image cutout
+        Science image cutout (assumed to be background-subtracted if cutout_bg is None)
     cutout_bg : ndarray, optional
-        Background cutout (or scalar value). If None, estimated from cutout.
+        Background cutout (or scalar value). If None, estimated from cutout edges.
     cutout_err : ndarray, optional
-        Error/noise cutout (or scalar value). If None, estimated from cutout.
+        Error/noise cutout (or scalar value). Not used in current implementation
+        (kept for backward compatibility).
     fwhm : float, optional
         Image FWHM in pixels. If provided, cutout will be downscaled to target_fwhm.
     target_fwhm : float, optional
@@ -302,12 +398,17 @@ def preprocess_cutout(
     downscale_threshold : float, optional
         Only downscale if fwhm/target_fwhm > threshold. Default: 1.5
     normalize : bool, optional
-        Apply z-score normalization. Default: True
+        Apply peak normalization to each channel (scales to [-1, 1] range).
+        Default: True. This makes the representation brightness-invariant.
+    asinh_softening : float, optional
+        Asinh softening in units of background sigma. If None, uses
+        DEFAULT_ASINH_SOFTENING_SIGMA. Actual softening is
+        (asinh_softening * sigma), where sigma is estimated from cutout_err.
 
     Returns
     -------
     preprocessed : ndarray
-        Preprocessed cutout (target_size, target_size, 3)
+        Preprocessed cutout (target_size, target_size, 2)
     scale_factor : float
         Applied scale factor (for diagnostics)
     """
@@ -331,36 +432,65 @@ def preprocess_cutout(
     if np.isscalar(cutout_err):
         cutout_err = np.full_like(cutout_sci, cutout_err)
 
-    # Downscaling to canonical FWHM
+    # Scaling to canonical FWHM (both downscale and upscale)
     scale_factor = 1.0
     if fwhm is not None and fwhm > 0:
         scale_factor = fwhm / target_fwhm
+
+        # Downscale if PSF too large
         if scale_factor > downscale_threshold:
-            cutout_sci = _downscale_cutout(cutout_sci, int(scale_factor))
-            cutout_bg = _downscale_cutout(cutout_bg, int(scale_factor))
-            cutout_err = _downscale_cutout(cutout_err, int(scale_factor))
+            factor = round(scale_factor)
+            cutout_sci = _downscale_cutout(cutout_sci, factor)
+            cutout_bg = _downscale_cutout(cutout_bg, factor)
+            cutout_err = _downscale_cutout(cutout_err, factor)
+
+        # Upscale if PSF too sharp (symmetric with downscaling)
+        elif scale_factor < 1.0 / downscale_threshold:
+            factor = round(1.0 / scale_factor)
+            cutout_sci = _upscale_cutout(cutout_sci, factor)
+            cutout_bg = _upscale_cutout(cutout_bg, factor)
+            cutout_err = _upscale_cutout(cutout_err, factor)
 
     # Create background-subtracted channel
     cutout_bgsub = cutout_sci - cutout_bg
 
-    # Create SNR channel (avoid division by zero)
-    cutout_snr = np.where(
-        cutout_err > 1e-10,
-        cutout_bgsub / cutout_err,
-        0.0
-    )
+    # Create asinh-scaled channel for dynamic range compression
+    if asinh_softening is None:
+        asinh_softening = DEFAULT_ASINH_SOFTENING_SIGMA
 
-    # Stack channels
-    channels = [cutout_sci, cutout_bgsub, cutout_snr]
+    sigma = float(np.nanmedian(cutout_err))
+    if not np.isfinite(sigma) or sigma <= 0:
+        sigma = 1.0
 
-    # Normalize each channel
+    softening = float(asinh_softening) * sigma
+    if not np.isfinite(softening) or softening <= 0:
+        softening = sigma
+
+    # Asinh scaling: compresses high values, ~linear for low values
+    cutout_asinh = np.arcsinh(cutout_bgsub / softening)
+
+    # Stack channels: [background-subtracted linear, asinh-scaled]
+    channels = [cutout_bgsub, cutout_asinh]
+
+    # Peak normalization for brightness invariance
+    # Each channel normalized by its own peak value
     if normalize:
-        channels = [_normalize_cutout(ch) for ch in channels]
+        normalized_channels = []
+        for ch in channels:
+            peak = np.max(np.abs(ch))
+            if peak > 1e-10:
+                # Normalize to [-1, 1] range based on peak
+                ch_normalized = ch / peak
+            else:
+                # Empty or near-zero cutout
+                ch_normalized = ch
+            normalized_channels.append(ch_normalized)
+        channels = normalized_channels
 
     # Pad/crop to target size
     channels = [_pad_to_size(ch, target_size) for ch in channels]
 
-    # Stack into 3-channel image
+    # Stack into 2-channel image
     preprocessed = np.stack(channels, axis=-1).astype(np.float32)
 
     return preprocessed, scale_factor
@@ -375,6 +505,7 @@ def extract_cutouts(
     radius=15,
     fwhm=None,
     target_fwhm=TARGET_FWHM,
+    asinh_softening=None,
     verbose=False
 ):
     """
@@ -398,13 +529,16 @@ def extract_cutouts(
         Image FWHM. If None, estimated from object catalog.
     target_fwhm : float, optional
         Target FWHM for downscaling. Default: 3.0
+    asinh_softening : float, optional
+        Asinh softening in units of background sigma. If None, uses
+        DEFAULT_ASINH_SOFTENING_SIGMA.
     verbose : bool, optional
         Print progress. Default: False
 
     Returns
     -------
     cutouts : ndarray
-        Array of preprocessed cutouts (N, 2*radius+1, 2*radius+1, 3)
+        Array of preprocessed cutouts (N, 2*radius+1, 2*radius+1, 2)
     fwhm_features : ndarray
         Array of normalized FWHM values (N, 1)
     valid_indices : ndarray
@@ -484,7 +618,8 @@ def extract_cutouts(
                 cutout_err=cutout_err,
                 fwhm=fwhm,
                 target_fwhm=target_fwhm,
-                target_size=cutout_size
+                target_size=cutout_size,
+                asinh_softening=asinh_softening,
             )
 
             # Normalize FWHM feature
@@ -588,8 +723,8 @@ def classify_realbogus(
     bg=None,
     err=None,
     mask=None,
-    cutout_radius=15,
     fwhm=None,
+    asinh_softening=None,
     threshold=0.5,
     add_score=True,
     flag_bogus=True,
@@ -617,10 +752,14 @@ def classify_realbogus(
         Error/noise map or scalar value
     mask : ndarray, optional
         Boolean mask (True = masked pixels)
-    cutout_radius : int, optional
-        Cutout radius in pixels. Default: 15 (31x31)
+    cutout size : derived
+        Cutout size is inferred from the model input shape. If the model has
+        dynamic spatial dimensions, defaults to 31x31 (radius 15).
     fwhm : float, optional
         Image FWHM. If None, estimated from catalog.
+    asinh_softening : float, optional
+        Asinh softening in units of background sigma. If None, uses
+        DEFAULT_ASINH_SOFTENING_SIGMA.
     threshold : float, optional
         Classification threshold (0-1). Objects with score > threshold are real.
         Default: 0.5
@@ -655,8 +794,7 @@ def classify_realbogus(
     if model is None:
         model = load_realbogus_model(model_file=model_file, verbose=verbose)
 
-    # Check if model expects FWHM input
-    use_fwhm_feature = len(model.input_shape) == 2  # Two inputs: image + fwhm
+    cutout_radius = _infer_cutout_radius_from_model(model, default_radius=15, log=log)
 
     log(f"Classifying {len(obj)} objects (threshold={threshold:.2f})")
 
@@ -669,24 +807,17 @@ def classify_realbogus(
         mask=mask,
         radius=cutout_radius,
         fwhm=fwhm,
+        asinh_softening=asinh_softening,
         verbose=verbose
     )
 
-    # Batch inference
+    # Batch inference (pure image-based, no FWHM auxiliary input)
     log(f"Running inference on {len(cutouts)} cutouts (batch_size={batch_size})")
-
-    if use_fwhm_feature:
-        predictions = model.predict(
-            [cutouts, fwhm_features],
-            batch_size=batch_size,
-            verbose=1 if verbose else 0
-        )
-    else:
-        predictions = model.predict(
-            cutouts,
-            batch_size=batch_size,
-            verbose=1 if verbose else 0
-        )
+    predictions = model.predict(
+        cutouts,
+        batch_size=batch_size,
+        verbose=1 if verbose else 0
+    )
 
     # Flatten predictions
     scores = predictions.flatten()
@@ -838,23 +969,23 @@ def train_realbogus_classifier(
     # Create model if not provided
     if model is None:
         input_shape = X.shape[1:]  # (height, width, channels)
-        use_fwhm = fwhm_features is not None
-        model = create_realbogus_model(
-            input_shape=input_shape,
-            use_fwhm_feature=use_fwhm
-        )
+        model = create_realbogus_model(input_shape=input_shape)
 
-    log(model.summary())
+    model.summary(print_fn=log)
 
     # Calculate class weights
     if class_weight == 'balanced':
         n_real = np.sum(y)
         n_bogus = len(y) - n_real
-        class_weight = {
-            0: len(y) / (2 * n_bogus),
-            1: len(y) / (2 * n_real)
-        }
-        log(f"Class weights: {class_weight}")
+        if n_real == 0 or n_bogus == 0:
+            log("Warning: Only one class present in training data; disabling class weighting")
+            class_weight = None
+        else:
+            class_weight = {
+                0: len(y) / (2 * n_bogus),
+                1: len(y) / (2 * n_real)
+            }
+            log(f"Class weights: {class_weight}")
 
     # Default callbacks
     if callbacks is None:
@@ -872,34 +1003,22 @@ def train_realbogus_classifier(
             )
         ]
 
-    # Train model
+    # Train model (pure image-based, no FWHM auxiliary input)
     log("Starting training...")
-
-    if fwhm_features is not None:
-        history = model.fit(
-            [X, fwhm_features], y,
-            validation_split=validation_split,
-            epochs=epochs,
-            batch_size=batch_size,
-            class_weight=class_weight,
-            callbacks=callbacks,
-            verbose=1 if verbose else 0
-        )
-    else:
-        history = model.fit(
-            X, y,
-            validation_split=validation_split,
-            epochs=epochs,
-            batch_size=batch_size,
-            class_weight=class_weight,
-            callbacks=callbacks,
-            verbose=1 if verbose else 0
-        )
+    history = model.fit(
+        X, y,
+        validation_split=validation_split,
+        epochs=epochs,
+        batch_size=batch_size,
+        class_weight=class_weight,
+        callbacks=callbacks,
+        verbose=1 if verbose else 0
+    )
 
     log("Training complete")
 
-    # Save model
-    if model_file is not None or model_file is None:
+    # Save model only when explicitly requested
+    if model_file is not None:
         save_realbogus_model(model, model_file=model_file, verbose=verbose)
 
     return model, history
