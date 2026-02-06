@@ -404,30 +404,50 @@ def get_psf_stamp(psf, x=0, y=0, dx=None, dy=None, normalize=True):
 
     supersampled = get_supersampled_psf_stamp(psf, x, y, normalize=normalize)
 
-    # Supersampled stamp center (works for both even and odd-sized arrays)
-    ssx0 = (supersampled.shape[1] - 1) / 2.0
-    ssy0 = (supersampled.shape[0] - 1) / 2.0
+    # Oversampling factor
+    N = int(round(1.0 / psf['sampling']))
 
-    # Make odd-sized array to hold the result
-    x0 = np.floor(psf['width'] * psf['sampling'] / 2)
-    y0 = np.floor(psf['height'] * psf['sampling'] / 2)
+    if N > 1 and supersampled.shape[0] % N == 0 and supersampled.shape[1] % N == 0:
+        # Flux-conserving downsampling: shift at oversampled resolution, then sum N×N blocks.
+        # The oversampled data stores pixel-integrated flux per subpixel, so the correct
+        # way to get image-pixel flux is to sum the subpixels within each image pixel.
 
-    width = int(x0) * 2 + 1
-    height = int(y0) * 2 + 1
+        # Apply sub-pixel shift at oversampled resolution via cubic interpolation.
+        # At the oversampled resolution the PSF is well-sampled, so cubic interpolation
+        # accurately reconstructs the continuous PSF for sub-pixel shifts.
+        shift_x_os = dx / psf['sampling']
+        shift_y_os = dy / psf['sampling']
 
-    x0 += dx
-    y0 += dy
+        if shift_x_os != 0 or shift_y_os != 0:
+            shifted = ndimage.shift(supersampled, [shift_y_os, shift_x_os],
+                                    order=3, mode='constant', cval=0)
+        else:
+            shifted = supersampled
 
-    # Coordinates in resulting stamp
-    y, x = np.mgrid[0:height, 0:width]
+        # Sum N×N blocks
+        out_h = supersampled.shape[0] // N
+        out_w = supersampled.shape[1] // N
+        stamp = shifted[:out_h * N, :out_w * N].reshape(out_h, N, out_w, N).sum(axis=(1, 3))
+    else:
+        # Fallback for non-integer oversampling or oversampling=1
+        ssx0 = (supersampled.shape[1] - 1) / 2.0
+        ssy0 = (supersampled.shape[0] - 1) / 2.0
 
-    # The same grid in supersampled space, shifted accordingly
-    x1 = ssx0 + (x - x0) / psf['sampling']
-    y1 = ssy0 + (y - y0) / psf['sampling']
+        x0 = np.floor(psf['width'] * psf['sampling'] / 2)
+        y0 = np.floor(psf['height'] * psf['sampling'] / 2)
 
-    # FIXME: it should really be Lanczos interpolation here!
-    # stamp = bilinear_interpolate(supersampled, x1, y1) / psf['sampling'] ** 2
-    stamp = ndimage.map_coordinates(supersampled, [y1, x1], order=3) / psf['sampling'] ** 2
+        width = int(x0) * 2 + 1
+        height = int(y0) * 2 + 1
+
+        x0 += dx
+        y0 += dy
+
+        y, x = np.mgrid[0:height, 0:width]
+
+        x1 = ssx0 + (x - x0) / psf['sampling']
+        y1 = ssy0 + (y - y0) / psf['sampling']
+
+        stamp = ndimage.map_coordinates(supersampled, [y1, x1], order=3) / psf['sampling'] ** 2
 
     if normalize:
         total = np.sum(stamp)
