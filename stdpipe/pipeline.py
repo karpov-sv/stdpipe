@@ -20,7 +20,6 @@ import astroscrappy
 
 from . import photometry
 from . import astrometry
-from . import astrometry_quad
 from . import catalogs
 from . import psf
 from . import utils
@@ -187,7 +186,7 @@ def refine_astrometry(
         # Use order=2 for quadratic distortion if not specified
         quad_order = order if order > 0 else 2
 
-        return astrometry_quad.refine_wcs_quadhash(
+        return astrometry.refine_wcs_quadhash(
             obj,
             cat,
             wcs=wcs,

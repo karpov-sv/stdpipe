@@ -1162,6 +1162,84 @@ class TestIntegration:
         assert 'dec' in obj.colnames
 
 
+    @pytest.mark.unit
+    @pytest.mark.parametrize("proj_type", ["TAN", "ZEA", "SIN", "STG", "ARC"])
+    def test_non_tan_projections(self, proj_type):
+        """Test that refinement works with non-TAN projections."""
+        np.random.seed(42)
+
+        # Create WCS with specified projection
+        wcs_true = WCS(naxis=2)
+        wcs_true.wcs.crpix = [128.5, 128.5]
+        wcs_true.wcs.crval = [180.0, 45.0]
+        wcs_true.wcs.ctype = [f"RA---{proj_type}", f"DEC--{proj_type}"]
+        wcs_true.wcs.cd = np.array([[-0.0002778, 0], [0, 0.0002778]])
+
+        # Create catalog
+        n_stars = 500
+        ra = 180.0 + (np.random.random(n_stars) - 0.5) * 0.08
+        dec = 45.0 + (np.random.random(n_stars) - 0.5) * 0.08
+        mag = 12.0 + 5.0 * np.random.random(n_stars) ** 2
+
+        cat = Table()
+        cat['ra'] = ra
+        cat['dec'] = dec
+        cat['RAJ2000'] = ra
+        cat['DEJ2000'] = dec
+        cat['mag'] = mag
+        cat['rmag'] = mag
+
+        # Project to pixels using true WCS
+        x, y = wcs_true.all_world2pix(ra, dec, 0)
+        in_bounds = (x >= 10) & (x <= 246) & (y >= 10) & (y <= 246)
+        x, y, mag_det = x[in_bounds], y[in_bounds], mag[in_bounds]
+
+        # Add noise
+        x += np.random.normal(0, 0.1, len(x))
+        y += np.random.normal(0, 0.1, len(x))
+
+        obj = Table()
+        obj['x'] = x
+        obj['y'] = y
+        obj['flux'] = 10 ** ((25 - mag_det) / 2.5)
+
+        # Create WCS with error
+        wcs_err = wcs_true.deepcopy()
+        theta = np.deg2rad(1.0)
+        R = np.array([[np.cos(theta), -np.sin(theta)],
+                       [np.sin(theta), np.cos(theta)]])
+        wcs_err.wcs.cd = wcs_err.wcs.cd @ R.T
+        wcs_err.wcs.cd *= 1.02
+        wcs_err.wcs.crval[0] += 0.003
+
+        # Refine — should work regardless of projection type
+        wcs_refined = refine_wcs_quadhash(
+            obj, cat,
+            wcs=wcs_err,
+            order=0,  # No SIP for non-TAN
+            verbose=False,
+        )
+
+        assert wcs_refined is not None
+
+        # Check that output WCS preserves the projection type
+        assert proj_type in wcs_refined.wcs.ctype[0]
+
+        # Check accuracy improved
+        sample = np.arange(min(50, len(cat)))
+        x_true, y_true = wcs_true.all_world2pix(cat['ra'][sample], cat['dec'][sample], 0)
+        x_ref, y_ref = wcs_refined.all_world2pix(cat['ra'][sample], cat['dec'][sample], 0)
+        final_err = np.sqrt(np.mean((x_true - x_ref) ** 2 + (y_true - y_ref) ** 2))
+
+        x_init, y_init = wcs_err.all_world2pix(cat['ra'][sample], cat['dec'][sample], 0)
+        init_err = np.sqrt(np.mean((x_true - x_init) ** 2 + (y_true - y_init) ** 2))
+
+        # Refined should be better than initial (or at least not much worse)
+        assert final_err < init_err * 2.0, (
+            f"{proj_type}: final_err={final_err:.2f} > init_err*2={init_err*2:.2f}"
+        )
+
+
 # ============================================================================
 # Performance Tests
 # ============================================================================

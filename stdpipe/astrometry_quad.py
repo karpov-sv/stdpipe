@@ -672,13 +672,34 @@ class QuadHashAstrometry:
         m1 = _finite_mask(ra, dec, m_cat)
         ra, dec, m_cat = ra[m1], dec[m1], m_cat[m1]
 
-        # Rough sky center
+        # Rough sky center (used for residuals and SIP check)
         try:
             ra0, dec0 = float(wcs_init.wcs.crval[0]), float(wcs_init.wcs.crval[1])
             if not (np.isfinite(ra0) and np.isfinite(dec0)):
                 raise ValueError
         except Exception:
             ra0, dec0 = float(np.nanmedian(ra)), float(np.nanmedian(dec))
+
+        # Pixel scale for radius conversion (arcsec/pixel)
+        try:
+            pscales = wcs_init.proj_plane_pixel_scales()
+            # proj_plane_pixel_scales() may return Quantity with units
+            if hasattr(pscales[0], 'to_value'):
+                pixel_scale_deg = float(np.mean([s.to_value(u.deg) for s in pscales]))
+            else:
+                pixel_scale_deg = float(np.mean(pscales))
+        except Exception:
+            pixel_scale_deg = None
+        if pixel_scale_deg is None or pixel_scale_deg <= 0 or not np.isfinite(pixel_scale_deg):
+            raise RuntimeError("Could not determine pixel scale from WCS.")
+        pixel_scale_arcsec = pixel_scale_deg * 3600.0
+
+        # Check projection type for SIP compatibility
+        try:
+            ctype0 = wcs_init.wcs.ctype[0]
+            is_tan_based = 'TAN' in ctype0
+        except Exception:
+            is_tan_based = False
 
         # Bright subsets
         obj_sub_idx = _pick_brightest_obj(Table({"x": x, "y": y, "mag": m_obj}), self.cfg.n_det)
@@ -687,36 +708,48 @@ class QuadHashAstrometry:
         det_xy = np.column_stack([x[obj_sub_idx], y[obj_sub_idx]])
         det_mag = m_obj[obj_sub_idx]
 
-        ref_u, ref_v = tan_project_deg(ra[cat_sub_idx], dec[cat_sub_idx], ra0, dec0)
-        ref_uv = np.column_stack([ref_u, ref_v])
+        # Project catalog to pixel space using initial WCS (works for any projection)
+        ref_x_pix, ref_y_pix = wcs_init.all_world2pix(
+            ra[cat_sub_idx], dec[cat_sub_idx], 0
+        )
+        ref_uv = np.column_stack([ref_x_pix, ref_y_pix])
         ref_mag = m_cat[cat_sub_idx]
+
+        # Filter out any non-finite projections (e.g. stars far outside image)
+        ref_finite = np.all(np.isfinite(ref_uv), axis=1)
+        if not np.all(ref_finite):
+            ref_uv = ref_uv[ref_finite]
+            ref_mag = ref_mag[ref_finite]
+            cat_sub_idx = cat_sub_idx[ref_finite]
 
         if len(det_xy) < 8 or len(ref_uv) < 8:
             raise RuntimeError("Not enough points after selection.")
 
-        # WCS prior: expected scale/parity from initial WCS (used to filter hypotheses)
-        expected_scale = None  # radians per pixel in tangent plane
+        # WCS prior: in pixel space expected scale ≈ 1.0, compute parity from WCS
+        expected_scale = None
         expected_parity = None  # sign of determinant
         if self.cfg.use_wcs_prior:
+            expected_scale = 1.0  # Both sets in pixel space
             try:
-                # Estimate local linear transform from pixel to tangent plane around CRPIX
+                # Compute parity from WCS pixel-to-sky Jacobian
                 crpix = np.asarray(wcs_init.wcs.crpix, dtype=np.float64)
                 if crpix.size == 2 and np.all(np.isfinite(crpix)):
                     px = np.array([crpix[0], crpix[0] + 1.0, crpix[0]], dtype=np.float64)
                     py = np.array([crpix[1], crpix[1], crpix[1] + 1.0], dtype=np.float64)
                     ra_s, dec_s = wcs_init.all_pix2world(px, py, 1)
-                    u_s, v_s = tan_project_deg(ra_s, dec_s, ra0, dec0)
-                    # Jacobian: columns are du/dx, du/dy; dv/dx, dv/dy
+                    x_s, y_s = wcs_init.all_world2pix(ra_s, dec_s, 0)
+                    # Jacobian of round-trip should be ~identity; parity from
+                    # the pixel→sky→pixel mapping tells us if WCS flips axes
                     J = np.array([
-                        [u_s[1] - u_s[0], u_s[2] - u_s[0]],
-                        [v_s[1] - v_s[0], v_s[2] - v_s[0]],
+                        [x_s[1] - x_s[0], x_s[2] - x_s[0]],
+                        [y_s[1] - y_s[0], y_s[2] - y_s[0]],
                     ], dtype=np.float64)
                     det_j = float(np.linalg.det(J))
+                    # For a self-consistent WCS, det_j ≈ +1 (parity is always +1
+                    # in pixel space since WCS handles the parity internally)
                     if np.isfinite(det_j) and det_j != 0:
-                        expected_scale = np.sqrt(abs(det_j))
                         expected_parity = 1.0 if det_j > 0 else -1.0
             except Exception:
-                expected_scale = None
                 expected_parity = None
 
         # --- Consistent baseline binning (#8) ---
@@ -754,10 +787,9 @@ class QuadHashAstrometry:
         det_descs = det_descs[okq]
         det_lens = det_lens[okq]
 
-        # Scale detection baselines to tangent-plane units for consistent binning (#8)
-        if expected_scale is not None and expected_scale > 0 and ref_bin_edges is not None:
-            det_lens_for_binning = det_lens * expected_scale
-            det_bins = baseline_rank_bins(det_lens_for_binning, n_bins=self.cfg.n_scale_bins, edges=ref_bin_edges)
+        # Both sets in pixel space — baselines directly comparable (#8)
+        if ref_bin_edges is not None:
+            det_bins = baseline_rank_bins(det_lens, n_bins=self.cfg.n_scale_bins, edges=ref_bin_edges)
         else:
             det_bins = baseline_rank_bins(det_lens, n_bins=self.cfg.n_scale_bins)
 
@@ -766,12 +798,12 @@ class QuadHashAstrometry:
             quantize_desc(desc, self.cfg.eps_desc) for desc in det_descs
         ], dtype=object)
 
-        # Trees for scoring (tangent plane)
+        # Trees for scoring (pixel space)
         ref_tree = cKDTree(ref_uv)
 
-        # Stage radii in radians
-        r1 = (self.cfg.stage1_radius_arcsec * u.arcsec).to_value(u.rad)
-        r2 = (self.cfg.stage2_radius_arcsec * u.arcsec).to_value(u.rad)
+        # Stage radii in pixels
+        r1 = self.cfg.stage1_radius_arcsec / pixel_scale_arcsec
+        r2 = self.cfg.stage2_radius_arcsec / pixel_scale_arcsec
 
         # Stage1 detection subset: brightest among det_xy itself (already bright), so just take first stage1_n by det_mag
         order_det = np.argsort(det_mag)  # smaller = brighter
@@ -966,10 +998,16 @@ class QuadHashAstrometry:
 
             if len(det_pool_idx) >= 8 and len(ref_pool_idx) >= 8:
                 det_xy_pool = np.column_stack([x[det_pool_idx], y[det_pool_idx]])
-                ref_u_all, ref_v_all = tan_project_deg(
-                    ra[ref_pool_idx], dec[ref_pool_idx], ra0, dec0
+                # Project expanded catalog to pixel space using initial WCS
+                ref_x_all, ref_y_all = wcs_init.all_world2pix(
+                    ra[ref_pool_idx], dec[ref_pool_idx], 0
                 )
-                ref_uv_all = np.column_stack([ref_u_all, ref_v_all])
+                ref_uv_all = np.column_stack([ref_x_all, ref_y_all])
+                # Filter non-finite
+                _ref_ok = np.all(np.isfinite(ref_uv_all), axis=1)
+                if not np.all(_ref_ok):
+                    ref_uv_all = ref_uv_all[_ref_ok]
+                    ref_pool_idx = ref_pool_idx[_ref_ok]
 
                 # Use affine from last rematch iteration for better projection
                 try:
@@ -984,7 +1022,7 @@ class QuadHashAstrometry:
                 r_match_arcsec = self.cfg.refine_match_radius_arcsec
                 if r_match_arcsec is None:
                     r_match_arcsec = self.cfg.stage2_radius_arcsec
-                r_match = (float(r_match_arcsec) * u.arcsec).to_value(u.rad)
+                r_match = float(r_match_arcsec) / pixel_scale_arcsec
 
                 # Mutual nearest-neighbor for expanded pool
                 exp_det_ids, exp_ref_ids = _mutual_nearest_neighbor(
@@ -1032,12 +1070,15 @@ class QuadHashAstrometry:
             xy_use = xy[:, keep]
             sky_use = sky[keep]
 
+            # SIP is only valid for TAN-based projections
+            sip_deg = int(self.cfg.sip_degree) if is_tan_based else 0
+
             try:
                 refined_wcs = fit_wcs_from_points(
                     xy_use,
                     sky_use,
                     projection=wcs_init,
-                    sip_degree=int(self.cfg.sip_degree),
+                    sip_degree=sip_deg,
                 )
             except TypeError:
                 # Older astropy versions don't support sip_degree
@@ -1047,11 +1088,14 @@ class QuadHashAstrometry:
                     projection=wcs_init,
                 )
 
-            # residuals in tangent plane for robust clipping
+            # Residuals via spherical distance (projection-independent)
             ra_fit, dec_fit = refined_wcs.all_pix2world(xy_use[0], xy_use[1], 0)
-            u_fit, v_fit = tan_project_deg(ra_fit, dec_fit, ra0, dec0)
-            u_ref, v_ref = tan_project_deg(sky_use.ra.deg, sky_use.dec.deg, ra0, dec0)
-            dr = np.hypot(u_fit - u_ref, v_fit - v_ref)
+            ref_ra_use = sky_use.ra.deg
+            ref_dec_use = sky_use.dec.deg
+            cos_dec = np.cos(np.deg2rad(0.5 * (dec_fit + ref_dec_use)))
+            dra_deg = (ra_fit - ref_ra_use) * cos_dec
+            ddec_deg = dec_fit - ref_dec_use
+            dr = np.deg2rad(np.hypot(dra_deg, ddec_deg))
 
             sig = _robust_sigma(dr)
             if not np.isfinite(sig) or sig <= 0:
@@ -1087,14 +1131,11 @@ class QuadHashAstrometry:
         match["dec"] = ref_dec[final_idx]
         match["cat_mag"] = ref_m[final_idx]
 
-        # residuals in arcsec using final WCS
+        # Residuals in arcsec using final WCS (spherical, projection-independent)
         ra_fit, dec_fit = refined_wcs.all_pix2world(match["x"], match["y"], 0)
-        u_fit, v_fit = tan_project_deg(ra_fit, dec_fit, ra0, dec0)
-        u_ref, v_ref = tan_project_deg(match["ra"], match["dec"], ra0, dec0)
-        du = u_fit - u_ref
-        dv = v_fit - v_ref
-        match["du_arcsec"] = (du * u.rad).to_value(u.arcsec)
-        match["dv_arcsec"] = (dv * u.rad).to_value(u.arcsec)
+        cos_dec_out = np.cos(np.deg2rad(0.5 * (dec_fit + _as_float_array(match["dec"]))))
+        match["du_arcsec"] = (ra_fit - _as_float_array(match["ra"])) * cos_dec_out * 3600.0
+        match["dv_arcsec"] = (dec_fit - _as_float_array(match["dec"])) * 3600.0
         match["dr_arcsec"] = np.hypot(match["du_arcsec"], match["dv_arcsec"])
 
         diagnostics = {

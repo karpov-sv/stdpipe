@@ -16,6 +16,9 @@ from scipy.spatial import KDTree
 
 from . import utils
 
+# Put these to common namespace
+from .astrometry_quad import refine_wcs_quadhash
+
 
 def get_frame_center(
     filename=None, header=None, wcs=None, width=None, height=None, shape=None
