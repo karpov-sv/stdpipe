@@ -440,7 +440,7 @@ def fit_wcs_from_points(
     proj_point="center",
     projection=None,
     sip_degree=None,
-    pv_deg=None,
+    pv_deg=5,
 ):
     """Drop-in wrapper around :func:`astropy.wcs.utils.fit_wcs_from_points`
     that also handles **ZPN** projection (which astropy does not natively fit).
