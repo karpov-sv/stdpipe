@@ -1,4 +1,16 @@
 # Various artefact filtering routines
+#
+# For more advanced real-bogus classification with cutout-based morphological
+# features, see the realbogus_features module:
+#
+#   from stdpipe import realbogus_features as rbf
+#   obj = rbf.classify(obj, image, method='hybrid', classifier='scoring')
+#
+# The realbogus_features module provides:
+# - Catalog-only, cutout-only, or hybrid feature extraction
+# - Multiple classifiers: scoring (no training), IsolationForest, RandomForest
+# - Generalized trend removal for all features
+# - Training utilities for custom classifiers
 
 import numpy as np
 from sklearn.ensemble import IsolationForest
@@ -138,3 +150,121 @@ def filter_sextractor_detections(
         return classifier
 
     return res > 0
+
+
+def filter_detections(
+    obj,
+    image=None,
+    bg=None,
+    mask=None,
+    fwhm=None,
+    method='auto',
+    classifier='isolation',
+    threshold=0.5,
+    remove_trend=True,
+    trend_cols=None,
+    trend_scales=None,
+    add_score=False,
+    flag_bogus=False,
+    verbose=True,
+    **kwargs
+):
+    """
+    Filter detections using feature-based real-bogus classification.
+
+    This is a convenience wrapper around realbogus_features.classify() that
+    provides a simpler interface similar to filter_sextractor_detections().
+
+    For full control over feature extraction and classification, use
+    realbogus_features.classify() directly.
+
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        Object catalog with 'x', 'y' columns.
+    image : ndarray, optional
+        Science image. If provided, cutout features will be extracted.
+    bg : ndarray or float, optional
+        Background map or scalar.
+    mask : ndarray, optional
+        Boolean mask (True = masked).
+    fwhm : float, optional
+        Image FWHM. If None, estimated from catalog.
+    method : str, optional
+        Feature extraction method:
+        - 'catalog': Catalog features only (no image needed)
+        - 'cutout': Cutout features only
+        - 'hybrid': Both catalog and cutout features
+        - 'auto': 'hybrid' if image provided, else 'catalog'
+    classifier : str, optional
+        Classifier to use:
+        - 'scoring': Rule-based scoring (no training needed)
+        - 'isolation': IsolationForest (unsupervised, default)
+    threshold : float, optional
+        Score threshold for classification. Default: 0.5.
+    remove_trend : bool, optional
+        Remove spatial trends from features. Default: True.
+    trend_cols : list of str, optional
+        Columns for trend removal. Default: ['x', 'y'].
+    trend_scales : list of float, optional
+        Scales for trend removal. Default: auto-computed.
+    add_score : bool, optional
+        Add 'rb_score' column to output. Default: False.
+    flag_bogus : bool, optional
+        Set flag 0x800 on bogus objects. Default: False.
+    verbose : bool, optional
+        Print progress.
+    **kwargs
+        Additional arguments passed to realbogus_features.classify().
+
+    Returns
+    -------
+    good : ndarray[bool]
+        Boolean mask of "good" (real) detections.
+
+    See Also
+    --------
+    realbogus_features.classify : Full-featured classification function.
+    filter_sextractor_detections : Original SExtractor-specific filter.
+
+    Examples
+    --------
+    >>> # Simple catalog-only filtering (like original function)
+    >>> good = filter_detections(obj, classifier='isolation')
+
+    >>> # Cutout-based filtering with scoring (no training)
+    >>> good = filter_detections(obj, image, classifier='scoring')
+
+    >>> # Hybrid with trend removal
+    >>> good = filter_detections(obj, image, method='hybrid',
+    ...                          remove_trend=True, trend_cols=['x', 'y'])
+    """
+    from . import realbogus_features as rbf
+
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+
+    # Call the full classify function
+    result = rbf.classify(
+        obj,
+        image=image,
+        bg=bg,
+        mask=mask,
+        fwhm=fwhm,
+        method=method,
+        classifier=classifier,
+        threshold=threshold,
+        add_score=add_score or True,  # Need score to compute mask
+        flag_bogus=flag_bogus,
+        remove_trend=remove_trend,
+        trend_cols=trend_cols,
+        trend_scales=trend_scales,
+        verbose=verbose,
+        **kwargs
+    )
+
+    # Return boolean mask
+    good = result['rb_score'] >= threshold
+
+    log(f"{np.sum(good)} good, {np.sum(~good)} outliers")
+
+    return good

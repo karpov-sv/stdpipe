@@ -8,7 +8,10 @@ pipelines, as well as for interactive data analysis.
 
 __version__ = "0.3.0"
 
-# Optional real-bogus classifier (requires TensorFlow)
+# Feature-based real-bogus classifier (no TensorFlow required)
+from . import realbogus_features
+
+# Optional CNN-based real-bogus classifier (requires TensorFlow)
 try:
     from . import realbogus
 except ImportError:
