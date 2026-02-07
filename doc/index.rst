@@ -30,6 +30,7 @@ User Guide
    About <self>
    installation
    usage
+   realbogus
    contributing
    todo
    API documentation <api/modules>

@@ -299,6 +299,215 @@ The ``beta`` parameter controls the wing profile:
 - ``beta=2.5``: Standard (DAOPHOT 'moffat25')
 - ``beta=4.0``: Compact, closer to Gaussian
 
+Optical Aberrations
+-------------------
+
+For realistic testing of photometry algorithms under challenging conditions, simulate PSFs with optical aberrations using Zernike polynomial-based wavefront modeling. This is particularly useful for testing algorithm robustness and training real-bogus classifiers with degraded PSFs.
+
+Basic Usage
+^^^^^^^^^^^
+
+.. code-block:: python
+
+   from stdpipe import simulation
+
+   # Create aberrated PSF
+   psf_aberrated = simulation.create_psf_model(
+       fwhm=3.5,
+       psf_type='gaussian',
+       defocus=1.0,           # 1 wave of defocus
+       astigmatism_x=0.5,     # 0.5 waves at 0°
+       wavelength=550e-9,     # 550nm (V-band)
+   )
+
+   # Use with star simulation
+   image = np.zeros((500, 500))
+   cat = simulation.add_stars(image, n=50, psf=psf_aberrated)
+
+Aberration Parameters
+^^^^^^^^^^^^^^^^^^^^^
+
+All aberration coefficients are specified in units of wavelengths (waves):
+
+- **defocus** (float): Defocus aberration (Zernike Z₄). Default: 0.0
+
+  - Typical moderate: 0.5-2.0 waves
+  - Severe: >3.0 waves
+  - Creates ring/donut shaped PSF
+  - Simulates out-of-focus telescope or atmosphere
+
+- **astigmatism_x** (float): Astigmatism at 0° orientation (Zernike Z₅). Default: 0.0
+- **astigmatism_y** (float): Astigmatism at 45° orientation (Zernike Z₆). Default: 0.0
+
+  - Typical: 0.3-1.5 waves
+  - Creates elliptical PSF
+  - Orientation varies with focus position
+  - Simulates asymmetric optics or atmospheric turbulence
+
+- **coma_x** (float): Horizontal coma (Zernike Z₇). Default: 0.0
+- **coma_y** (float): Vertical coma (Zernike Z₈). Default: 0.0
+
+  - Typical: 0.2-1.0 waves
+  - Creates comet-like tail asymmetry
+  - Common in off-axis telescope configurations
+
+- **wavelength** (float): Wavelength in meters. Default: 550e-9 (V-band)
+
+  - 450e-9: B-band (blue)
+  - 550e-9: V-band (green/visual)
+  - 650e-9: R-band (red)
+  - Affects diffraction pattern scale
+
+- **pupil_diameter** (float): Normalized pupil diameter. Default: 1.0
+
+  - Controls relative size of aperture
+  - Affects diffraction-limited resolution
+
+Physical Basis
+^^^^^^^^^^^^^^
+
+Aberrations are modeled using Zernike polynomials (Noll 1976 ordering) via Fourier optics:
+
+1. **Wavefront**: W(ρ,θ) = Σ cⱼ·Zⱼ(ρ,θ) where cⱼ are aberration coefficients
+2. **Complex pupil**: P = aperture · exp(2πi·W/λ)
+3. **PSF intensity**: |FFT(P)|²
+4. **Seeing convolution**: PSF ⊗ Gaussian/Moffat (atmospheric effects)
+
+Aberrations combine linearly in the wavefront (not PSF intensity). The final PSF represents both diffraction effects from the aberrated optics and atmospheric seeing (controlled by ``fwhm``).
+
+Example: Testing Photometry Robustness
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   from stdpipe import simulation, photometry, photometry_measure
+   import numpy as np
+
+   # Test photometry with various aberration levels
+   defocus_levels = [0.0, 0.5, 1.0, 2.0, 3.0]
+   flux_errors = []
+
+   for defocus in defocus_levels:
+       # Create aberrated PSF
+       psf_model = simulation.create_psf_model(
+           fwhm=4.0,
+           psf_type='gaussian',
+           defocus=defocus,
+           size=51
+       )
+
+       # Simulate stars
+       result = simulation.simulate_image(
+           width=500,
+           height=500,
+           n_stars=50,
+           star_flux_range=(5000, 10000),
+           star_fwhm=4.0,
+           star_psf=psf_model,
+           background=1000.0,
+           readnoise=10.0
+       )
+
+       image = result['image']
+       true_cat = result['catalog']
+
+       # Detect and measure
+       detected = photometry.get_objects_sep(image, thresh=5.0)
+       measured = photometry_measure.measure_objects(
+           detected, image, fwhm=4.0, aper=12.0
+       )
+
+       # Match and compute errors
+       from scipy.spatial import cKDTree
+       tree = cKDTree(np.c_[true_cat['x'], true_cat['y']])
+       distances, indices = tree.query(np.c_[measured['x'], measured['y']])
+
+       matched = distances < 3.0
+       flux_ratio = measured['flux'][matched] / true_cat['flux'][indices[matched]]
+       flux_scatter = np.std(flux_ratio)
+
+       flux_errors.append(flux_scatter)
+       print(f"Defocus {defocus} waves: scatter = {flux_scatter*100:.1f}%")
+
+   # Plot results
+   import matplotlib.pyplot as plt
+   plt.plot(defocus_levels, flux_errors, 'o-')
+   plt.xlabel('Defocus (waves)')
+   plt.ylabel('Photometry scatter')
+   plt.title('Photometry Robustness vs Aberration')
+   plt.grid(True, alpha=0.3)
+   plt.show()
+
+Example: Training Real-Bogus Classifier
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+.. code-block:: python
+
+   from stdpipe import simulation
+   import numpy as np
+
+   # Generate diverse training set with various PSF qualities
+   all_cutouts = []
+   all_labels = []
+
+   for img_idx in range(100):
+       # Randomize aberrations
+       defocus = np.random.uniform(0.0, 2.0)
+       astigmatism = np.random.uniform(0.0, 1.0)
+       coma = np.random.uniform(0.0, 0.5)
+
+       # Create aberrated PSF
+       psf_model = simulation.create_psf_model(
+           fwhm=np.random.uniform(2.5, 5.0),
+           psf_type='gaussian',
+           defocus=defocus,
+           astigmatism_x=astigmatism * np.cos(np.random.uniform(0, 2*np.pi)),
+           astigmatism_y=astigmatism * np.sin(np.random.uniform(0, 2*np.pi)),
+           coma_x=coma * np.cos(np.random.uniform(0, 2*np.pi)),
+           coma_y=coma * np.sin(np.random.uniform(0, 2*np.pi)),
+       )
+
+       # Simulate image with aberrated PSF
+       result = simulation.simulate_image(
+           width=1000,
+           height=1000,
+           n_stars=100,
+           star_psf=psf_model,
+           n_cosmic_rays=20,
+           n_hot_pixels=30,
+           background=1000.0
+       )
+
+       # Extract and label cutouts for classifier training
+       # ... (detection, matching, cutout extraction code)
+
+   # Now you have training data with diverse PSF conditions
+   # This makes your classifier robust to varying image quality
+
+Technical Notes
+^^^^^^^^^^^^^^^
+
+**Performance**: Aberrated PSF creation takes ~50-100ms (one-time cost). Star placement speed is unchanged as it uses the pre-computed PSF.
+
+**Accuracy**: The Fourier optics approach accurately models:
+
+- Diffraction effects through the aberrated pupil
+- Wave interference patterns
+- Proper flux conservation
+
+**Limitations**:
+
+- Does not model chromatic aberrations (wavelength-dependent)
+- Assumes monochromatic light at specified wavelength
+- Does not model atmospheric scintillation or temporal variations
+- High-order aberrations (j>8) not currently supported
+
+**References**:
+
+- Noll (1976) - "Zernike polynomials and atmospheric turbulence", J. Opt. Soc. Am.
+- Born & Wolf - "Principles of Optics" (aberration theory)
+- Mahajan - "Optical Imaging and Aberrations" (validation formulas)
+
 Galaxy Profiles
 ---------------
 

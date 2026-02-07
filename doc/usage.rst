@@ -43,6 +43,7 @@ Data processing
 
    preprocessing
    detection
+   realbogus
    catalogs
    astrometry
    photometry
