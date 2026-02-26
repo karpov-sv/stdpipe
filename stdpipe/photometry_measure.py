@@ -1023,14 +1023,59 @@ def measure_objects(
         return obj
 
 
+def _get_sep_psf(psf, fwhm, log):
+    """Convert a PSF model to sep.PSF object for use with sep.psf_fit().
+
+    Accepts:
+    - sep.PSF object (returned as-is)
+    - PSFEx dict from stdpipe.psf.run_psfex() / load_psf()
+
+    :param psf: PSF model (sep.PSF or PSFEx dict)
+    :param fwhm: FWHM in pixels (unused, reserved for future use)
+    :param log: Logging function
+    :returns: sep.PSF object
+    """
+    import sep
+
+    if isinstance(psf, sep.PSF):
+        log('Using provided sep.PSF model (FWHM=%.2f)' % psf.fwhm)
+        return psf
+
+    if isinstance(psf, dict) and 'data' in psf and 'sampling' in psf:
+        # PSFEx-like dict structure from run_psfex / load_psf
+        log(
+            'Converting PSFEx model to sep.PSF (FWHM=%.2f, sampling=%.3f, degree=%d)'
+            % (psf['fwhm'], psf['sampling'], psf.get('degree', 0))
+        )
+        sep_psf = sep.PSF(
+            psf['data'],
+            sampling=psf['sampling'],
+            degree=psf.get('degree', 0),
+            x0=psf.get('x0', 0),
+            y0=psf.get('y0', 0),
+            sx=psf.get('sx', 1),
+            sy=psf.get('sy', 1),
+            fwhm=psf['fwhm'],
+        )
+        return sep_psf
+
+    raise TypeError(
+        "Unsupported PSF type: %s. Expected sep.PSF or PSFEx dict." % type(psf)
+    )
+
+
 def measure_objects_sep(
     obj,
     image,
     aper=3,
     bkgann=None,
     fwhm=None,
+    psf=None,
     optimal=False,
     group_sources=True,
+    group_factor=2.0,
+    maxiter=20,
+    fit_positions=True,
     mask=None,
     bg=None,
     err=None,
@@ -1047,8 +1092,8 @@ def measure_objects_sep(
     """Photometry at the positions of already detected objects using SEP routines.
 
     This function uses SEP's built-in features for optimal extraction with sigma-clipped
-    background (via bkgann parameter in sum_circle_optimal) and iterative centroiding
-    (via winpos with maxstep parameter).
+    background (via bkgann parameter in sum_circle_optimal), PSF fitting photometry
+    (via sep.psf_fit), and iterative centroiding (via winpos with maxstep parameter).
 
     Only available if SEP version 1.4+ with these features is installed.
 
@@ -1056,6 +1101,8 @@ def measure_objects_sep(
       - 0x200: At least one aperture pixel is masked (if `mask` is provided)
       - 0x400: Invalid position
       - 0x800: Optimal extraction failed (NaN result)
+      - 0x1000: PSF fit failed (NaN result)
+      - 0x2000: Large centroid shift during PSF fit (>1 pixel)
 
     :param obj: astropy.table.Table with initial object detections to be measured
     :param image: Input image as a NumPy array
@@ -1064,10 +1111,18 @@ def measure_objects_sep(
                    For optimal extraction, SEP handles this internally with sigma-clipping.
                    For aperture photometry, we use sep.stats_circann().
     :param fwhm: If provided, `aper` and `bkgann` will be measured in units of this value.
-                 Also used for Gaussian PSF in optimal extraction and centroiding.
+                 Also used for Gaussian PSF in optimal extraction, PSF fitting, and centroiding.
+    :param psf: PSF model for PSF fitting photometry. When provided, PSF fitting is used
+                instead of aperture or optimal extraction. Can be:
+        - PSFEx PSF structure from :func:`stdpipe.psf.run_psfex` (dict with 'data', 'sampling', etc.)
+        - sep.PSF object (used directly)
     :param optimal: If True, use optimal extraction via sep.sum_circle_optimal().
-                    Requires `fwhm` parameter.
-    :param group_sources: If True and optimal=True, use grouped optimal extraction.
+                    Requires `fwhm` parameter. Ignored when `psf` is provided.
+    :param group_sources: If True, use grouped fitting for optimal or PSF photometry.
+    :param group_factor: Grouping radius factor for PSF fitting (default 2.0).
+                         Only used for PSF fitting when group_sources=True.
+    :param maxiter: Maximum number of PSF fitting iterations (default 20).
+    :param fit_positions: If True, fit source positions during PSF fitting (default True).
     :param mask: Image mask as a boolean array (True values will be masked), optional
     :param bg: If provided, use this background instead of automatically computed one
     :param err: Image noise map as a NumPy array, optional
@@ -1081,7 +1136,8 @@ def measure_objects_sep(
     :param clip_iters: Maximum number of clipping iterations when ``bkgann`` is provided.
                        Default is 5. Set to 0 to disable clipping.
     :param verbose: Whether to show verbose messages. May be boolean or print-like function.
-    :returns: Copy of table with flux/mag columns from SEP measurements.
+    :returns: Copy of table with flux/mag columns from SEP measurements. When `psf` is
+              provided, also includes `x_psf`, `y_psf` (fitted positions), and `flags_psf` columns.
     """
     import sep
 
@@ -1218,6 +1274,9 @@ def measure_objects_sep(
     # Flag invalid positions
     obj['flags'][~valid_pos] |= 0x400
 
+    if psf is not None and optimal:
+        raise ValueError("'psf' and 'optimal' are mutually exclusive")
+
     obj['flux'] = np.nan
     obj['fluxerr'] = np.nan
 
@@ -1230,7 +1289,58 @@ def measure_objects_sep(
             else:
                 bkgann_pix = bkgann
 
-        if optimal:
+        if psf is not None:
+            # PSF fitting photometry using sep.psf_fit()
+            sep_psf = _get_sep_psf(psf, fwhm, log)
+
+            log(
+                'Using SEP PSF fitting (grouped=%s, fit_positions=%s, maxiter=%d)'
+                % (group_sources, fit_positions, maxiter)
+            )
+
+            # Build keyword arguments for sep.psf_fit
+            psf_kwargs = dict(
+                err=err,
+                gain=gain,
+                mask=(mask | mask0).astype(np.uint8),
+                grouped=group_sources,
+                group_factor=group_factor,
+                maxiter=maxiter,
+                fit_positions=fit_positions,
+            )
+
+            flux, fluxerr, xfit, yfit, flag = sep.psf_fit(
+                image1,
+                x_vals[valid_pos],
+                y_vals[valid_pos],
+                sep_psf,
+                **psf_kwargs,
+            )
+
+            obj['flux'][valid_pos] = flux
+            obj['fluxerr'][valid_pos] = fluxerr
+
+            # Store fitted positions
+            obj['x_psf'] = np.nan
+            obj['y_psf'] = np.nan
+            obj['x_psf'][valid_pos] = xfit
+            obj['y_psf'][valid_pos] = yfit
+
+            # Store PSF fit flags
+            obj['flags_psf'] = 0
+            obj['flags_psf'][valid_pos] = flag
+
+            # Flag sources where PSF fit returned non-zero flag
+            obj['flags'][np.where(valid_pos)[0][flag > 0]] |= 0x200
+
+            # Flag large centroid shifts (>1 pixel)
+            if fit_positions:
+                dx_fit = xfit - x_vals[valid_pos]
+                dy_fit = yfit - y_vals[valid_pos]
+                large_shift = (dx_fit**2 + dy_fit**2) > 1.0
+                obj['flags'][np.where(valid_pos)[0][large_shift]] |= 0x2000
+
+        elif optimal:
             # Optimal extraction using SEP with built-in background handling
             if fwhm is None or fwhm <= 0:
                 raise ValueError("'fwhm' must be provided for optimal extraction")
@@ -1304,7 +1414,10 @@ def measure_objects_sep(
                 obj['flux'][valid_pos] -= bg_median * np.pi * aper_pix**2
 
     # Flag objects where measurement failed
-    obj['flags'][~np.isfinite(obj['flux'])] |= 0x800
+    if psf is not None:
+        obj['flags'][~np.isfinite(obj['flux'])] |= 0x1000
+    else:
+        obj['flags'][~np.isfinite(obj['flux'])] |= 0x800
 
     # Convert to magnitudes
     for _ in ['mag', 'magerr']:

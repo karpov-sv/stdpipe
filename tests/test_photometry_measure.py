@@ -1664,5 +1664,490 @@ class TestPSFCentroidingAccuracy:
         assert np.sum(valid) == len(result_psf), "All PSF centroids should be valid"
 
 
+_HAS_SEP_PSF = False
+try:
+    import sep
+    _HAS_SEP_PSF = hasattr(sep, 'psf_fit') and hasattr(sep, 'PSF')
+except ImportError:
+    pass
+
+_skip_no_sep_psf = pytest.mark.skipif(
+    not _HAS_SEP_PSF,
+    reason="Requires SEP 1.4+ with psf_fit() and PSF class",
+)
+
+
+class TestSEPPSFPhotometry:
+    """Test SEP-based PSF fitting photometry via measure_objects_sep(psf=...)."""
+
+    @pytest.fixture
+    def isolated_star_image(self):
+        """256x256 image with one bright isolated Gaussian star at (128, 128)."""
+        np.random.seed(42)
+        fwhm = 4.0
+        sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+        true_flux = 10000.0
+        bg = 100.0
+        noise = 5.0
+
+        image = np.random.normal(bg, noise, (256, 256))
+        image += _create_pixel_integrated_gaussian(256, 128, 128,
+                                                   true_flux / (2 * np.pi * sigma**2),
+                                                   sigma)
+        return image.astype(np.float64), fwhm, true_flux, bg, noise
+
+    @pytest.fixture
+    def multi_star_image(self):
+        """256x256 image with several well-separated stars."""
+        np.random.seed(42)
+        fwhm = 4.0
+        sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+        bg = 100.0
+        noise = 5.0
+        sources = [
+            (60, 60, 8000.0),
+            (128, 128, 12000.0),
+            (200, 80, 5000.0),
+            (80, 200, 3000.0),
+        ]
+
+        image = np.random.normal(bg, noise, (256, 256))
+        for sx, sy, flux in sources:
+            amp = flux / (2 * np.pi * sigma**2)
+            image += _create_pixel_integrated_gaussian(256, sx, sy, amp, sigma)
+
+        obj = Table()
+        obj['x'] = np.array([s[0] for s in sources], dtype=float)
+        obj['y'] = np.array([s[1] for s in sources], dtype=float)
+        true_fluxes = np.array([s[2] for s in sources])
+
+        return image.astype(np.float64), obj, fwhm, true_fluxes, bg, noise
+
+    @pytest.fixture
+    def close_pair_image(self):
+        """256x256 image with a close pair of equal-brightness stars."""
+        np.random.seed(42)
+        fwhm = 4.0
+        sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+        bg = 100.0
+        noise = 5.0
+        true_flux = 10000.0
+        separation = 6.0  # 1.5 FWHM
+
+        image = np.random.normal(bg, noise, (256, 256))
+        x1, x2 = 128.0 - separation / 2, 128.0 + separation / 2
+        for sx in [x1, x2]:
+            amp = true_flux / (2 * np.pi * sigma**2)
+            image += _create_pixel_integrated_gaussian(256, sx, 128, amp, sigma)
+
+        obj = Table()
+        obj['x'] = np.array([x1, x2])
+        obj['y'] = np.array([128.0, 128.0])
+
+        return image.astype(np.float64), obj, fwhm, true_flux, bg, noise
+
+    # ── basic functionality ──────────────────────────────────────────
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_fit_basic(self, isolated_star_image):
+        """PSF fitting returns expected columns and reasonable flux."""
+        image, fwhm, true_flux, bg, noise = isolated_star_image
+        obj = Table({'x': [128.0], 'y': [128.0]})
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        result = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+        )
+
+        # Check output columns
+        for col in ['flux', 'fluxerr', 'mag', 'magerr', 'x_psf', 'y_psf', 'flags_psf']:
+            assert col in result.colnames, f"Missing column: {col}"
+
+        # Flux should be within 5% of truth
+        assert abs(result['flux'][0] / true_flux - 1) < 0.05
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_fit_output_columns_not_present_for_aperture(self, isolated_star_image):
+        """Aperture photometry (psf=None) should NOT produce x_psf/y_psf columns."""
+        image, fwhm, true_flux, bg, noise = isolated_star_image
+        obj = Table({'x': [128.0], 'y': [128.0]})
+
+        result = photometry_measure.measure_objects_sep(
+            obj, image, fwhm=fwhm, gain=1.0,
+        )
+
+        assert 'x_psf' not in result.colnames
+        assert 'y_psf' not in result.colnames
+        assert 'flags_psf' not in result.colnames
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_fit_empty_table(self, isolated_star_image):
+        """PSF fitting with empty object table returns empty table."""
+        image, fwhm, _, _, _ = isolated_star_image
+        obj = Table({'x': np.array([]), 'y': np.array([])})
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        result = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model,
+        )
+        assert len(result) == 0
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_and_optimal_mutually_exclusive(self, isolated_star_image):
+        """Passing both psf and optimal=True should raise ValueError."""
+        image, fwhm, _, _, _ = isolated_star_image
+        obj = Table({'x': [128.0], 'y': [128.0]})
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            photometry_measure.measure_objects_sep(
+                obj, image, psf=psf_model, optimal=True, fwhm=fwhm,
+            )
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_fit_invalid_type(self, isolated_star_image):
+        """Passing unsupported PSF type should raise TypeError."""
+        image, fwhm, _, _, _ = isolated_star_image
+        obj = Table({'x': [128.0], 'y': [128.0]})
+
+        with pytest.raises(TypeError, match="Unsupported PSF type"):
+            photometry_measure.measure_objects_sep(
+                obj, image, psf="not_a_psf",
+            )
+
+    # ── flux accuracy ────────────────────────────────────────────────
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_fit_flux_accuracy_isolated(self, multi_star_image):
+        """Flux recovery for well-separated stars should be within 5%."""
+        image, obj, fwhm, true_fluxes, bg, noise = multi_star_image
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        result = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+        )
+
+        for i in range(len(true_fluxes)):
+            bias = abs(result['flux'][i] / true_fluxes[i] - 1)
+            assert bias < 0.05, (
+                f"Star {i}: flux bias {bias*100:.1f}% exceeds 5%"
+            )
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_fit_flux_accuracy_exact_background(self, isolated_star_image):
+        """With exact background and error, flux bias should be small."""
+        image, fwhm, true_flux, bg, noise = isolated_star_image
+        obj = Table({'x': [128.0], 'y': [128.0]})
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        result = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+            bg=np.full_like(image, bg),
+            err=np.full_like(image, noise),
+        )
+
+        bias = abs(result['flux'][0] / true_flux - 1)
+        assert bias < 0.03, f"Flux bias {bias*100:.1f}% exceeds 3% with exact bg"
+
+    # ── position fitting ─────────────────────────────────────────────
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_fit_position_recovery(self, isolated_star_image):
+        """Fitted position should be close to true position."""
+        image, fwhm, true_flux, bg, noise = isolated_star_image
+        obj = Table({'x': [128.0], 'y': [128.0]})
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        result = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0, fit_positions=True,
+        )
+
+        # Position should be within 0.1 pixel of truth
+        dx = abs(result['x_psf'][0] - 128.0)
+        dy = abs(result['y_psf'][0] - 128.0)
+        assert dx < 0.1, f"x_psf offset {dx:.3f} > 0.1 pix"
+        assert dy < 0.1, f"y_psf offset {dy:.3f} > 0.1 pix"
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_fit_no_position_fitting(self, isolated_star_image):
+        """With fit_positions=False, x_psf/y_psf should match input positions."""
+        image, fwhm, true_flux, bg, noise = isolated_star_image
+        obj = Table({'x': [128.0], 'y': [128.0]})
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        result = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0, fit_positions=False,
+        )
+
+        assert result['x_psf'][0] == 128.0
+        assert result['y_psf'][0] == 128.0
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_fit_large_shift_flag(self):
+        """Sources with >1 pixel centroid shift should get 0x2000 flag."""
+        np.random.seed(42)
+        fwhm = 4.0
+        sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+        true_flux = 50000.0
+
+        image = np.random.normal(100, 5, (256, 256)).astype(np.float64)
+        image += _create_pixel_integrated_gaussian(
+            256, 130.0, 128.0,
+            true_flux / (2 * np.pi * sigma**2), sigma,
+        )
+
+        # Initial guess 3 pixels away from true position
+        obj = Table({'x': [127.0], 'y': [128.0]})
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        result = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0, fit_positions=True,
+        )
+
+        # The fitter should move towards the star; if shift > 1 pixel, flag is set
+        shift = np.sqrt(
+            (result['x_psf'][0] - 127.0)**2 + (result['y_psf'][0] - 128.0)**2
+        )
+        if shift > 1.0:
+            assert result['flags'][0] & 0x2000, "Large shift should set 0x2000 flag"
+
+    # ── grouped fitting ──────────────────────────────────────────────
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_fit_grouped_close_pair(self, close_pair_image):
+        """Grouped fitting should recover close-pair fluxes better than ungrouped."""
+        image, obj, fwhm, true_flux, bg, noise = close_pair_image
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        result_grouped = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0, group_sources=True,
+        )
+        result_ungrouped = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0, group_sources=False,
+        )
+
+        bias_g = np.abs(result_grouped['flux'] / true_flux - 1)
+        bias_u = np.abs(result_ungrouped['flux'] / true_flux - 1)
+
+        mean_bias_g = np.mean(bias_g)
+        mean_bias_u = np.mean(bias_u)
+
+        # Grouped should be at least as good, typically much better
+        assert mean_bias_g <= mean_bias_u + 0.01, (
+            f"Grouped bias {mean_bias_g*100:.1f}% should be <= "
+            f"ungrouped {mean_bias_u*100:.1f}%"
+        )
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_fit_grouped_isolated_same_as_ungrouped(self, multi_star_image):
+        """For well-separated stars, grouped and ungrouped should give same results."""
+        image, obj, fwhm, true_fluxes, bg, noise = multi_star_image
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        result_g = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0, group_sources=True,
+        )
+        result_u = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0, group_sources=False,
+        )
+
+        np.testing.assert_allclose(
+            result_g['flux'], result_u['flux'], rtol=0.01,
+            err_msg="Grouped/ungrouped should agree for isolated stars",
+        )
+
+    # ── PSF model types ──────────────────────────────────────────────
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_fit_with_sep_psf_object(self, isolated_star_image):
+        """Accepts sep.PSF object directly."""
+        image, fwhm, true_flux, _, _ = isolated_star_image
+        obj = Table({'x': [128.0], 'y': [128.0]})
+
+        psf_model = sep.PSF.from_gaussian(fwhm)
+        result = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+        )
+        assert np.isfinite(result['flux'][0])
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_fit_with_psfex_dict(self, isolated_star_image):
+        """Accepts PSFEx-style dict and produces reasonable flux."""
+        image, fwhm, true_flux, _, _ = isolated_star_image
+        obj = Table({'x': [128.0], 'y': [128.0]})
+
+        sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+        size = 21
+        center = size // 2
+        y, x = np.mgrid[0:size, 0:size]
+        stamp = np.exp(-((x - center)**2 + (y - center)**2) / (2 * sigma**2))
+        stamp /= stamp.sum()
+
+        psf_dict = {
+            'data': stamp[np.newaxis, :, :],
+            'sampling': 1.0,
+            'degree': 0,
+            'x0': 0, 'y0': 0, 'sx': 1, 'sy': 1,
+            'fwhm': fwhm,
+            'width': size, 'height': size,
+        }
+
+        result = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_dict, gain=1.0,
+        )
+
+        bias = abs(result['flux'][0] / true_flux - 1)
+        assert bias < 0.10, f"PSFEx dict flux bias {bias*100:.1f}% exceeds 10%"
+
+    # ── masking and flags ────────────────────────────────────────────
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_fit_with_mask(self, isolated_star_image):
+        """PSF fitting with a mask should still produce a result."""
+        image, fwhm, true_flux, _, _ = isolated_star_image
+        obj = Table({'x': [128.0], 'y': [128.0]})
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        mask = np.zeros(image.shape, dtype=bool)
+        mask[126:128, 126:128] = True  # Mask a few pixels near the source
+
+        result = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0, mask=mask,
+        )
+
+        assert np.isfinite(result['flux'][0])
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_fit_failed_flag(self):
+        """Invalid position should be flagged with 0x400, failed fit with 0x1000."""
+        np.random.seed(42)
+        image = np.random.normal(100, 5, (64, 64)).astype(np.float64)
+        obj = Table({'x': [np.nan], 'y': [32.0]})
+        psf_model = sep.PSF.from_gaussian(4.0)
+
+        result = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+        )
+
+        assert result['flags'][0] & 0x400, "Invalid position should set 0x400"
+        assert result['flags'][0] & 0x1000, "Failed PSF fit should set 0x1000"
+
+    # ── S/N filtering and magnitudes ─────────────────────────────────
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_fit_magnitudes(self, isolated_star_image):
+        """Magnitude columns should be consistent with flux."""
+        image, fwhm, _, _, _ = isolated_star_image
+        obj = Table({'x': [128.0], 'y': [128.0]})
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        result = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+        )
+
+        expected_mag = -2.5 * np.log10(result['flux'][0])
+        assert abs(result['mag'][0] - expected_mag) < 1e-6
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_fit_sn_filter(self, multi_star_image):
+        """S/N filtering should remove faint sources."""
+        image, obj, fwhm, true_fluxes, bg, noise = multi_star_image
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        result_all = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+        )
+        result_sn = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0, sn=500,
+        )
+
+        assert len(result_sn) <= len(result_all)
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_fit_keep_negative(self):
+        """keep_negative=False should discard negative flux measurements."""
+        np.random.seed(42)
+        # Pure noise image — flux may come out negative
+        image = np.random.normal(100, 50, (64, 64)).astype(np.float64)
+        obj = Table({'x': [32.0], 'y': [32.0]})
+        psf_model = sep.PSF.from_gaussian(4.0)
+
+        result = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0, keep_negative=False,
+        )
+        # Either empty or all positive
+        if len(result) > 0:
+            assert all(result['flux'] > 0)
+
+    # ── statistical accuracy ─────────────────────────────────────────
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_psf_fit_statistical_bias(self):
+        """Mean flux bias over many stars should be small (< 3%)."""
+        np.random.seed(123)
+        fwhm = 4.0
+        sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+        true_flux = 10000.0
+        noise = 5.0
+
+        image = np.random.normal(100, noise, (512, 512)).astype(np.float64)
+
+        # Place 50 well-separated stars on a grid
+        n = 50
+        margin = 30
+        rng = np.random.RandomState(456)
+        xs, ys = [], []
+        while len(xs) < n:
+            x = rng.uniform(margin, 512 - margin)
+            y = rng.uniform(margin, 512 - margin)
+            if xs:
+                dists = np.sqrt((np.array(xs) - x)**2 + (np.array(ys) - y)**2)
+                if np.min(dists) < 5 * fwhm:
+                    continue
+            xs.append(x)
+            ys.append(y)
+
+        xs, ys = np.array(xs), np.array(ys)
+
+        for x, y in zip(xs, ys):
+            amp = true_flux / (2 * np.pi * sigma**2)
+            image += _create_pixel_integrated_gaussian(512, x, y, amp, sigma)
+
+        obj = Table({'x': xs, 'y': ys})
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        result = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+        )
+
+        biases = result['flux'] / true_flux - 1
+        good = np.isfinite(biases)
+        mean_bias = np.abs(np.mean(biases[good]))
+
+        assert mean_bias < 0.03, (
+            f"Mean bias {mean_bias*100:.2f}% exceeds 3% over {np.sum(good)} stars"
+        )
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
