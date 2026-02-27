@@ -11,7 +11,6 @@ from astropy import units as u
 
 import sip_tpv
 
-from scipy.stats import chi2
 from scipy.spatial import KDTree
 
 from . import utils
@@ -749,6 +748,10 @@ def refine_wcs_scamp(
     cat_col_mag_err='e_rmag',
     cat_mag_lim=99,
     sn=None,
+    position_maxerr=None,
+    posangle_maxerr=None,
+    pixscale_maxerr=None,
+    match_flipped=False,
     extra={},
     get_header=False,
     update=False,
@@ -763,7 +766,7 @@ def refine_wcs_scamp(
     :param cat: Reference astrometric catalogue
     :param wcs: Initial WCS
     :param header: FITS header containing initial astrometric solution, optional.
-    :param sr: Matching radius in degrees
+    :param sr: Matching radius in degrees. Controls SCAMP's CROSSID_RADIUS used for final cross-identification after pattern matching.
     :param order: Polynomial order for PV distortion solution (1 or greater)
     :param cat_col_ra: Catalogue column name for Right Ascension
     :param cat_col_dec: Catalogue column name for Declination
@@ -773,6 +776,10 @@ def refine_wcs_scamp(
     :param cat_col_mag_err: Catalogue column name for the magnitude error
     :param cat_mag_lim: Magnitude limit for catalogue stars
     :param sn: If provided, only objects with signal to noise ratio exceeding this value will be used for matching.
+    :param position_maxerr: Maximum positional uncertainty of the initial WCS in arcminutes. Controls the search range for field center offset during pattern matching. Use larger values (e.g. 2-5) for uncertain pointings. Default is SCAMP's built-in default of 1 arcmin.
+    :param posangle_maxerr: Maximum position angle uncertainty of the initial WCS in degrees. Controls the search range for field rotation during pattern matching. Use larger values (e.g. 10-20) for uncertain rotation. Default is SCAMP's built-in default of 5 degrees.
+    :param pixscale_maxerr: Maximum pixel scale uncertainty as a multiplicative factor (>1.0). E.g. 1.2 means ±20% around the initial pixel scale. Use larger values (e.g. 1.3-1.5) for uncertain scale. Default is SCAMP's built-in default of 1.2.
+    :param match_flipped: If True, also try matching with flipped (mirrored) axes. Useful when the image parity is unknown. Default is False.
     :param extra: Dictionary of additional parameters to be passed to SCAMP binary, optional.
     :param get_header: If True, function will return the FITS header object instead of WCS solution
     :param update: If set, the object list will be updated in-place to contain correct `ra` and `dec` sky coordinates
@@ -858,6 +865,8 @@ def refine_wcs_scamp(
         'PROJECTION_TYPE': 'TPV',
         'CROSSID_RADIUS': sr * 3600,
         'DISTORT_DEGREES': max(1, order),
+        'STABILITY_TYPE': 'EXPOSURE',
+        'SN_THRESHOLDS': [3.0, 30.0],
     }
 
     if sn is not None:
@@ -865,6 +874,16 @@ def refine_wcs_scamp(
             opts['SN_THRESHOLDS'] = [sn, 10 * sn]
         else:
             opts['SN_THRESHOLDS'] = [sn[0], sn[1]]
+
+    # Pattern matching search range parameters
+    if position_maxerr is not None:
+        opts['POSITION_MAXERR'] = position_maxerr
+    if posangle_maxerr is not None:
+        opts['POSANGLE_MAXERR'] = posangle_maxerr
+    if pixscale_maxerr is not None:
+        opts['PIXSCALE_MAXERR'] = pixscale_maxerr
+    if match_flipped:
+        opts['MATCH_FLIPPED'] = 'Y'
 
     opts.update(extra)
 
@@ -961,13 +980,33 @@ def refine_wcs_scamp(
         log('SCAMP run successfully')
 
         diag = Table.read(xmlname, table_id=0)[0]
-        log('%d matches, chi2 %.1f' % (diag['NDeg_Reference'], diag['Chi2_Reference']))
-        # FIXME: is df correct here?..
-        if (
-            diag['NDeg_Reference'] < 3
-            or chi2.sf(diag['Chi2_Reference'], df=diag['NDeg_Reference']) < 1e-3
-        ):
-            log('It seems the fitting failed')
+
+        # Log detailed diagnostics from SCAMP XML
+        n_matches = int(diag['NDeg_Reference'])
+        reduced_chi2 = float(diag['Chi2_Reference'])
+        log('Reference matches: %d, reduced chi2: %.2f' % (n_matches, reduced_chi2))
+
+        # Log matching diagnostics if available (pattern matching was performed)
+        for key in ['AS_Contrast', 'XY_Contrast', 'DPixelScale', 'DPosAngle', 'Shear']:
+            if key in diag.colnames:
+                log('  %s: %s' % (key, diag[key]))
+
+        # Log astrometric residuals if available
+        for key in ['AstromOffset_Reference', 'AstromSigma_Reference']:
+            if key in diag.colnames:
+                val = diag[key]
+                if hasattr(val, '__len__'):
+                    log('  %s: %s arcsec' % (key, ' '.join('%.3f' % v for v in val)))
+                else:
+                    log('  %s: %.3f arcsec' % (key, val))
+
+        # Validate the solution quality
+        # Chi2_Reference from SCAMP is already a reduced chi-squared
+        # (sum of chi2 divided by naxis * n_matches), so we check it directly
+        if n_matches < 3:
+            log('Too few matches (%d), fitting likely failed' % n_matches)
+        elif reduced_chi2 > 100:
+            log('Reduced chi2 too large (%.1f), fitting likely failed' % reduced_chi2)
         else:
             with open(hdrname, 'r') as f:
                 h1 = fits.Header.fromstring(
