@@ -29,6 +29,7 @@ Deps: numpy, scipy, astropy
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -592,6 +593,40 @@ def build_quad_hash_multiscale(
 
     return H
 
+class _PatternMatchFailed(RuntimeError):
+    """Internal sentinel for pattern matching failure (used by adaptive retry)."""
+    pass
+
+
+def _auto_match_resolution(det_xy: np.ndarray, ref_uv: np.ndarray,
+                           pixel_scale_arcsec: float) -> Optional[float]:
+    """Compute matching resolution from source density (SCAMP-inspired).
+
+    Uses the mean inter-source spacing as confusion limit:
+        matchresol = sqrt(field_area / n_sources)
+
+    Returns the confusion radius in pixels, or None if it can't be computed.
+    """
+    # Use the smaller of the two sets (like SCAMP's cross-section approach)
+    n = min(len(det_xy), len(ref_uv))
+    if n < 4:
+        return None
+
+    # Estimate field area from convex hull or bounding box of detections
+    x_range = det_xy[:, 0].max() - det_xy[:, 0].min()
+    y_range = det_xy[:, 1].max() - det_xy[:, 1].min()
+    field_area = x_range * y_range
+
+    if field_area <= 0:
+        return None
+
+    # Mean area per source → confusion radius
+    mean_area = field_area / n
+    confusion_radius = np.sqrt(mean_area)
+
+    return confusion_radius
+
+
 # -----------------------------
 # Solver
 # -----------------------------
@@ -640,10 +675,260 @@ class AstrometryConfig:
     refine_n_ref: Optional[int] = None
     refine_match_radius_arcsec: Optional[float] = None
 
+    # Auto matching resolution: compute stage radii from source density
+    auto_match_resolution: bool = True
+
+    # Adaptive source count: retry with more sources if matching fails
+    adaptive_n_retry: int = 2          # number of retry doublings (0 = disabled)
+    adaptive_min_inliers: int = 12     # minimum inliers to accept without retry
+
 
 class QuadHashAstrometry:
     def __init__(self, config: AstrometryConfig = AstrometryConfig()):
         self.cfg = config
+
+    def _pattern_match(
+        self,
+        det_xy: np.ndarray,
+        det_mag: np.ndarray,
+        ref_uv: np.ndarray,
+        ref_mag: np.ndarray,
+        wcs_init: WCS,
+        pixel_scale_arcsec: float,
+    ) -> Tuple[list, list, dict]:
+        """Run quad-hash pattern matching (stages 1 & 2) + affine re-matching.
+
+        Returns (pairs, top_hyp, best) where pairs is list of (det_idx, ref_idx).
+        Raises _PatternMatchFailed if matching fails.
+        """
+        # WCS prior: in pixel space expected scale ≈ 1.0, compute parity from WCS
+        expected_scale = None
+        expected_parity = None  # sign of determinant
+        if self.cfg.use_wcs_prior:
+            expected_scale = 1.0  # Both sets in pixel space
+            try:
+                crpix = np.asarray(wcs_init.wcs.crpix, dtype=np.float64)
+                if crpix.size == 2 and np.all(np.isfinite(crpix)):
+                    px = np.array([crpix[0], crpix[0] + 1.0, crpix[0]], dtype=np.float64)
+                    py = np.array([crpix[1], crpix[1], crpix[1] + 1.0], dtype=np.float64)
+                    ra_s, dec_s = wcs_init.all_pix2world(px, py, 1)
+                    x_s, y_s = wcs_init.all_world2pix(ra_s, dec_s, 0)
+                    J = np.array([
+                        [x_s[1] - x_s[0], x_s[2] - x_s[0]],
+                        [y_s[1] - y_s[0], y_s[2] - y_s[0]],
+                    ], dtype=np.float64)
+                    det_j = float(np.linalg.det(J))
+                    if np.isfinite(det_j) and det_j != 0:
+                        expected_parity = 1.0 if det_j > 0 else -1.0
+            except Exception:
+                expected_parity = None
+
+        # --- Consistent baseline binning ---
+        ref_quads_raw = make_local_quads(ref_uv, k=self.cfg.neighbor_k)
+        ref_bin_edges = None
+        if ref_quads_raw:
+            ref_qa = np.array(ref_quads_raw, dtype=np.int32)
+            _, ref_lens_raw = quad_descriptor_batch(ref_uv, ref_qa)
+            ok_ref = np.isfinite(ref_lens_raw) & (ref_lens_raw > 0)
+            if np.any(ok_ref):
+                ref_bin_edges = compute_bin_edges(ref_lens_raw[ok_ref], self.cfg.n_scale_bins)
+
+        # Reference multiscale hash
+        ref_hash = build_quad_hash_multiscale(
+            ref_uv, ref_mag,
+            k=self.cfg.neighbor_k,
+            eps=self.cfg.eps_desc,
+            n_scale_bins=self.cfg.n_scale_bins,
+            allow_reflection=self.cfg.allow_reflection,
+            bin_edges=ref_bin_edges,
+        )
+
+        # Detection quads
+        det_quads = make_local_quads(det_xy, k=self.cfg.neighbor_k)
+        if not det_quads:
+            raise _PatternMatchFailed("Not enough detections for quad matching.")
+
+        det_quad_array = np.array(det_quads, dtype=np.int32)
+        det_descs, det_lens = quad_descriptor_batch(det_xy, det_quad_array)
+
+        okq = np.isfinite(det_descs).all(axis=1) & np.isfinite(det_lens) & (det_lens > 0)
+        det_quads = det_quad_array[okq]
+        det_descs = det_descs[okq]
+        det_lens = det_lens[okq]
+
+        if ref_bin_edges is not None:
+            det_bins = baseline_rank_bins(det_lens, n_bins=self.cfg.n_scale_bins, edges=ref_bin_edges)
+        else:
+            det_bins = baseline_rank_bins(det_lens, n_bins=self.cfg.n_scale_bins)
+
+        det_quads_quantized = np.array([
+            quantize_desc(desc, self.cfg.eps_desc) for desc in det_descs
+        ], dtype=object)
+
+        ref_tree = cKDTree(ref_uv)
+
+        # Stage radii in pixels
+        r1 = self.cfg.stage1_radius_arcsec / pixel_scale_arcsec
+        r2 = self.cfg.stage2_radius_arcsec / pixel_scale_arcsec
+
+        # Stage1 detection subset
+        order_det = np.argsort(det_mag)
+        det_stage1_ids = order_det[: min(self.cfg.stage1_n_det, len(order_det))]
+        det_xy_stage1 = det_xy[det_stage1_ids]
+
+        top_hyp: List[Tuple[float, np.ndarray, np.ndarray, float]] = []
+
+        rng = np.random.default_rng(12345)
+
+        q_order = np.arange(len(det_quads))
+        rng.shuffle(q_order)
+        q_order = q_order[: min(self.cfg.max_quads_tested, len(q_order))]
+
+        def _try_insert(score: float, R: np.ndarray, t: np.ndarray, s: float):
+            nonlocal top_hyp
+            if len(top_hyp) < self.cfg.top_k_hypotheses:
+                top_hyp.append((score, R, t, s))
+                return
+            worst_i = int(np.argmin([h[0] for h in top_hyp]))
+            if score > top_hyp[worst_i][0]:
+                top_hyp[worst_i] = (score, R, t, s)
+
+        # --- Stage 1 ---
+        for qi in q_order:
+            q = det_quads[qi]
+            bin_id = int(det_bins[qi])
+
+            kdesc = det_quads_quantized[qi]
+
+            candidates: List[QuadEntry] = []
+            if self.cfg.use_multiprobe:
+                for kdesc2 in multiprobe_desc_keys(det_descs[qi], self.cfg.eps_desc):
+                    kk = (bin_id, kdesc2)
+                    if kk in ref_hash:
+                        candidates.extend(ref_hash[kk])
+            else:
+                for kdesc2 in neighbors_bins(kdesc, r=self.cfg.bin_neighbor_radius):
+                    kk = (bin_id, kdesc2)
+                    if kk in ref_hash:
+                        candidates.extend(ref_hash[kk])
+
+            if not candidates:
+                continue
+
+            det_sig = mag_signature(det_mag[q]) if self.cfg.use_mag_signature else None
+
+            rng.shuffle(candidates)
+            for ce in candidates[: self.cfg.max_candidates_per_bucket]:
+                if det_sig is not None and ce.mags is not None:
+                    if mag_signature(np.array(ce.mags)) != det_sig:
+                        continue
+
+                P = det_xy[q]
+                Q = ref_uv[list(ce.idxs)]
+
+                try:
+                    R, t, s = estimate_similarity_2d(P, Q, allow_reflection=self.cfg.allow_reflection)
+                except Exception:
+                    continue
+
+                if expected_scale is not None and self.cfg.scale_tolerance is not None:
+                    tol = float(self.cfg.scale_tolerance)
+                    if tol >= 0:
+                        if not (expected_scale * (1 - tol) <= s <= expected_scale * (1 + tol)):
+                            continue
+                if (expected_parity is not None and self.cfg.enforce_parity
+                        and self.cfg.allow_reflection):
+                    detR = float(np.linalg.det(R))
+                    if not np.isfinite(detR) or np.sign(detR) != expected_parity:
+                        continue
+
+                det_uv1 = apply_similarity(det_xy_stage1, R, t, s)
+                dist, nn = ref_tree.query(det_uv1, k=1, distance_upper_bound=r1)
+                ok = np.isfinite(dist) & (dist < r1) & (nn < len(ref_uv))
+                if not np.any(ok):
+                    continue
+
+                weights = 1.0 - (dist[ok] / r1) ** 2
+                score = float(np.sum(weights))
+
+                _try_insert(score, R, t, s)
+
+        if not top_hyp:
+            raise _PatternMatchFailed(
+                "Pattern matching failed at stage 1. "
+                "Try increasing n_det/n_ref, eps_desc, or stage1_radius_arcsec.")
+
+        # --- Stage 2 ---
+        top_hyp.sort(key=lambda x: x[0], reverse=True)
+
+        best = {"score": -1.0, "inliers": -1, "R": None, "t": None, "s": None, "pairs": None}
+
+        for (score1, R, t, s) in top_hyp:
+            if expected_scale is not None and self.cfg.scale_tolerance is not None:
+                tol = float(self.cfg.scale_tolerance)
+                if tol >= 0:
+                    if not (expected_scale * (1 - tol) <= s <= expected_scale * (1 + tol)):
+                        continue
+            if (expected_parity is not None and self.cfg.enforce_parity
+                    and self.cfg.allow_reflection):
+                detR = float(np.linalg.det(R))
+                if not np.isfinite(detR) or np.sign(detR) != expected_parity:
+                    continue
+
+            det_uv = apply_similarity(det_xy, R, t, s)
+
+            det_ids, ref_ids = _mutual_nearest_neighbor(det_uv, ref_uv, r2, tree_b=ref_tree)
+
+            if len(det_ids) == 0:
+                continue
+
+            dists = np.hypot(
+                det_uv[det_ids, 0] - ref_uv[ref_ids, 0],
+                det_uv[det_ids, 1] - ref_uv[ref_ids, 1]
+            )
+            weights = 1.0 - (dists / r2) ** 2
+            score = float(np.sum(weights))
+
+            pairs = list(zip(det_ids.tolist(), ref_ids.tolist()))
+
+            if score > best["score"]:
+                best = {"score": score, "inliers": len(pairs), "R": R, "t": t, "s": s, "pairs": pairs}
+
+        if best["inliers"] < 8:
+            raise _PatternMatchFailed(
+                f"Pattern matching failed at stage 2 (best inliers={best['inliers']}). "
+                f"Try loosening stage2_radius_arcsec or increasing top_k_hypotheses.")
+
+        # --- Iterative affine re-matching ---
+        pairs = best["pairs"]
+        r_rematch = r2
+
+        for rematch_it in range(self.cfg.refine_rematch_iters):
+            if len(pairs) < 6:
+                break
+
+            pairs_arr = np.array(pairs, dtype=np.int32)
+            A_pts = det_xy[pairs_arr[:, 0]]
+            B_pts = ref_uv[pairs_arr[:, 1]]
+
+            try:
+                M_affine, t_affine = estimate_affine_2d(A_pts, B_pts)
+                det_uv_affine = apply_affine(det_xy, M_affine, t_affine)
+            except Exception:
+                break
+
+            r_iter = r_rematch * (0.8 if rematch_it > 0 else 1.0)
+
+            new_det_ids, new_ref_ids = _mutual_nearest_neighbor(
+                det_uv_affine, ref_uv, r_iter, tree_b=ref_tree
+            )
+
+            if len(new_det_ids) < max(8, int(len(pairs) * 0.6)):
+                break
+
+            pairs = list(zip(new_det_ids.tolist(), new_ref_ids.tolist()))
+
+        return pairs, top_hyp, best
 
     def refine(self, obj: Table, cat: Table, wcs_init: WCS) -> Tuple[WCS, Table, dict]:
         if not all(k in obj.colnames for k in ("x", "y")):
@@ -694,278 +979,77 @@ class QuadHashAstrometry:
             raise RuntimeError("Could not determine pixel scale from WCS.")
         pixel_scale_arcsec = pixel_scale_deg * 3600.0
 
-        # Bright subsets
-        obj_sub_idx = _pick_brightest_obj(Table({"x": x, "y": y, "mag": m_obj}), self.cfg.n_det)
-        cat_sub_idx = _pick_brightest_cat(Table({"ra": ra, "dec": dec, "mag": m_cat}), self.cfg.n_ref)
+        # --- Adaptive source count retry loop (SCAMP-inspired) ---
+        # Try pattern matching with increasing source counts. On each retry,
+        # double n_det/n_ref to bring in more sources for matching.
+        n_retries = max(0, self.cfg.adaptive_n_retry)
+        last_error = None
+        pairs = None
 
-        det_xy = np.column_stack([x[obj_sub_idx], y[obj_sub_idx]])
-        det_mag = m_obj[obj_sub_idx]
+        for _attempt in range(n_retries + 1):
+            scale_factor = 2 ** _attempt
+            cur_n_det = min(self.cfg.n_det * scale_factor, len(x))
+            cur_n_ref = min(self.cfg.n_ref * scale_factor, len(ra))
 
-        # Project catalog to pixel space using initial WCS (works for any projection)
-        ref_x_pix, ref_y_pix = wcs_init.all_world2pix(
-            ra[cat_sub_idx], dec[cat_sub_idx], 0
-        )
-        ref_uv = np.column_stack([ref_x_pix, ref_y_pix])
-        ref_mag = m_cat[cat_sub_idx]
+            # Select bright subsets
+            obj_sub_idx = _pick_brightest_obj(Table({"x": x, "y": y, "mag": m_obj}), cur_n_det)
+            cat_sub_idx = _pick_brightest_cat(Table({"ra": ra, "dec": dec, "mag": m_cat}), cur_n_ref)
 
-        # Filter out any non-finite projections (e.g. stars far outside image)
-        ref_finite = np.all(np.isfinite(ref_uv), axis=1)
-        if not np.all(ref_finite):
-            ref_uv = ref_uv[ref_finite]
-            ref_mag = ref_mag[ref_finite]
-            cat_sub_idx = cat_sub_idx[ref_finite]
+            det_xy = np.column_stack([x[obj_sub_idx], y[obj_sub_idx]])
+            det_mag = m_obj[obj_sub_idx]
 
-        if len(det_xy) < 8 or len(ref_uv) < 8:
-            raise RuntimeError("Not enough points after selection.")
+            # Project catalog to pixel space
+            ref_x_pix, ref_y_pix = wcs_init.all_world2pix(
+                ra[cat_sub_idx], dec[cat_sub_idx], 0
+            )
+            ref_uv = np.column_stack([ref_x_pix, ref_y_pix])
+            ref_mag = m_cat[cat_sub_idx]
 
-        # WCS prior: in pixel space expected scale ≈ 1.0, compute parity from WCS
-        expected_scale = None
-        expected_parity = None  # sign of determinant
-        if self.cfg.use_wcs_prior:
-            expected_scale = 1.0  # Both sets in pixel space
-            try:
-                # Compute parity from WCS pixel-to-sky Jacobian
-                crpix = np.asarray(wcs_init.wcs.crpix, dtype=np.float64)
-                if crpix.size == 2 and np.all(np.isfinite(crpix)):
-                    px = np.array([crpix[0], crpix[0] + 1.0, crpix[0]], dtype=np.float64)
-                    py = np.array([crpix[1], crpix[1], crpix[1] + 1.0], dtype=np.float64)
-                    ra_s, dec_s = wcs_init.all_pix2world(px, py, 1)
-                    x_s, y_s = wcs_init.all_world2pix(ra_s, dec_s, 0)
-                    # Jacobian of round-trip should be ~identity; parity from
-                    # the pixel→sky→pixel mapping tells us if WCS flips axes
-                    J = np.array([
-                        [x_s[1] - x_s[0], x_s[2] - x_s[0]],
-                        [y_s[1] - y_s[0], y_s[2] - y_s[0]],
-                    ], dtype=np.float64)
-                    det_j = float(np.linalg.det(J))
-                    # For a self-consistent WCS, det_j ≈ +1 (parity is always +1
-                    # in pixel space since WCS handles the parity internally)
-                    if np.isfinite(det_j) and det_j != 0:
-                        expected_parity = 1.0 if det_j > 0 else -1.0
-            except Exception:
-                expected_parity = None
+            # Filter non-finite projections
+            ref_finite = np.all(np.isfinite(ref_uv), axis=1)
+            if not np.all(ref_finite):
+                ref_uv = ref_uv[ref_finite]
+                ref_mag = ref_mag[ref_finite]
+                cat_sub_idx = cat_sub_idx[ref_finite]
 
-        # --- Consistent baseline binning (#8) ---
-        # Compute ref quad baselines first, derive shared bin edges
-        ref_quads_raw = make_local_quads(ref_uv, k=self.cfg.neighbor_k)
-        ref_bin_edges = None
-        if ref_quads_raw:
-            ref_qa = np.array(ref_quads_raw, dtype=np.int32)
-            _, ref_lens_raw = quad_descriptor_batch(ref_uv, ref_qa)
-            ok_ref = np.isfinite(ref_lens_raw) & (ref_lens_raw > 0)
-            if np.any(ok_ref):
-                ref_bin_edges = compute_bin_edges(ref_lens_raw[ok_ref], self.cfg.n_scale_bins)
-
-        # Reference multiscale hash (using shared bin edges)
-        ref_hash = build_quad_hash_multiscale(
-            ref_uv, ref_mag,
-            k=self.cfg.neighbor_k,
-            eps=self.cfg.eps_desc,
-            n_scale_bins=self.cfg.n_scale_bins,
-            allow_reflection=self.cfg.allow_reflection,
-            bin_edges=ref_bin_edges,
-        )
-
-        # Detection quads + their baseline bins
-        det_quads = make_local_quads(det_xy, k=self.cfg.neighbor_k)
-        if not det_quads:
-            raise RuntimeError("Not enough detections for quad matching.")
-
-        # Vectorized descriptor calculation
-        det_quad_array = np.array(det_quads, dtype=np.int32)
-        det_descs, det_lens = quad_descriptor_batch(det_xy, det_quad_array)
-
-        okq = np.isfinite(det_descs).all(axis=1) & np.isfinite(det_lens) & (det_lens > 0)
-        det_quads = det_quad_array[okq]  # Keep as numpy array
-        det_descs = det_descs[okq]
-        det_lens = det_lens[okq]
-
-        # Both sets in pixel space — baselines directly comparable (#8)
-        if ref_bin_edges is not None:
-            det_bins = baseline_rank_bins(det_lens, n_bins=self.cfg.n_scale_bins, edges=ref_bin_edges)
-        else:
-            det_bins = baseline_rank_bins(det_lens, n_bins=self.cfg.n_scale_bins)
-
-        # Pre-compute quantized descriptors (cache for stage 1 loop)
-        det_quads_quantized = np.array([
-            quantize_desc(desc, self.cfg.eps_desc) for desc in det_descs
-        ], dtype=object)
-
-        # Trees for scoring (pixel space)
-        ref_tree = cKDTree(ref_uv)
-
-        # Stage radii in pixels
-        r1 = self.cfg.stage1_radius_arcsec / pixel_scale_arcsec
-        r2 = self.cfg.stage2_radius_arcsec / pixel_scale_arcsec
-
-        # Stage1 detection subset: brightest among det_xy itself (already bright), so just take first stage1_n by det_mag
-        order_det = np.argsort(det_mag)  # smaller = brighter
-        det_stage1_ids = order_det[: min(self.cfg.stage1_n_det, len(order_det))]
-        det_xy_stage1 = det_xy[det_stage1_ids]
-
-        # Hypothesis storage: keep top-K by stage1 score (now float for weighted scoring)
-        top_hyp: List[Tuple[float, np.ndarray, np.ndarray, float]] = []
-
-        rng = np.random.default_rng(12345)
-
-        q_order = np.arange(len(det_quads))
-        rng.shuffle(q_order)
-        q_order = q_order[: min(self.cfg.max_quads_tested, len(q_order))]
-
-        def _try_insert(score: float, R: np.ndarray, t: np.ndarray, s: float):
-            nonlocal top_hyp
-            if len(top_hyp) < self.cfg.top_k_hypotheses:
-                top_hyp.append((score, R, t, s))
-                return
-            # replace worst if better
-            worst_i = int(np.argmin([h[0] for h in top_hyp]))
-            if score > top_hyp[worst_i][0]:
-                top_hyp[worst_i] = (score, R, t, s)
-
-        # --- Stage 1: cheap scoring with multi-probe hashing (#7) and weighted scoring (#5) ---
-        for qi in q_order:
-            q = det_quads[qi]
-            bin_id = int(det_bins[qi])
-
-            kdesc = det_quads_quantized[qi]
-
-            # Gather candidates: multi-probe (#7) or full neighbor search
-            candidates: List[QuadEntry] = []
-            if self.cfg.use_multiprobe:
-                for kdesc2 in multiprobe_desc_keys(det_descs[qi], self.cfg.eps_desc):
-                    kk = (bin_id, kdesc2)
-                    if kk in ref_hash:
-                        candidates.extend(ref_hash[kk])
-            else:
-                for kdesc2 in neighbors_bins(kdesc, r=self.cfg.bin_neighbor_radius):
-                    kk = (bin_id, kdesc2)
-                    if kk in ref_hash:
-                        candidates.extend(ref_hash[kk])
-
-            if not candidates:
+            if len(det_xy) < 8 or len(ref_uv) < 8:
+                last_error = _PatternMatchFailed("Not enough points after selection.")
                 continue
 
-            # Optional quad mag signature
-            det_sig = mag_signature(det_mag[q]) if self.cfg.use_mag_signature else None
-
-            rng.shuffle(candidates)
-            for ce in candidates[: self.cfg.max_candidates_per_bucket]:
-                if det_sig is not None and ce.mags is not None:
-                    if mag_signature(np.array(ce.mags)) != det_sig:
-                        continue
-
-                P = det_xy[q]
-                Q = ref_uv[list(ce.idxs)]
-
-                try:
-                    R, t, s = estimate_similarity_2d(P, Q, allow_reflection=self.cfg.allow_reflection)
-                except Exception:
-                    continue
-
-                # Filter by WCS prior scale/parity if requested
-                if expected_scale is not None and self.cfg.scale_tolerance is not None:
-                    tol = float(self.cfg.scale_tolerance)
-                    if tol >= 0:
-                        if not (expected_scale * (1 - tol) <= s <= expected_scale * (1 + tol)):
-                            continue
-                if (expected_parity is not None and self.cfg.enforce_parity
-                        and self.cfg.allow_reflection):
-                    detR = float(np.linalg.det(R))
-                    if not np.isfinite(detR) or np.sign(detR) != expected_parity:
-                        continue
-
-                # Weighted score on stage1 subset (#5)
-                det_uv1 = apply_similarity(det_xy_stage1, R, t, s)
-                dist, nn = ref_tree.query(det_uv1, k=1, distance_upper_bound=r1)
-                ok = np.isfinite(dist) & (dist < r1) & (nn < len(ref_uv))
-                if not np.any(ok):
-                    continue
-
-                # Quadratic weight: closer matches score higher
-                weights = 1.0 - (dist[ok] / r1) ** 2
-                score = float(np.sum(weights))
-
-                _try_insert(score, R, t, s)
-
-        if not top_hyp:
-            raise RuntimeError("Pattern matching failed at stage 1. Try increasing n_det/n_ref, eps_desc, or stage1_radius_arcsec.")
-
-        # --- Stage 2: full scoring with mutual nearest-neighbor (#3) and weighted scoring (#5) ---
-        # Sort hypotheses by stage1 score descending
-        top_hyp.sort(key=lambda x: x[0], reverse=True)
-
-        best = {"score": -1.0, "inliers": -1, "R": None, "t": None, "s": None, "pairs": None}
-
-        for (score1, R, t, s) in top_hyp:
-            if expected_scale is not None and self.cfg.scale_tolerance is not None:
-                tol = float(self.cfg.scale_tolerance)
-                if tol >= 0:
-                    if not (expected_scale * (1 - tol) <= s <= expected_scale * (1 + tol)):
-                        continue
-            if (expected_parity is not None and self.cfg.enforce_parity
-                    and self.cfg.allow_reflection):
-                detR = float(np.linalg.det(R))
-                if not np.isfinite(detR) or np.sign(detR) != expected_parity:
-                    continue
-
-            det_uv = apply_similarity(det_xy, R, t, s)
-
-            # Mutual nearest-neighbor matching (#3)
-            det_ids, ref_ids = _mutual_nearest_neighbor(det_uv, ref_uv, r2, tree_b=ref_tree)
-
-            if len(det_ids) == 0:
-                continue
-
-            # Weighted score (#5): closer matches count more
-            dists = np.hypot(
-                det_uv[det_ids, 0] - ref_uv[ref_ids, 0],
-                det_uv[det_ids, 1] - ref_uv[ref_ids, 1]
-            )
-            weights = 1.0 - (dists / r2) ** 2
-            score = float(np.sum(weights))
-
-            pairs = list(zip(det_ids.tolist(), ref_ids.tolist()))
-
-            if score > best["score"]:
-                best = {"score": score, "inliers": len(pairs), "R": R, "t": t, "s": s, "pairs": pairs}
-
-        if best["inliers"] < 8:
-            raise RuntimeError(f"Pattern matching failed at stage 2 (best inliers={best['inliers']}). "
-                               f"Try loosening stage2_radius_arcsec or increasing top_k_hypotheses.")
-
-        # --- Iterative affine re-matching (#1, #2) ---
-        # Refine the match set by fitting an affine from current inliers,
-        # re-projecting all detections, and re-matching with mutual NN
-        pairs = best["pairs"]
-        r_rematch = r2
-
-        for rematch_it in range(self.cfg.refine_rematch_iters):
-            if len(pairs) < 6:
-                break
-
-            pairs_arr = np.array(pairs, dtype=np.int32)
-            A_pts = det_xy[pairs_arr[:, 0]]
-            B_pts = ref_uv[pairs_arr[:, 1]]
+            # Auto matching resolution: compute from source density
+            if self.cfg.auto_match_resolution:
+                auto_r_pix = _auto_match_resolution(det_xy, ref_uv, pixel_scale_arcsec)
+                if auto_r_pix is not None:
+                    auto_r_arcsec = auto_r_pix * pixel_scale_arcsec
+                    self.cfg = dataclasses.replace(
+                        self.cfg,
+                        stage1_radius_arcsec=max(self.cfg.stage1_radius_arcsec, auto_r_arcsec * 2.5),
+                        stage2_radius_arcsec=max(self.cfg.stage2_radius_arcsec, auto_r_arcsec),
+                    )
 
             try:
-                M_affine, t_affine = estimate_affine_2d(A_pts, B_pts)
-                # Re-project all detections using affine
-                det_uv_affine = apply_affine(det_xy, M_affine, t_affine)
-            except Exception:
+                pairs, top_hyp, best = self._pattern_match(
+                    det_xy, det_mag, ref_uv, ref_mag, wcs_init, pixel_scale_arcsec,
+                )
+            except _PatternMatchFailed as e:
+                last_error = e
+                # If we can still double and haven't exhausted sources, retry
+                if cur_n_det < len(x) or cur_n_ref < len(ra):
+                    continue
+                else:
+                    break
+
+            # Check if we have enough inliers
+            if len(pairs) >= self.cfg.adaptive_min_inliers:
                 break
+            # Not enough inliers — retry with more sources if possible
+            last_error = _PatternMatchFailed(
+                f"Only {len(pairs)} inliers (need {self.cfg.adaptive_min_inliers})")
+            if cur_n_det >= len(x) and cur_n_ref >= len(ra):
+                break  # can't add more sources
 
-            # Tighten radius on later iterations
-            r_iter = r_rematch * (0.8 if rematch_it > 0 else 1.0)
-
-            # Mutual NN re-matching
-            new_det_ids, new_ref_ids = _mutual_nearest_neighbor(
-                det_uv_affine, ref_uv, r_iter, tree_b=ref_tree
-            )
-
-            if len(new_det_ids) < max(8, int(len(pairs) * 0.6)):
-                break
-
-            pairs = list(zip(new_det_ids.tolist(), new_ref_ids.tolist()))
+        if pairs is None or len(pairs) < 8:
+            raise RuntimeError(str(last_error) if last_error else "Pattern matching failed.")
 
         # Build match list for final fit
         pairs_arr = np.array(pairs, dtype=np.int32)
