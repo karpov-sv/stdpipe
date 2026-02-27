@@ -27,6 +27,7 @@ def run_psfex(
     gain=1,
     minarea=5,
     vignet_size=None,
+    psf_size=None,
     order=0,
     sex_extra=None,
     checkimages=None,
@@ -51,6 +52,7 @@ def run_psfex(
     :param gain: Image gain
     :param minarea: Minimal number of pixels in the object to be considered a detection (`DETECT_MINAREA` parameter of SExtractor)
     :param vignet_size: The size of *postage stamps* to be used for PSF model creation
+    :param psf_size: The size of the supersampled PSF model
     :param order: Spatial order of PSF model variance
     :param sex_extra: Dictionary of additional options to be passed to SExtractor for initial object detection (`extra` parameter of :func:`stdpipe.photometry.get_objects_sextractor`). Optional
     :param checkimages: List of PSFEx checkimages to return along with PSF model. Optional.
@@ -205,6 +207,9 @@ def run_psfex(
 
     opts.update(extra)
 
+    if psf_size is not None:
+        opts['PSF_SIZE'] = [psf_size, psf_size]
+
     # Build the command line
     cmd = (
         binname + ' ' + shlex.quote(catname) + ' ' + utils.format_astromatic_opts(opts)
@@ -222,6 +227,29 @@ def run_psfex(
         log('PSFEx run succeeded')
 
         psf = load_psf(psfname, verbose=verbose)
+
+        # Check whether the PSF model extends beyond the vignet coverage.
+        # PSFEx uses Lanczos interpolation with renormalization at boundaries
+        # when resampling vignets into the PSF grid. When the PSF model is
+        # larger than the vignet (in image pixels), the boundary pixels get
+        # spurious non-zero values from the renormalized partial kernel,
+        # which biases the PSF wings and corrupts flux measurements.
+        psf_extent = psf['width'] * psf['sampling']
+        if psf_extent > vignet_size:
+            import warnings
+            warnings.warn(
+                "PSF model extent (%.0f x %.0f pixels = psf_size %d x sampling %.3f) "
+                "exceeds vignet size (%d pixels). This causes interpolation artifacts "
+                "in the PSF wings that bias flux measurements. "
+                "Either increase vignet_size to >= %.0f or decrease psf_size to <= %d."
+                % (
+                    psf_extent, psf_extent,
+                    psf['width'], psf['sampling'],
+                    vignet_size,
+                    psf_extent,
+                    int(vignet_size / psf['sampling']),
+                )
+            )
 
         if psffile is not None:
             shutil.copyfile(psfname, psffile)
