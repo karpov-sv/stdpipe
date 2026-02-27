@@ -434,6 +434,213 @@ def tan_wcs_to_zpn(
     return w
 
 
+def _fit_tan_sip_robust(
+    xy,
+    world_coords,
+    proj_point="center",
+    projection=None,
+    sip_degree=2,
+    robust_loss="soft_l1",
+    f_scale=None,
+):
+    """Fit TAN+SIP WCS with robust loss function.
+
+    Replicates astropy's ``fit_wcs_from_points`` two-stage fitting
+    (linear WCS, then joint CD + CRPIX + SIP) but uses a robust loss
+    in the linear stage and a two-pass approach for the SIP stage:
+    first L2 to capture the distortion pattern, then robust re-fit
+    with data-driven ``f_scale`` to suppress outliers.
+
+    Parameters
+    ----------
+    xy : tuple of arrays ``(x, y)``
+        Pixel coordinates.
+    world_coords : `~astropy.coordinates.SkyCoord`
+        Reference sky positions.
+    proj_point : str or SkyCoord
+        Projection center ('center' or explicit).
+    projection : WCS or None
+        Template WCS; used as initial guess for CD matrix.
+    sip_degree : int
+        SIP polynomial degree.
+    robust_loss : str
+        Loss function for `scipy.optimize.least_squares`.
+    f_scale : float or None
+        Soft margin for robust loss.  If None (default), estimated
+        adaptively from the residuals after the initial L2 SIP fit.
+
+    Returns
+    -------
+    wcs : `~astropy.wcs.WCS`
+    """
+    import copy
+
+    from scipy.optimize import least_squares
+
+    import astropy.units as u
+    from astropy.coordinates import SkyCoord
+    from astropy.wcs.utils import (
+        _linear_wcs_fit,
+        _sip_fit,
+        celestial_frame_to_wcs,
+    )
+
+    xp, yp = xy
+    try:
+        lon, lat = world_coords.data.lon.deg, world_coords.data.lat.deg
+    except AttributeError:
+        unit_sph = world_coords.unit_spherical
+        lon, lat = unit_sph.lon.deg, unit_sph.lat.deg
+
+    use_center_as_proj_point = str(proj_point) == "center"
+
+    # Build WCS template
+    if isinstance(projection, str) or projection is None:
+        proj_code = projection if isinstance(projection, str) else "TAN"
+        wcs = celestial_frame_to_wcs(
+            frame=world_coords.frame, projection=proj_code
+        )
+    else:
+        wcs = copy.deepcopy(projection)
+        wcs.sip = None
+
+    if wcs.wcs.has_pc():
+        wcs.wcs.cd = wcs.wcs.pc * wcs.wcs.cdelt
+        wcs.wcs.cdelt = (1.0, 1.0)
+        wcs.wcs.__delattr__("pc")
+
+    xpmin, xpmax = xp.min(), xp.max()
+    ypmin, ypmax = yp.min(), yp.max()
+
+    wcs.pixel_shape = (
+        1 if xpmax <= 0.0 else int(np.ceil(xpmax)),
+        1 if ypmax <= 0.0 else int(np.ceil(ypmax)),
+    )
+
+    if use_center_as_proj_point:
+        sc1 = SkyCoord(lon.min() * u.deg, lat.max() * u.deg)
+        sc2 = SkyCoord(lon.max() * u.deg, lat.min() * u.deg)
+        pa = sc1.position_angle(sc2)
+        sep = sc1.separation(sc2)
+        midpoint_sc = sc1.directional_offset_by(pa, sep / 2)
+        wcs.wcs.crval = (midpoint_sc.data.lon.deg, midpoint_sc.data.lat.deg)
+        wcs.wcs.crpix = ((xpmax + xpmin) / 2.0, (ypmax + ypmin) / 2.0)
+    else:
+        proj_point.transform_to(world_coords)
+        wcs.wcs.crval = (proj_point.data.lon.deg, proj_point.data.lat.deg)
+        close = lambda l, p: p[np.argmin(np.abs(l))]
+        wcs.wcs.crpix = (
+            close(lon - wcs.wcs.crval[0], xp + 1),
+            close(lon - wcs.wcs.crval[1], yp + 1),
+        )
+
+    if xpmin == xpmax:
+        xpmin, xpmax = xpmin - 0.5, xpmax + 0.5
+    if ypmin == ypmax:
+        ypmin, ypmax = ypmin - 0.5, ypmax + 0.5
+
+    # --- Stage 1: linear WCS (CD + CRPIX) ---
+    # Use robust loss here: linear residuals include distortion as systematic
+    # pattern that looks like outliers; robust loss prevents them from biasing
+    # the linear fit.
+    p0_lin = np.concatenate([wcs.wcs.cd.flatten(), wcs.wcs.crpix.flatten()])
+    lin_resids = _linear_wcs_fit(p0_lin, lon, lat, xp, yp, wcs)
+    lin_f_scale = max(float(np.median(np.abs(lin_resids)) * 3), 1.0 / 3600)
+
+    fit = least_squares(
+        _linear_wcs_fit,
+        p0_lin,
+        args=(lon, lat, xp, yp, wcs),
+        bounds=[
+            [-np.inf, -np.inf, -np.inf, -np.inf, xpmin + 1, ypmin + 1],
+            [np.inf, np.inf, np.inf, np.inf, xpmax + 1, ypmax + 1],
+        ],
+        loss=robust_loss,
+        f_scale=lin_f_scale,
+        method="trf",
+    )
+    wcs.wcs.crpix = np.array(fit.x[4:6])
+    wcs.wcs.cd = np.array(fit.x[0:4].reshape((2, 2)))
+
+    # --- Stage 2: joint CD + CRPIX + SIP ---
+    degree = sip_degree
+    if "-SIP" not in wcs.wcs.ctype[0]:
+        wcs.wcs.ctype = [x + "-SIP" for x in wcs.wcs.ctype]
+
+    coef_names = [
+        f"{i}_{j}"
+        for i in range(degree + 1)
+        for j in range(degree + 1)
+        if (i + j) < (degree + 1) and (i + j) > 1
+    ]
+
+    sip_bounds = (
+        [xpmin + 1, ypmin + 1] + [-np.inf] * (4 + 2 * len(coef_names)),
+        [xpmax + 1, ypmax + 1] + [np.inf] * (4 + 2 * len(coef_names)),
+    )
+
+    # Pass 1: L2 fit to capture the full distortion pattern (SIP starts at 0)
+    p0_sip = np.concatenate(
+        (
+            np.array(wcs.wcs.crpix),
+            wcs.wcs.cd.flatten(),
+            np.zeros(2 * len(coef_names)),
+        )
+    )
+
+    fit = least_squares(
+        _sip_fit,
+        p0_sip,
+        args=(lon, lat, xp, yp, wcs, degree, coef_names),
+        bounds=sip_bounds,
+    )
+
+    # Pass 2: robust re-fit starting from L2 solution
+    # f_scale estimated from L2 residuals so distortion signal is inlier
+    sip_resids = fit.fun
+    if f_scale is None:
+        sip_f_scale = max(float(np.median(np.abs(sip_resids)) * 3), 1e-7)
+    else:
+        sip_f_scale = float(f_scale)
+
+    fit = least_squares(
+        _sip_fit,
+        fit.x,  # warm-start from L2 solution
+        args=(lon, lat, xp, yp, wcs, degree, coef_names),
+        bounds=sip_bounds,
+        loss=robust_loss,
+        f_scale=sip_f_scale,
+        method="trf",
+    )
+
+    coef_fit = (
+        list(fit.x[6 : 6 + len(coef_names)]),
+        list(fit.x[6 + len(coef_names) :]),
+    )
+
+    wcs.wcs.cd = fit.x[2:6].reshape((2, 2))
+    wcs.wcs.crpix = fit.x[0:2]
+
+    a_vals = np.zeros((degree + 1, degree + 1))
+    b_vals = np.zeros((degree + 1, degree + 1))
+
+    for coef_name in coef_names:
+        a_vals[int(coef_name[0])][int(coef_name[2])] = coef_fit[0].pop(0)
+        b_vals[int(coef_name[0])][int(coef_name[2])] = coef_fit[1].pop(0)
+
+    from astropy.wcs.wcs import Sip
+
+    wcs.sip = Sip(
+        a_vals,
+        b_vals,
+        np.zeros((degree + 1, degree + 1)),
+        np.zeros((degree + 1, degree + 1)),
+        wcs.wcs.crpix,
+    )
+
+    return wcs
+
+
 def fit_wcs_from_points(
     xy,
     world_coords,
@@ -501,7 +708,7 @@ def fit_wcs_from_points(
         )
         return wcs_best
 
-    # ---------- Non-ZPN: delegate to astropy ----------
+    # ---------- Non-ZPN ----------
     # SIP only makes sense for TAN-based projections
     effective_sip = sip_degree
     if isinstance(projection, WCS):
@@ -512,20 +719,12 @@ def fit_wcs_from_points(
             pass
 
     if effective_sip is not None and effective_sip > 0:
-        try:
-            return _astropy_fit(
-                xy, world_coords,
-                proj_point=proj_point,
-                projection=projection,
-                sip_degree=int(effective_sip),
-            )
-        except TypeError:
-            # Older astropy without sip_degree kwarg
-            return _astropy_fit(
-                xy, world_coords,
-                proj_point=proj_point,
-                projection=projection,
-            )
+        return _fit_tan_sip_robust(
+            xy, world_coords,
+            proj_point=proj_point,
+            projection=projection,
+            sip_degree=int(effective_sip),
+        )
 
     return _astropy_fit(
         xy, world_coords,
