@@ -598,8 +598,7 @@ class _PatternMatchFailed(RuntimeError):
     pass
 
 
-def _auto_match_resolution(det_xy: np.ndarray, ref_uv: np.ndarray,
-                           pixel_scale_arcsec: float) -> Optional[float]:
+def _auto_match_resolution(det_xy: np.ndarray, ref_uv: np.ndarray) -> Optional[float]:
     """Compute matching resolution from source density (SCAMP-inspired).
 
     Uses the mean inter-source spacing as confusion limit:
@@ -695,16 +694,19 @@ class QuadHashAstrometry:
         ref_mag: np.ndarray,
         wcs_init: WCS,
         pixel_scale_arcsec: float,
+        cfg: Optional['AstrometryConfig'] = None,
     ) -> Tuple[list, list, dict]:
         """Run quad-hash pattern matching (stages 1 & 2) + affine re-matching.
 
         Returns (pairs, top_hyp, best) where pairs is list of (det_idx, ref_idx).
         Raises _PatternMatchFailed if matching fails.
         """
+        if cfg is None:
+            cfg = self.cfg
         # WCS prior: in pixel space expected scale ≈ 1.0, compute parity from WCS
         expected_scale = None
         expected_parity = None  # sign of determinant
-        if self.cfg.use_wcs_prior:
+        if cfg.use_wcs_prior:
             expected_scale = 1.0  # Both sets in pixel space
             try:
                 crpix = np.asarray(wcs_init.wcs.crpix, dtype=np.float64)
@@ -724,27 +726,27 @@ class QuadHashAstrometry:
                 expected_parity = None
 
         # --- Consistent baseline binning ---
-        ref_quads_raw = make_local_quads(ref_uv, k=self.cfg.neighbor_k)
+        ref_quads_raw = make_local_quads(ref_uv, k=cfg.neighbor_k)
         ref_bin_edges = None
         if ref_quads_raw:
             ref_qa = np.array(ref_quads_raw, dtype=np.int32)
             _, ref_lens_raw = quad_descriptor_batch(ref_uv, ref_qa)
             ok_ref = np.isfinite(ref_lens_raw) & (ref_lens_raw > 0)
             if np.any(ok_ref):
-                ref_bin_edges = compute_bin_edges(ref_lens_raw[ok_ref], self.cfg.n_scale_bins)
+                ref_bin_edges = compute_bin_edges(ref_lens_raw[ok_ref], cfg.n_scale_bins)
 
         # Reference multiscale hash
         ref_hash = build_quad_hash_multiscale(
             ref_uv, ref_mag,
-            k=self.cfg.neighbor_k,
-            eps=self.cfg.eps_desc,
-            n_scale_bins=self.cfg.n_scale_bins,
-            allow_reflection=self.cfg.allow_reflection,
+            k=cfg.neighbor_k,
+            eps=cfg.eps_desc,
+            n_scale_bins=cfg.n_scale_bins,
+            allow_reflection=cfg.allow_reflection,
             bin_edges=ref_bin_edges,
         )
 
         # Detection quads
-        det_quads = make_local_quads(det_xy, k=self.cfg.neighbor_k)
+        det_quads = make_local_quads(det_xy, k=cfg.neighbor_k)
         if not det_quads:
             raise _PatternMatchFailed("Not enough detections for quad matching.")
 
@@ -757,23 +759,23 @@ class QuadHashAstrometry:
         det_lens = det_lens[okq]
 
         if ref_bin_edges is not None:
-            det_bins = baseline_rank_bins(det_lens, n_bins=self.cfg.n_scale_bins, edges=ref_bin_edges)
+            det_bins = baseline_rank_bins(det_lens, n_bins=cfg.n_scale_bins, edges=ref_bin_edges)
         else:
-            det_bins = baseline_rank_bins(det_lens, n_bins=self.cfg.n_scale_bins)
+            det_bins = baseline_rank_bins(det_lens, n_bins=cfg.n_scale_bins)
 
         det_quads_quantized = np.array([
-            quantize_desc(desc, self.cfg.eps_desc) for desc in det_descs
+            quantize_desc(desc, cfg.eps_desc) for desc in det_descs
         ], dtype=object)
 
         ref_tree = cKDTree(ref_uv)
 
         # Stage radii in pixels
-        r1 = self.cfg.stage1_radius_arcsec / pixel_scale_arcsec
-        r2 = self.cfg.stage2_radius_arcsec / pixel_scale_arcsec
+        r1 = cfg.stage1_radius_arcsec / pixel_scale_arcsec
+        r2 = cfg.stage2_radius_arcsec / pixel_scale_arcsec
 
         # Stage1 detection subset
         order_det = np.argsort(det_mag)
-        det_stage1_ids = order_det[: min(self.cfg.stage1_n_det, len(order_det))]
+        det_stage1_ids = order_det[: min(cfg.stage1_n_det, len(order_det))]
         det_xy_stage1 = det_xy[det_stage1_ids]
 
         top_hyp: List[Tuple[float, np.ndarray, np.ndarray, float]] = []
@@ -782,11 +784,11 @@ class QuadHashAstrometry:
 
         q_order = np.arange(len(det_quads))
         rng.shuffle(q_order)
-        q_order = q_order[: min(self.cfg.max_quads_tested, len(q_order))]
+        q_order = q_order[: min(cfg.max_quads_tested, len(q_order))]
 
         def _try_insert(score: float, R: np.ndarray, t: np.ndarray, s: float):
             nonlocal top_hyp
-            if len(top_hyp) < self.cfg.top_k_hypotheses:
+            if len(top_hyp) < cfg.top_k_hypotheses:
                 top_hyp.append((score, R, t, s))
                 return
             worst_i = int(np.argmin([h[0] for h in top_hyp]))
@@ -801,13 +803,13 @@ class QuadHashAstrometry:
             kdesc = det_quads_quantized[qi]
 
             candidates: List[QuadEntry] = []
-            if self.cfg.use_multiprobe:
-                for kdesc2 in multiprobe_desc_keys(det_descs[qi], self.cfg.eps_desc):
+            if cfg.use_multiprobe:
+                for kdesc2 in multiprobe_desc_keys(det_descs[qi], cfg.eps_desc):
                     kk = (bin_id, kdesc2)
                     if kk in ref_hash:
                         candidates.extend(ref_hash[kk])
             else:
-                for kdesc2 in neighbors_bins(kdesc, r=self.cfg.bin_neighbor_radius):
+                for kdesc2 in neighbors_bins(kdesc, r=cfg.bin_neighbor_radius):
                     kk = (bin_id, kdesc2)
                     if kk in ref_hash:
                         candidates.extend(ref_hash[kk])
@@ -815,10 +817,10 @@ class QuadHashAstrometry:
             if not candidates:
                 continue
 
-            det_sig = mag_signature(det_mag[q]) if self.cfg.use_mag_signature else None
+            det_sig = mag_signature(det_mag[q]) if cfg.use_mag_signature else None
 
             rng.shuffle(candidates)
-            for ce in candidates[: self.cfg.max_candidates_per_bucket]:
+            for ce in candidates[: cfg.max_candidates_per_bucket]:
                 if det_sig is not None and ce.mags is not None:
                     if mag_signature(np.array(ce.mags)) != det_sig:
                         continue
@@ -827,17 +829,17 @@ class QuadHashAstrometry:
                 Q = ref_uv[list(ce.idxs)]
 
                 try:
-                    R, t, s = estimate_similarity_2d(P, Q, allow_reflection=self.cfg.allow_reflection)
+                    R, t, s = estimate_similarity_2d(P, Q, allow_reflection=cfg.allow_reflection)
                 except Exception:
                     continue
 
-                if expected_scale is not None and self.cfg.scale_tolerance is not None:
-                    tol = float(self.cfg.scale_tolerance)
+                if expected_scale is not None and cfg.scale_tolerance is not None:
+                    tol = float(cfg.scale_tolerance)
                     if tol >= 0:
                         if not (expected_scale * (1 - tol) <= s <= expected_scale * (1 + tol)):
                             continue
-                if (expected_parity is not None and self.cfg.enforce_parity
-                        and self.cfg.allow_reflection):
+                if (expected_parity is not None and cfg.enforce_parity
+                        and cfg.allow_reflection):
                     detR = float(np.linalg.det(R))
                     if not np.isfinite(detR) or np.sign(detR) != expected_parity:
                         continue
@@ -864,13 +866,13 @@ class QuadHashAstrometry:
         best = {"score": -1.0, "inliers": -1, "R": None, "t": None, "s": None, "pairs": None}
 
         for (score1, R, t, s) in top_hyp:
-            if expected_scale is not None and self.cfg.scale_tolerance is not None:
-                tol = float(self.cfg.scale_tolerance)
+            if expected_scale is not None and cfg.scale_tolerance is not None:
+                tol = float(cfg.scale_tolerance)
                 if tol >= 0:
                     if not (expected_scale * (1 - tol) <= s <= expected_scale * (1 + tol)):
                         continue
-            if (expected_parity is not None and self.cfg.enforce_parity
-                    and self.cfg.allow_reflection):
+            if (expected_parity is not None and cfg.enforce_parity
+                    and cfg.allow_reflection):
                 detR = float(np.linalg.det(R))
                 if not np.isfinite(detR) or np.sign(detR) != expected_parity:
                     continue
@@ -903,7 +905,7 @@ class QuadHashAstrometry:
         pairs = best["pairs"]
         r_rematch = r2
 
-        for rematch_it in range(self.cfg.refine_rematch_iters):
+        for rematch_it in range(cfg.refine_rematch_iters):
             if len(pairs) < 6:
                 break
 
@@ -982,69 +984,76 @@ class QuadHashAstrometry:
         # --- Adaptive source count retry loop (SCAMP-inspired) ---
         # Try pattern matching with increasing source counts. On each retry,
         # double n_det/n_ref to bring in more sources for matching.
-        n_retries = max(0, self.cfg.adaptive_n_retry)
+
+        # Pre-sort by brightness (avoids re-sorting each retry)
+        obj_order = np.argsort(m_obj)  # lower mag = brighter
+        cat_order = np.argsort(m_cat)
+
+        # Project full catalog to pixel space once (slice per retry)
+        all_ref_xy = np.column_stack(wcs_init.all_world2pix(ra, dec, 0))
+        all_ref_finite = np.all(np.isfinite(all_ref_xy), axis=1)
+
+        # Local config copy so auto_match_resolution doesn't mutate self.cfg
+        cfg = dataclasses.replace(self.cfg)
+
+        n_retries = max(0, cfg.adaptive_n_retry)
         last_error = None
         pairs = None
 
         for _attempt in range(n_retries + 1):
             scale_factor = 2 ** _attempt
-            cur_n_det = min(self.cfg.n_det * scale_factor, len(x))
-            cur_n_ref = min(self.cfg.n_ref * scale_factor, len(ra))
+            cur_n_det = min(cfg.n_det * scale_factor, len(x))
+            cur_n_ref = min(cfg.n_ref * scale_factor, len(ra))
 
-            # Select bright subsets
-            obj_sub_idx = _pick_brightest_obj(Table({"x": x, "y": y, "mag": m_obj}), cur_n_det)
-            cat_sub_idx = _pick_brightest_cat(Table({"ra": ra, "dec": dec, "mag": m_cat}), cur_n_ref)
+            # Select bright subsets (pre-sorted, just slice)
+            obj_sub_idx = obj_order[:cur_n_det]
+            cat_sub_idx = cat_order[:cur_n_ref]
 
             det_xy = np.column_stack([x[obj_sub_idx], y[obj_sub_idx]])
             det_mag = m_obj[obj_sub_idx]
 
-            # Project catalog to pixel space
-            ref_x_pix, ref_y_pix = wcs_init.all_world2pix(
-                ra[cat_sub_idx], dec[cat_sub_idx], 0
-            )
-            ref_uv = np.column_stack([ref_x_pix, ref_y_pix])
+            # Slice pre-projected catalog and filter non-finite
+            ref_uv = all_ref_xy[cat_sub_idx]
             ref_mag = m_cat[cat_sub_idx]
-
-            # Filter non-finite projections
-            ref_finite = np.all(np.isfinite(ref_uv), axis=1)
-            if not np.all(ref_finite):
-                ref_uv = ref_uv[ref_finite]
-                ref_mag = ref_mag[ref_finite]
-                cat_sub_idx = cat_sub_idx[ref_finite]
+            ref_ok = all_ref_finite[cat_sub_idx]
+            if not np.all(ref_ok):
+                ref_uv = ref_uv[ref_ok]
+                ref_mag = ref_mag[ref_ok]
+                cat_sub_idx = cat_sub_idx[ref_ok]
 
             if len(det_xy) < 8 or len(ref_uv) < 8:
                 last_error = _PatternMatchFailed("Not enough points after selection.")
                 continue
 
-            # Auto matching resolution: compute from source density
-            if self.cfg.auto_match_resolution:
-                auto_r_pix = _auto_match_resolution(det_xy, ref_uv, pixel_scale_arcsec)
+            # Auto matching resolution: widen stage radii from source density
+            if cfg.auto_match_resolution:
+                auto_r_pix = _auto_match_resolution(det_xy, ref_uv)
                 if auto_r_pix is not None:
                     auto_r_arcsec = auto_r_pix * pixel_scale_arcsec
-                    self.cfg = dataclasses.replace(
-                        self.cfg,
-                        stage1_radius_arcsec=max(self.cfg.stage1_radius_arcsec, auto_r_arcsec * 2.5),
-                        stage2_radius_arcsec=max(self.cfg.stage2_radius_arcsec, auto_r_arcsec),
+                    cfg = dataclasses.replace(
+                        cfg,
+                        stage1_radius_arcsec=max(cfg.stage1_radius_arcsec, auto_r_arcsec * 2.5),
+                        stage2_radius_arcsec=max(cfg.stage2_radius_arcsec, auto_r_arcsec),
                     )
 
             try:
                 pairs, top_hyp, best = self._pattern_match(
                     det_xy, det_mag, ref_uv, ref_mag, wcs_init, pixel_scale_arcsec,
+                    cfg=cfg,
                 )
             except _PatternMatchFailed as e:
                 last_error = e
-                # If we can still double and haven't exhausted sources, retry
                 if cur_n_det < len(x) or cur_n_ref < len(ra):
                     continue
                 else:
                     break
 
             # Check if we have enough inliers
-            if len(pairs) >= self.cfg.adaptive_min_inliers:
+            if len(pairs) >= cfg.adaptive_min_inliers:
                 break
             # Not enough inliers — retry with more sources if possible
             last_error = _PatternMatchFailed(
-                f"Only {len(pairs)} inliers (need {self.cfg.adaptive_min_inliers})")
+                f"Only {len(pairs)} inliers (need {cfg.adaptive_min_inliers})")
             if cur_n_det >= len(x) and cur_n_ref >= len(ra):
                 break  # can't add more sources
 
