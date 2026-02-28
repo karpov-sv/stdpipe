@@ -24,6 +24,72 @@ except ImportError:
     _HAS_SEP_OPTIMAL = False
 
 
+def _extract_valid_positions(obj):
+    """Extract object positions as plain arrays with validity mask.
+
+    Handles MaskedColumn inputs by filling masked values with NaN.
+
+    :param obj: Table with 'x' and 'y' columns
+    :returns: (x_vals, y_vals, valid_pos) where valid_pos is boolean array
+    """
+    x_vals = np.ma.filled(np.asarray(obj['x']), fill_value=np.nan)
+    y_vals = np.ma.filled(np.asarray(obj['y']), fill_value=np.nan)
+    valid_pos = np.isfinite(x_vals) & np.isfinite(y_vals)
+    return x_vals, y_vals, valid_pos
+
+
+def _prepare_image_and_mask(image, mask):
+    """Sanitize image and mask for photometry.
+
+    :param image: Input image array
+    :param mask: Optional boolean mask (True = masked), or None
+    :returns: (image1, mask0, mask) where image1 is float64 copy,
+              mask0 is non-finite pixel mask, mask is boolean array
+    """
+    image1 = image.astype(np.double)
+    mask0 = ~np.isfinite(image1)
+
+    if mask is None:
+        mask = np.zeros(image.shape, dtype=bool)
+    else:
+        mask = np.array(mask).astype(bool)
+
+    return image1, mask0, mask
+
+
+def _compute_magnitudes_and_filter(obj, sn, keep_negative, log):
+    """Compute magnitudes from flux and apply S/N and positivity filters.
+
+    Modifies obj in-place to add 'mag' and 'magerr' columns, then
+    optionally returns a filtered subset.
+
+    :param obj: Table with 'flux' and 'fluxerr' columns
+    :param sn: Minimum S/N ratio, or None to skip filtering
+    :param keep_negative: If False, discard negative-flux measurements
+    :param log: Logging function
+    :returns: obj (possibly filtered) with 'mag' and 'magerr' columns set
+    """
+    for col in ['mag', 'magerr']:
+        obj[col] = np.nan
+
+    idx = obj['flux'] > 0
+    obj['mag'][idx] = -2.5 * np.log10(obj['flux'][idx])
+    obj['magerr'][idx] = 2.5 / np.log(10) * obj['fluxerr'][idx] / obj['flux'][idx]
+
+    if sn is not None and sn > 0:
+        log('Filtering out measurements with S/N < %.1f' % sn)
+        idx = np.isfinite(obj['magerr'])
+        idx[idx] &= obj['magerr'][idx] < 1 / sn
+        obj = obj[idx]
+
+    if not keep_negative:
+        log('Filtering out measurements with negative fluxes')
+        idx = obj['flux'] > 0
+        obj = obj[idx]
+
+    return obj
+
+
 def _get_psf_stamp_at_position(psf, x, y, stamp_size=None):
     """
     Get normalized PSF stamp at a given position with automatic sub-pixel alignment.
@@ -623,17 +689,7 @@ def measure_objects(
     # Operate on the copy of the list
     obj = obj.copy()
 
-    # Sanitize the image and make its copy to safely operate on it
-    image1 = image.astype(np.double)
-    mask0 = ~np.isfinite(image1)  # Minimal mask
-    # image1[mask0] = np.median(image1[~mask0])
-
-    # Ensure that the mask is defined
-    if mask is None:
-        # mask = mask0
-        mask = np.zeros(image.shape, dtype=bool)
-    else:
-        mask = np.array(mask).astype(bool)
+    image1, mask0, mask = _prepare_image_and_mask(image, mask)
 
     if bg is None or err is None or get_bg:
         log('Estimating global background with %dx%d grid' % (bg_size, bg_size))
@@ -682,7 +738,7 @@ def measure_objects(
 
     if fwhm is not None and fwhm > 0:
         log('Scaling aperture radii with FWHM %.1f pix' % fwhm)
-        aper *= fwhm
+        aper = aper * fwhm
 
     log('Using aperture radius %.1f pixels' % aper)
 
@@ -800,16 +856,13 @@ def measure_objects(
             )
         )
 
-        # Convert MaskedColumns to arrays and identify valid positions
-        x_vals = np.ma.filled(np.asarray(obj['x']), fill_value=np.nan)
-        y_vals = np.ma.filled(np.asarray(obj['y']), fill_value=np.nan)
-        valid_pos = np.isfinite(x_vals) & np.isfinite(y_vals)
+        x_vals, y_vals, valid_pos = _extract_valid_positions(obj)
 
         # Initialize bg_local with zeros
         obj['bg_local'] = 0.0
 
         # Only compute local background for valid positions
-        if np.sum(valid_pos) > 0:
+        if np.any(valid_pos):
             if bkg_order == 0:
                 # Use photutils LocalBackground for order=0 (performance)
                 lbg = photutils.background.LocalBackground(
@@ -836,15 +889,13 @@ def measure_objects(
         obj['bg_local'][idx] = 0
 
     # Photometric apertures
-    x_vals = np.ma.filled(np.asarray(obj['x']), fill_value=np.nan)
-    y_vals = np.ma.filled(np.asarray(obj['y']), fill_value=np.nan)
-    valid_pos = np.isfinite(x_vals) & np.isfinite(y_vals)
+    x_vals, y_vals, valid_pos = _extract_valid_positions(obj)
     valid_idx = np.where(valid_pos)[0]
 
     apertures = None
     obj['npix_aper'] = 0.0
     obj['bg_fluxerr'] = 0.0  # Local background flux error inside the aperture
-    if np.sum(valid_pos) > 0:
+    if np.any(valid_pos):
         positions = list(zip(x_vals[valid_pos], y_vals[valid_pos]))
         apertures = photutils.aperture.CircularAperture(positions, r=aper)
 
@@ -897,13 +948,10 @@ def measure_objects(
             # Use SourceGrouper to identify groups
             grouper = photutils.psf.SourceGrouper(min_separation=grouper_radius)
 
-            # Build positions array for grouper, handling MaskedColumns
-            x_vals = np.ma.filled(np.asarray(obj['x']), fill_value=np.nan)
-            y_vals = np.ma.filled(np.asarray(obj['y']), fill_value=np.nan)
-            valid_pos = np.isfinite(x_vals) & np.isfinite(y_vals)
+            x_vals, y_vals, valid_pos = _extract_valid_positions(obj)
 
             # Get group IDs only for valid positions, then map back
-            if np.sum(valid_pos) > 0:
+            if np.any(valid_pos):
                 group_ids_valid = grouper(x_vals[valid_pos], y_vals[valid_pos])
                 # Map group IDs back to full array (-1 for invalid positions)
                 group_ids = np.full(len(obj), -1, dtype=int)
@@ -998,24 +1046,7 @@ def measure_objects(
         # Subtract local background
         obj['flux'][valid_pos] -= obj['bg_local'][valid_pos] * obj['npix_aper'][valid_pos]
 
-    for _ in ['mag', 'magerr']:
-        obj[_] = np.nan
-
-    idx = obj['flux'] > 0
-    obj['mag'][idx] = -2.5 * np.log10(obj['flux'][idx])
-    obj['magerr'][idx] = 2.5 / np.log(10) * obj['fluxerr'][idx] / obj['flux'][idx]
-
-    # Final filtering of properly measured objects
-    if sn is not None and sn > 0:
-        log('Filtering out measurements with S/N < %.1f' % sn)
-        idx = np.isfinite(obj['magerr'])
-        idx[idx] &= obj['magerr'][idx] < 1 / sn
-        obj = obj[idx]
-
-    if not keep_negative:
-        log('Filtering out measurements with negative fluxes')
-        idx = obj['flux'] > 0
-        obj = obj[idx]
+    obj = _compute_magnitudes_and_filter(obj, sn, keep_negative, log)
 
     if get_bg:
         return obj, bg_est_bg, err
@@ -1161,15 +1192,7 @@ def measure_objects_sep(
     # Operate on the copy of the list
     obj = obj.copy()
 
-    # Sanitize the image and make its copy to safely operate on it
-    image1 = image.astype(np.double)
-    mask0 = ~np.isfinite(image1)  # Minimal mask
-
-    # Ensure that the mask is defined
-    if mask is None:
-        mask = np.zeros(image.shape, dtype=bool)
-    else:
-        mask = np.array(mask).astype(bool)
+    image1, mask0, mask = _prepare_image_and_mask(image, mask)
 
     # SEP requires C-contiguous arrays
     image1 = np.ascontiguousarray(image1)
@@ -1236,11 +1259,9 @@ def measure_objects_sep(
         obj['x_orig'] = obj['x'].copy()
         obj['y_orig'] = obj['y'].copy()
 
-        x_vals = np.ma.filled(np.asarray(obj['x']), fill_value=np.nan)
-        y_vals = np.ma.filled(np.asarray(obj['y']), fill_value=np.nan)
-        valid_pos = np.isfinite(x_vals) & np.isfinite(y_vals)
+        x_vals, y_vals, valid_pos = _extract_valid_positions(obj)
 
-        if np.sum(valid_pos) > 0:
+        if np.any(valid_pos):
             # SEP's windowed position (iterates internally until convergence)
             xwin, ywin, flag = sep.winpos(
                 image1,
@@ -1266,10 +1287,7 @@ def measure_objects_sep(
     if 'flags' not in obj.keys():
         obj['flags'] = 0
 
-    # Convert MaskedColumns to arrays and identify valid positions
-    x_vals = np.ma.filled(np.asarray(obj['x']), fill_value=np.nan)
-    y_vals = np.ma.filled(np.asarray(obj['y']), fill_value=np.nan)
-    valid_pos = np.isfinite(x_vals) & np.isfinite(y_vals)
+    x_vals, y_vals, valid_pos = _extract_valid_positions(obj)
 
     # Flag invalid positions
     obj['flags'][~valid_pos] |= 0x400
@@ -1280,7 +1298,7 @@ def measure_objects_sep(
     obj['flux'] = np.nan
     obj['fluxerr'] = np.nan
 
-    if np.sum(valid_pos) > 0:
+    if np.any(valid_pos):
         # Prepare bkgann in pixels
         bkgann_pix = None
         if bkgann is not None and len(bkgann) == 2:
@@ -1419,25 +1437,7 @@ def measure_objects_sep(
     else:
         obj['flags'][~np.isfinite(obj['flux'])] |= 0x800
 
-    # Convert to magnitudes
-    for _ in ['mag', 'magerr']:
-        obj[_] = np.nan
-
-    idx = obj['flux'] > 0
-    obj['mag'][idx] = -2.5 * np.log10(obj['flux'][idx])
-    obj['magerr'][idx] = 2.5 / np.log(10) * obj['fluxerr'][idx] / obj['flux'][idx]
-
-    # Final filtering
-    if sn is not None and sn > 0:
-        log('Filtering out measurements with S/N < %.1f' % sn)
-        idx = np.isfinite(obj['magerr'])
-        idx[idx] &= obj['magerr'][idx] < 1 / sn
-        obj = obj[idx]
-
-    if not keep_negative:
-        log('Filtering out measurements with negative fluxes')
-        idx = obj['flux'] > 0
-        obj = obj[idx]
+    obj = _compute_magnitudes_and_filter(obj, sn, keep_negative, log)
 
     if get_bg:
         return obj, bg_est_bg, err

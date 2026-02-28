@@ -1319,3 +1319,406 @@ class TestPerformance:
         # Might fail with small data, but shouldn't crash
         # Just check it returns something (even if None)
         assert wcs_refined is None or isinstance(wcs_refined, WCS)
+
+
+# ============================================================================
+# Wide-field distortion tests (from synthetic SCAMP-vs-quadhash comparison)
+# ============================================================================
+
+# Simulation constants for wide-field tests
+_WF_IMAGE_SIZE = 2048
+_WF_PIXEL_SCALE = 2.0  # arcsec/pixel → ~1.14 deg FOV
+_WF_RA_CENTER = 150.0
+_WF_DEC_CENTER = 30.0
+_WF_N_CATALOG = 2000
+_WF_MAG_RANGE = (10.0, 18.0)
+_WF_POSITION_NOISE_PIX = 0.3
+_WF_SEED = 12345
+_WF_POINTING_OFFSET_ARCSEC = 5.0
+_WF_ROTATION_ERROR_DEG = 0.5
+
+
+def _make_true_wcs(distortion_scale=1.0):
+    """Build a WCS with realistic wide-field barrel distortion (SIP)."""
+    header = fits.Header()
+    header['NAXIS'] = 2
+    header['NAXIS1'] = _WF_IMAGE_SIZE
+    header['NAXIS2'] = _WF_IMAGE_SIZE
+    header['CTYPE1'] = 'RA---TAN-SIP'
+    header['CTYPE2'] = 'DEC--TAN-SIP'
+    header['CRPIX1'] = _WF_IMAGE_SIZE / 2 + 0.5
+    header['CRPIX2'] = _WF_IMAGE_SIZE / 2 + 0.5
+    header['CRVAL1'] = _WF_RA_CENTER
+    header['CRVAL2'] = _WF_DEC_CENTER
+    scale = _WF_PIXEL_SCALE / 3600.0
+    header['CD1_1'] = -scale
+    header['CD1_2'] = 0.0
+    header['CD2_1'] = 0.0
+    header['CD2_2'] = scale
+
+    s = distortion_scale
+    header['A_ORDER'] = 3
+    header['A_2_0'] = 1.5e-5 * s
+    header['A_0_2'] = 1.5e-5 * s
+    header['A_1_1'] = 5.0e-7 * s
+    header['A_3_0'] = 5.0e-9 * s
+    header['A_1_2'] = 1.5e-8 * s
+    header['A_0_3'] = 0.0
+    header['A_2_1'] = 0.0
+
+    header['B_ORDER'] = 3
+    header['B_2_0'] = 1.5e-5 * s
+    header['B_0_2'] = 1.5e-5 * s
+    header['B_1_1'] = 5.0e-7 * s
+    header['B_0_3'] = 5.0e-9 * s
+    header['B_2_1'] = 1.5e-8 * s
+    header['B_3_0'] = 0.0
+    header['B_1_2'] = 0.0
+
+    header['AP_ORDER'] = 0
+    header['BP_ORDER'] = 0
+
+    return WCS(header)
+
+
+def _make_initial_wcs():
+    """Build a rough TAN-only WCS with small pointing/rotation errors."""
+    header = fits.Header()
+    header['NAXIS'] = 2
+    header['NAXIS1'] = _WF_IMAGE_SIZE
+    header['NAXIS2'] = _WF_IMAGE_SIZE
+    header['CTYPE1'] = 'RA---TAN'
+    header['CTYPE2'] = 'DEC--TAN'
+    header['CRPIX1'] = _WF_IMAGE_SIZE / 2 + 0.5
+    header['CRPIX2'] = _WF_IMAGE_SIZE / 2 + 0.5
+
+    offset_deg = _WF_POINTING_OFFSET_ARCSEC / 3600.0
+    header['CRVAL1'] = _WF_RA_CENTER + offset_deg / np.cos(np.deg2rad(_WF_DEC_CENTER))
+    header['CRVAL2'] = _WF_DEC_CENTER - offset_deg * 0.7
+
+    scale = _WF_PIXEL_SCALE / 3600.0
+    theta = np.deg2rad(_WF_ROTATION_ERROR_DEG)
+    header['CD1_1'] = -scale * np.cos(theta)
+    header['CD1_2'] = -scale * np.sin(theta)
+    header['CD2_1'] = -scale * np.sin(theta)
+    header['CD2_2'] = scale * np.cos(theta)
+
+    return WCS(header)
+
+
+def _make_widefield_catalog(n_catalog=_WF_N_CATALOG, seed=_WF_SEED):
+    """Generate a synthetic reference catalog covering the field + margin."""
+    rng = np.random.RandomState(seed)
+    fov_deg = _WF_IMAGE_SIZE * _WF_PIXEL_SCALE / 3600.0
+    margin = 0.3
+
+    ra = _WF_RA_CENTER + (rng.random(n_catalog) - 0.5) * (fov_deg + margin) / np.cos(np.deg2rad(_WF_DEC_CENTER))
+    dec = _WF_DEC_CENTER + (rng.random(n_catalog) - 0.5) * (fov_deg + margin)
+    mag = rng.uniform(_WF_MAG_RANGE[0], _WF_MAG_RANGE[1], n_catalog)
+
+    cat = Table()
+    cat['ra'] = ra
+    cat['dec'] = dec
+    cat['mag'] = mag
+    return cat
+
+
+def _make_widefield_detections(cat, wcs_true, seed=_WF_SEED + 1):
+    """Project catalog through true WCS to get detected objects."""
+    rng = np.random.RandomState(seed)
+
+    try:
+        x, y = wcs_true.all_world2pix(cat['ra'], cat['dec'], 0)
+    except Exception:
+        x, y = wcs_true.all_world2pix(cat['ra'], cat['dec'], 0, quiet=True)
+
+    mag_all = np.array(cat['mag'])
+    finite = np.isfinite(x) & np.isfinite(y)
+    margin = 20
+    in_fov = finite & (
+        (x >= margin) & (x <= _WF_IMAGE_SIZE - margin) &
+        (y >= margin) & (y <= _WF_IMAGE_SIZE - margin)
+    )
+    x, y, mag = x[in_fov], y[in_fov], mag_all[in_fov]
+
+    x += rng.normal(0, _WF_POSITION_NOISE_PIX, len(x))
+    y += rng.normal(0, _WF_POSITION_NOISE_PIX, len(y))
+
+    detect_prob = np.clip(0.95 - 0.05 * (mag - _WF_MAG_RANGE[0]), 0.5, 0.98)
+    detected = rng.random(len(x)) < detect_prob
+    x, y, mag = x[detected], y[detected], mag[detected]
+
+    flux = 10 ** (-0.4 * (mag - 25.0))
+    obj = Table()
+    obj['x'] = x
+    obj['y'] = y
+    obj['flux'] = flux
+    obj['mag'] = mag
+    return obj
+
+
+def _evaluate_wcs_grid(wcs_refined, wcs_true, n_grid=20):
+    """Evaluate WCS accuracy over a uniform grid. Returns (median, rms, max, p90)."""
+    margin = 20
+    gx = np.linspace(margin, _WF_IMAGE_SIZE - margin, n_grid)
+    gy = np.linspace(margin, _WF_IMAGE_SIZE - margin, n_grid)
+    xx, yy = np.meshgrid(gx, gy)
+    xx, yy = xx.ravel(), yy.ravel()
+
+    ra_true, dec_true = wcs_true.all_pix2world(xx, yy, 0)
+    ra_ref, dec_ref = wcs_refined.all_pix2world(xx, yy, 0)
+
+    cos_dec = np.cos(np.deg2rad(dec_true))
+    dra = (ra_ref - ra_true) * cos_dec * 3600.0
+    ddec = (dec_ref - dec_true) * 3600.0
+    dr = np.sqrt(dra**2 + ddec**2)
+
+    return float(np.median(dr)), float(np.sqrt(np.mean(dr**2))), float(np.max(dr)), float(np.percentile(dr, 90))
+
+
+def _corner_displacement_arcsec(wcs_true, wcs_initial):
+    """Max displacement between true and initial WCS at field corners."""
+    positions = [
+        (_WF_IMAGE_SIZE - 50, _WF_IMAGE_SIZE - 50),
+        (50, 50),
+        (_WF_IMAGE_SIZE - 50, 50),
+        (50, _WF_IMAGE_SIZE - 50),
+    ]
+    max_dr = 0
+    for px, py in positions:
+        ra_t, dec_t = wcs_true.all_pix2world(px, py, 0)
+        ra_i, dec_i = wcs_initial.all_pix2world(px, py, 0)
+        cos_dec = np.cos(np.deg2rad(dec_t))
+        dr = np.sqrt(((ra_i - ra_t) * cos_dec)**2 + (dec_i - dec_t)**2) * 3600.0
+        max_dr = max(max_dr, dr)
+    return max_dr
+
+
+def _run_quadhash_widefield(obj, cat, wcs_init, auto_match_resolution=True,
+                             adaptive_n_retry=2, sr_arcsec=30.0):
+    """Run quad-hash solver with given feature flags."""
+    cfg = AstrometryConfig(
+        n_det=200,
+        n_ref=800,
+        neighbor_k=10,
+        eps_desc=0.02,
+        n_scale_bins=6,
+        stage1_n_det=60,
+        stage1_radius_arcsec=max(20.0, sr_arcsec * 2),
+        stage2_radius_arcsec=sr_arcsec,
+        top_k_hypotheses=80,
+        max_quads_tested=8000,
+        sip_degree=3,
+        refine_clip_sigma=4.0,
+        refine_clip_sigma_start=5.0,
+        refine_min_match_fraction=0.5,
+        refine_max_iter=5,
+        refine_rematch_iters=2,
+        auto_match_resolution=auto_match_resolution,
+        adaptive_n_retry=adaptive_n_retry,
+    )
+    solver = QuadHashAstrometry(config=cfg)
+    wcs_refined, match, diagnostics = solver.refine(obj=obj, cat=cat, wcs_init=wcs_init)
+    return wcs_refined, diagnostics
+
+
+class TestWideFieldDistortion:
+    """Test quad-hash astrometry with realistic wide-field distortion.
+
+    Uses a 2048x2048 image with 2 arcsec/pixel (~1.14 deg FOV) and SIP
+    barrel distortion. The initial WCS is TAN-only with small pointing
+    and rotation errors, simulating a typical real-world scenario.
+    """
+
+    @pytest.fixture(scope='class')
+    def widefield_setup(self):
+        """Shared setup for wide-field tests: catalog and initial WCS."""
+        cat = _make_widefield_catalog()
+        wcs_init = _make_initial_wcs()
+        return cat, wcs_init
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("distortion_scale,max_median_arcsec", [
+        (0.1, 0.5),
+        (0.3, 0.5),
+        (0.5, 0.5),
+        (1.0, 0.5),
+        (2.0, 1.0),
+        (3.0, 1.5),
+    ])
+    def test_distortion_recovery(self, widefield_setup, distortion_scale,
+                                  max_median_arcsec):
+        """Test that quad-hash recovers accurate WCS across distortion levels.
+
+        Uses auto_match_resolution + adaptive_retry (the full-featured config).
+        """
+        cat, wcs_init = widefield_setup
+        wcs_true = _make_true_wcs(distortion_scale=distortion_scale)
+        obj = _make_widefield_detections(cat, wcs_true)
+        corner_disp = _corner_displacement_arcsec(wcs_true, wcs_init)
+
+        sr = max(15.0, corner_disp * 0.3)
+        wcs_refined, diag = _run_quadhash_widefield(
+            obj, cat, wcs_init,
+            auto_match_resolution=True,
+            adaptive_n_retry=2,
+            sr_arcsec=sr,
+        )
+
+        assert wcs_refined is not None, (
+            f"Solver returned None at distortion_scale={distortion_scale}"
+        )
+
+        g_med, g_rms, g_max, g_p90 = _evaluate_wcs_grid(wcs_refined, wcs_true)
+
+        assert g_med < max_median_arcsec, (
+            f"Grid median {g_med:.3f}\" exceeds threshold {max_median_arcsec}\" "
+            f"at distortion_scale={distortion_scale} "
+            f"(corner displacement {corner_disp:.1f}\")"
+        )
+
+        # RMS should be within 3x of median (no catastrophic outliers)
+        assert g_rms < max_median_arcsec * 3, (
+            f"Grid RMS {g_rms:.3f}\" too large relative to median {g_med:.3f}\""
+        )
+
+    @pytest.mark.unit
+    def test_baseline_vs_adaptive(self, widefield_setup):
+        """Test that adaptive features improve or match baseline at moderate distortion."""
+        cat, wcs_init = widefield_setup
+        wcs_true = _make_true_wcs(distortion_scale=1.0)
+        obj = _make_widefield_detections(cat, wcs_true)
+        corner_disp = _corner_displacement_arcsec(wcs_true, wcs_init)
+        sr = max(15.0, corner_disp * 0.3)
+
+        # Baseline (no adaptive features)
+        wcs_base, _ = _run_quadhash_widefield(
+            obj, cat, wcs_init,
+            auto_match_resolution=False,
+            adaptive_n_retry=0,
+            sr_arcsec=sr,
+        )
+
+        # Full features
+        wcs_full, _ = _run_quadhash_widefield(
+            obj, cat, wcs_init,
+            auto_match_resolution=True,
+            adaptive_n_retry=2,
+            sr_arcsec=sr,
+        )
+
+        assert wcs_base is not None, "Baseline solver failed"
+        assert wcs_full is not None, "Full-feature solver failed"
+
+        g_med_base, _, _, _ = _evaluate_wcs_grid(wcs_base, wcs_true)
+        g_med_full, _, _, _ = _evaluate_wcs_grid(wcs_full, wcs_true)
+
+        # Full features should be at least as good as baseline
+        assert g_med_full <= g_med_base * 1.5, (
+            f"Full features ({g_med_full:.3f}\") much worse than "
+            f"baseline ({g_med_base:.3f}\")"
+        )
+
+        # Both should achieve sub-arcsecond
+        assert g_med_base < 1.0, f"Baseline median {g_med_base:.3f}\" > 1\""
+        assert g_med_full < 1.0, f"Full features median {g_med_full:.3f}\" > 1\""
+
+    @pytest.mark.unit
+    def test_high_distortion_adaptive_required(self, widefield_setup):
+        """At high distortion, adaptive retry helps where baseline may fail."""
+        cat, wcs_init = widefield_setup
+        wcs_true = _make_true_wcs(distortion_scale=3.0)
+        obj = _make_widefield_detections(cat, wcs_true)
+        corner_disp = _corner_displacement_arcsec(wcs_true, wcs_init)
+        sr = max(15.0, corner_disp * 0.3)
+
+        # Full features should still succeed
+        wcs_full, diag = _run_quadhash_widefield(
+            obj, cat, wcs_init,
+            auto_match_resolution=True,
+            adaptive_n_retry=2,
+            sr_arcsec=sr,
+        )
+        assert wcs_full is not None, "Adaptive solver failed at scale=3.0"
+
+        g_med, g_rms, _, _ = _evaluate_wcs_grid(wcs_full, wcs_true)
+        assert g_med < 1.5, f"Grid median {g_med:.3f}\" > 1.5\" at scale=3.0"
+
+    @pytest.mark.unit
+    def test_match_count_reasonable(self, widefield_setup):
+        """Check that the solver matches a reasonable fraction of sources."""
+        cat, wcs_init = widefield_setup
+        wcs_true = _make_true_wcs(distortion_scale=1.0)
+        obj = _make_widefield_detections(cat, wcs_true)
+        corner_disp = _corner_displacement_arcsec(wcs_true, wcs_init)
+        sr = max(15.0, corner_disp * 0.3)
+
+        wcs_refined, diag = _run_quadhash_widefield(
+            obj, cat, wcs_init, sr_arcsec=sr,
+        )
+        assert wcs_refined is not None
+
+        n_matched = diag['final_matches']
+        # Should match at least 50 sources (out of ~1000+ detections)
+        assert n_matched >= 50, f"Only {n_matched} matches"
+
+    @pytest.mark.unit
+    def test_sip_coefficients_recovered(self, widefield_setup):
+        """Verify that SIP distortion terms are fitted (not just TAN)."""
+        cat, wcs_init = widefield_setup
+        wcs_true = _make_true_wcs(distortion_scale=1.0)
+        obj = _make_widefield_detections(cat, wcs_true)
+        corner_disp = _corner_displacement_arcsec(wcs_true, wcs_init)
+        sr = max(15.0, corner_disp * 0.3)
+
+        wcs_refined, _ = _run_quadhash_widefield(
+            obj, cat, wcs_init, sr_arcsec=sr,
+        )
+        assert wcs_refined is not None
+
+        # Refined WCS should have SIP terms
+        assert 'TAN-SIP' in wcs_refined.wcs.ctype[0] or hasattr(wcs_refined, 'sip'), (
+            "Refined WCS has no SIP distortion"
+        )
+
+        # Accuracy at corners should be much better than initial WCS
+        corner_positions = np.array([
+            [50, 50], [_WF_IMAGE_SIZE - 50, 50],
+            [50, _WF_IMAGE_SIZE - 50], [_WF_IMAGE_SIZE - 50, _WF_IMAGE_SIZE - 50],
+        ], dtype=float)
+
+        ra_true, dec_true = wcs_true.all_pix2world(
+            corner_positions[:, 0], corner_positions[:, 1], 0)
+        ra_ref, dec_ref = wcs_refined.all_pix2world(
+            corner_positions[:, 0], corner_positions[:, 1], 0)
+
+        cos_dec = np.cos(np.deg2rad(dec_true))
+        dr_corners = np.sqrt(
+            ((ra_ref - ra_true) * cos_dec)**2 + (dec_ref - dec_true)**2
+        ) * 3600.0
+
+        # Corners should be sub-arcsecond (true distortion is ~60-140")
+        assert np.median(dr_corners) < 1.0, (
+            f"Corner median residual {np.median(dr_corners):.3f}\" — "
+            f"SIP not recovering distortion"
+        )
+
+    @pytest.mark.unit
+    def test_refine_wcs_quadhash_api(self, widefield_setup):
+        """Test the public API wrapper with wide-field data."""
+        cat, wcs_init = widefield_setup
+        wcs_true = _make_true_wcs(distortion_scale=1.0)
+        obj = _make_widefield_detections(cat, wcs_true)
+
+        # Use the public API (not QuadHashAstrometry directly)
+        wcs_refined = refine_wcs_quadhash(
+            obj, cat, wcs=wcs_init,
+            sr=30 / 3600, order=3,
+            cat_col_ra='ra', cat_col_dec='dec', cat_col_mag='mag',
+            n_det=200, n_ref=800,
+            verbose=False,
+        )
+        assert wcs_refined is not None
+
+        g_med, _, _, _ = _evaluate_wcs_grid(wcs_refined, wcs_true)
+        assert g_med < 1.0, f"Public API: grid median {g_med:.3f}\" > 1\""

@@ -422,15 +422,11 @@ def measure_objects_psf(
     # Operate on the copy of the table
     obj = obj.copy()
 
-    # Sanitize the image and make its copy to safely operate on it
-    image1 = image.astype(np.double)
-    mask0 = ~np.isfinite(image1)  # Minimal mask
-
-    # Ensure that the mask is defined
-    if mask is None:
-        mask = mask0
-    else:
-        mask = mask.astype(bool)
+    from .photometry_measure import (
+        _prepare_image_and_mask, _extract_valid_positions,
+        _compute_magnitudes_and_filter,
+    )
+    image1, mask0, mask = _prepare_image_and_mask(image, mask)
 
     # Background estimation
     if bg is None or err is None or get_bg:
@@ -561,13 +557,10 @@ def measure_objects_psf(
     log('Using fitting region size: %d pixels' % fit_size)
 
     # Prepare initial positions table
-    # Convert MaskedColumns to regular arrays, replacing masked values with NaN
+    x_vals, y_vals, valid_pos = _extract_valid_positions(obj)
     init_params = Table()
-    init_params['x'] = np.ma.filled(np.asarray(obj['x']), fill_value=np.nan)
-    init_params['y'] = np.ma.filled(np.asarray(obj['y']), fill_value=np.nan)
-
-    # Track which positions are valid (not NaN/masked)
-    valid_pos = np.isfinite(init_params['x']) & np.isfinite(init_params['y'])
+    init_params['x'] = x_vals
+    init_params['y'] = y_vals
 
     # Add initial flux guesses if available
     if 'flux' in obj.colnames:
@@ -604,12 +597,7 @@ def measure_objects_psf(
     if n_invalid > 0:
         log('Found %d objects with invalid (masked/NaN) positions, will be skipped' % n_invalid)
 
-    # NOTE: Do NOT include fit_mask here! photutils PSFPhotometry handles
-    # the fitting region via the fit_shape parameter. Adding fit_mask would
-    # mask out most of the image and cause convergence failures.
     mask_for_fit = mask | mask0
-    # if fit_mask is not None:
-    #     mask_for_fit = mask_for_fit | fit_mask
 
     xy_bounds = None if recentroid else 1e-6
 
@@ -862,29 +850,7 @@ def measure_objects_psf(
                 log('Falling back to NaN values')
                 obj['flags'][valid_pos] |= 0x1000
 
-    # Compute magnitudes
-    idx = obj['flux'] > 0
-    for _ in ['mag', 'magerr']:
-        if _ not in obj.keys():
-            obj[_] = np.nan
-
-    obj['mag'][idx] = -2.5 * np.log10(obj['flux'][idx])
-    obj['mag'][~idx] = np.nan
-
-    obj['magerr'][idx] = 2.5 / np.log(10) * obj['fluxerr'][idx] / obj['flux'][idx]
-    obj['magerr'][~idx] = np.nan
-
-    # Final filtering of properly measured objects
-    if sn is not None and sn > 0:
-        log('Filtering out measurements with S/N < %.1f' % sn)
-        idx = np.isfinite(obj['magerr'])
-        idx[idx] &= obj['magerr'][idx] < 1 / sn
-        obj = obj[idx]
-
-    if not keep_negative:
-        log('Filtering out measurements with negative fluxes')
-        idx = obj['flux'] > 0
-        obj = obj[idx]
+    obj = _compute_magnitudes_and_filter(obj, sn, keep_negative, log)
 
     log('PSF photometry complete: %d objects measured' % len(obj))
 
