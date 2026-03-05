@@ -204,3 +204,42 @@ This adds ``group_id`` and ``group_size`` columns to identify which sources were
 
 .. autofunction:: stdpipe.photometry.measure_objects
    :noindex:
+
+
+SEP-based photometry
+^^^^^^^^^^^^^^^^^^^^
+
+The :func:`stdpipe.photometry_measure.measure_objects_sep` function provides an alternative measurement backend using SEP 1.4+ features. It offers sigma-clipped local background estimation and grouped optimal extraction implemented in C for better performance.
+
+.. code-block:: python
+
+   from stdpipe.photometry_measure import measure_objects_sep, _HAS_SEP_OPTIMAL
+
+   if _HAS_SEP_OPTIMAL:
+       # Aperture photometry with robust local background
+       obj = measure_objects_sep(obj, image, aper=1.5, fwhm=fwhm,
+                    bkgann=(3.0, 5.0), sn=5, verbose=True)
+
+       # Grouped optimal extraction for crowded fields
+       obj = measure_objects_sep(obj, image, aper=1.5, fwhm=fwhm,
+                    optimal=True, group_sources=True, sn=5, verbose=True)
+
+.. autofunction:: stdpipe.photometry_measure.measure_objects_sep
+   :noindex:
+
+
+PSF photometry
+^^^^^^^^^^^^^^
+
+For the most accurate flux measurements, especially in crowded fields, PSF fitting photometry is available through :func:`stdpipe.photometry_psf.measure_objects_psf` (photutils backend) or :func:`stdpipe.photometry_iraf.measure_objects_psf` (DAOPHOT backend). See the :doc:`API documentation <api/stdpipe.photometry_psf>` for details.
+
+.. code-block:: python
+
+   from stdpipe import photometry_psf
+
+   # PSF photometry with automatic Gaussian PSF
+   result = photometry_psf.measure_objects_psf(obj, image, fwhm=fwhm)
+
+   # With PSFEx model and grouped fitting
+   result = photometry_psf.measure_objects_psf(obj, image, psf=psf_model,
+                group_sources=True, grouper_radius=10.0)

@@ -15,20 +15,28 @@
  - ~~pre-processing~~ - should be handled before in an instrument-specific way
      - bias/dark subtraction, flatfielding, masking
  - object detection and photometry
-     - SExtractor or SEP for detection, photutils for photometry
+     - SExtractor, SEP, or photutils (pure Python) for detection
+     - aperture, optimal extraction (Naylor 1998), and PSF fitting photometry
+     - grouped fitting for crowded fields
  - astrometric calibration
      - Astrometry.Net for blind WCS solving
-     - SCAMP or Astropy-based code for refinement
+     - quad-hash pattern matching for refinement (pure Python, no external deps, default method)
+     - SCAMP or Astropy-based code for refinement (alternative)
  - photometric calibration
      - Vizier catalogues, passband conversion (PS1 to Johnson, Gaia to Johnson, ...)
      - spatial polynomial + color term + intrinsic scatter
+ - image reprojection and stacking
+     - Lanczos interpolation with automatic oversampling and flux conservation (pure Python, default)
+     - SWarp wrapper (alternative)
  - image subtraction
      - HiPS templates
      - PanSTARRS DR1 or Legacy Survey templates
      - HOTPANTS + custom noise model
      - ZOGY
- - transient detection and photometry
+ - transient detection and classification
      - noise-weighted detection, cutout adjustment, ...
+     - feature-based real/bogus classification (no TensorFlow required)
+     - CNN-based real/bogus classification (optional, requires TensorFlow)
  - auxiliary functions
      - PSF estimation, simulated stars, FITS header utilities, plotting, ...
  - light curve creation (soon)

@@ -58,7 +58,48 @@ that shows how to do it.
 .. attention::
    The stacking modify the statistical properties of resulting image! The reasons are both averaging (or especially median averaging!) of the images that modify effective gain value (typically increasing it by the factor equal to number of averaged images), and pixel interpolation when re-projecting the images onto the same pixel grid.
 
-*STDPipe* also contains a simple wrapper for `SWarp <https://github.com/astromatic/swarp>`_ re-projection code, :func:`stdpipe.templates.reproject_swarp`, that is implemented to resemble the calling conventions of `reproject <https://github.com/astropy/reproject>`_ package routines as much as possible - i.e. allows directly stacking the image files without loading them to memory first:
+*STDPipe* provides two methods for image reprojection:
 
-.. autofunction:: stdpipe.templates.reproject_swarp
+
+Lanczos reprojection (recommended)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The default method :func:`stdpipe.reproject.reproject_lanczos` is a pure Python implementation of Lanczos interpolation with two features borrowed from SWarp that are critical for photometric accuracy:
+
+- **Automatic oversampling** - when output pixels are larger than input pixels (downscaling), the interpolation is evaluated at multiple sub-pixel positions and averaged. This prevents aliasing of undersampled stars.
+- **Jacobian flux conservation** - the output is multiplied by the pixel area ratio (Jacobian determinant) so that total flux is conserved. Set ``conserve_flux=False`` to preserve surface brightness instead.
+
+It also supports reprojection of integer flag/mask images (``is_flags=True``) using nearest-neighbor resampling and bitwise AND combining, matching SWarp's behavior.
+
+No external binaries are required.
+
+.. code-block:: python
+
+   from stdpipe.reproject import reproject_lanczos
+
+   # Reproject and coadd a list of FITS files
+   coadd = reproject_lanczos(filenames, wcs=target_wcs, shape=(1024, 1024))
+
+   # Reproject from (image, WCS) tuples
+   coadd = reproject_lanczos([(image1, wcs1), (image2, wcs2)],
+                wcs=target_wcs, shape=(1024, 1024))
+
+   # Preserve surface brightness instead of total flux
+   coadd = reproject_lanczos([(image, wcs_in)], wcs=wcs_out,
+                shape=(512, 512), conserve_flux=False)
+
+   # Reproject integer flag/mask image
+   mask = reproject_lanczos([(flags, wcs_in)], wcs=wcs_out,
+                shape=(512, 512), is_flags=True)
+
+.. autofunction:: stdpipe.reproject.reproject_lanczos
+   :noindex:
+
+
+SWarp reprojection
+^^^^^^^^^^^^^^^^^^
+
+Alternatively, :func:`stdpipe.reproject.reproject_swarp` wraps the `SWarp <https://github.com/astromatic/swarp>`_ external binary. It is implemented to resemble the calling conventions of the `reproject <https://github.com/astropy/reproject>`_ package - i.e. allows directly stacking image files without loading them to memory first. Requires SWarp to be installed.
+
+.. autofunction:: stdpipe.reproject.reproject_swarp
    :noindex:
