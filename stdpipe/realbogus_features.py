@@ -235,7 +235,7 @@ def extract_catalog_features(obj, feature_set="default"):
 
 
 def _extract_cutout(image, x, y, radius, bg=None, err=None, mask=None):
-    """Extract a single cutout centered on (x, y)."""
+    """Extract a background-subtracted cutout centered on (x, y)."""
     h, w = image.shape
     xi, yi = int(round(x)), int(round(y))
 
@@ -245,33 +245,28 @@ def _extract_cutout(image, x, y, radius, bg=None, err=None, mask=None):
     y_max = yi + radius + 1
 
     if x_min < 0 or x_max > w or y_min < 0 or y_max > h:
-        return None, None, None, None
+        return None, None, None
 
-    cutout = image[y_min:y_max, x_min:x_max].copy().astype(float)
+    cutout = image[y_min:y_max, x_min:x_max].astype(float)
 
     if bg is not None:
         if np.isscalar(bg):
-            cutout_bg = bg
+            cutout = cutout - bg
         else:
-            cutout_bg = bg[y_min:y_max, x_min:x_max].copy()
-        cutout = cutout - cutout_bg
+            cutout = cutout - bg[y_min:y_max, x_min:x_max]
 
     cutout_err = None
     if err is not None:
         if np.isscalar(err):
             cutout_err = np.full_like(cutout, float(err))
         else:
-            cutout_err = err[y_min:y_max, x_min:x_max].copy().astype(float)
+            cutout_err = err[y_min:y_max, x_min:x_max].astype(float)
 
     cutout_mask = None
     if mask is not None:
-        cutout_mask = mask[y_min:y_max, x_min:x_max].copy()
+        cutout_mask = mask[y_min:y_max, x_min:x_max]
 
-    # Sub-pixel offset for accurate centering
-    dx = x - xi
-    dy = y - yi
-
-    return cutout, cutout_mask, cutout_err, (dx, dy)
+    return cutout, cutout_mask, cutout_err
 
 
 def _compute_sharpness(cutout):
@@ -286,44 +281,33 @@ def _compute_sharpness(cutout):
     cy, cx = cutout.shape[0] // 2, cutout.shape[1] // 2
     center = cutout[cy, cx]
 
-    # 8-connected neighbors
-    neighbors = []
-    for dy in [-1, 0, 1]:
-        for dx in [-1, 0, 1]:
-            if dy == 0 and dx == 0:
-                continue
-            ny, nx = cy + dy, cx + dx
-            if 0 <= ny < cutout.shape[0] and 0 <= nx < cutout.shape[1]:
-                neighbors.append(cutout[ny, nx])
-
-    if not neighbors:
-        return np.nan
-
-    neighbor_mean = np.mean(neighbors)
+    # 8-connected neighbors via 3x3 block
+    block = cutout[cy - 1 : cy + 2, cx - 1 : cx + 2]
+    neighbor_mean = (np.sum(block) - center) / 8
     if neighbor_mean <= 0:
         return np.nan
 
     return center / neighbor_mean
 
 
-def _compute_concentration(cutout, r_inner=2, r_outer=5):
-    """
-    Compute concentration index: flux ratio in inner/outer apertures.
+class _CutoutGeometry:
+    """Pre-computed geometry for a cutout (center, radius grid, etc.)."""
 
-    Real sources have consistent concentration; artifacts vary.
-    """
-    if cutout is None:
-        return np.nan
+    __slots__ = ("cy", "cx", "dx", "dy", "r2", "r")
 
-    cy, cx = cutout.shape[0] // 2, cutout.shape[1] // 2
-    y, x = np.ogrid[: cutout.shape[0], : cutout.shape[1]]
-    r = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
+    def __init__(self, shape):
+        self.cy, self.cx = shape[0] // 2, shape[1] // 2
+        y, x = np.ogrid[: shape[0], : shape[1]]
+        self.dx = x - self.cx
+        self.dy = y - self.cy
+        self.r2 = self.dx**2 + self.dy**2
+        self.r = np.sqrt(self.r2)
 
-    inner_mask = r <= r_inner
-    outer_mask = r <= r_outer
 
-    flux_inner = np.sum(cutout[inner_mask])
-    flux_outer = np.sum(cutout[outer_mask])
+def _compute_concentration(cutout, geom, r_inner=2, r_outer=5):
+    """Compute concentration index: flux ratio in inner/outer apertures."""
+    flux_inner = np.sum(cutout[geom.r <= r_inner])
+    flux_outer = np.sum(cutout[geom.r <= r_outer])
 
     if flux_outer <= 0:
         return np.nan
@@ -331,128 +315,71 @@ def _compute_concentration(cutout, r_inner=2, r_outer=5):
     return flux_inner / flux_outer
 
 
-def _compute_symmetry(cutout):
-    """
-    Compute 180-degree rotational symmetry.
-
-    Real sources (stars) are symmetric; many artifacts are not.
-    Returns residual (lower = more symmetric).
-    """
-    if cutout is None:
-        return np.nan
-
-    rotated = np.rot90(cutout, 2)  # 180 degree rotation
-
-    # Normalize by flux to make scale-independent
+def _compute_symmetry(cutout, _geom):
+    """Compute 180-degree rotational symmetry (lower = more symmetric)."""
+    rotated = np.rot90(cutout, 2)
     flux = np.sum(np.abs(cutout))
     if flux <= 0:
         return np.nan
-
-    residual = np.sum(np.abs(cutout - rotated)) / flux
-    return residual
+    return np.sum(np.abs(cutout - rotated)) / flux
 
 
-def _compute_roundness(cutout):
-    """
-    Compute roundness from image moments.
-
-    Returns value 0-1 where 1 = perfectly round.
-    """
-    if cutout is None:
-        return np.nan
-
-    # Use positive part only for moments
+def _compute_roundness(cutout, geom):
+    """Compute roundness from image moments (0-1, 1 = perfectly round)."""
     data = np.maximum(cutout, 0)
     total = np.sum(data)
     if total <= 0:
         return np.nan
 
-    cy, cx = cutout.shape[0] // 2, cutout.shape[1] // 2
-    y, x = np.ogrid[: cutout.shape[0], : cutout.shape[1]]
+    m20 = np.sum(data * geom.dx**2) / total
+    m02 = np.sum(data * geom.dy**2) / total
+    m11 = np.sum(data * geom.dx * geom.dy) / total
 
-    # Second moments
-    m20 = np.sum(data * (x - cx) ** 2) / total
-    m02 = np.sum(data * (y - cy) ** 2) / total
-    m11 = np.sum(data * (x - cx) * (y - cy)) / total
-
-    # Ellipse parameters from moments
     diff = m20 - m02
     discriminant = np.sqrt(diff**2 + 4 * m11**2)
 
     if discriminant == 0:
-        return 1.0  # Perfectly round
+        return 1.0
 
-    # Semi-major and semi-minor axes
     a2 = (m20 + m02 + discriminant) / 2
     b2 = (m20 + m02 - discriminant) / 2
 
     if a2 <= 0:
         return np.nan
 
-    # Roundness = b/a
     return np.sqrt(max(0, b2) / a2)
 
 
-def _compute_psf_match(cutout, fwhm):
-    """
-    Compute how well the cutout matches a Gaussian PSF.
-
-    Returns chi-squared-like metric (lower = better match).
-    """
-    if cutout is None or fwhm <= 0:
+def _compute_psf_match(cutout, geom, fwhm):
+    """Compute how well the cutout matches a Gaussian PSF (lower = better)."""
+    if fwhm <= 0:
         return np.nan
 
-    cy, cx = cutout.shape[0] // 2, cutout.shape[1] // 2
-    y, x = np.ogrid[: cutout.shape[0], : cutout.shape[1]]
-    r2 = (x - cx) ** 2 + (y - cy) ** 2
-
-    # Gaussian PSF model
     sigma = fwhm / 2.355
-    psf_model = np.exp(-r2 / (2 * sigma**2))
+    psf_model = np.exp(-geom.r2 / (2 * sigma**2))
 
-    # Normalize both to unit sum
-    cutout_norm = cutout / np.sum(np.abs(cutout)) if np.sum(np.abs(cutout)) > 0 else cutout
+    abs_sum = np.sum(np.abs(cutout))
+    cutout_norm = cutout / abs_sum if abs_sum > 0 else cutout
     psf_norm = psf_model / np.sum(psf_model)
 
-    # Scale PSF to match cutout amplitude
     scale = np.sum(cutout_norm * psf_norm) / np.sum(psf_norm**2)
     residual = cutout_norm - scale * psf_norm
 
-    # Chi-squared-like metric
     return np.sum(residual**2)
 
 
-def _compute_peak_offset(cutout):
-    """
-    Compute distance from center to peak pixel.
-
-    Real centered sources have small offset; artifacts may have large offset.
-    """
-    if cutout is None:
-        return np.nan
-
-    cy, cx = cutout.shape[0] // 2, cutout.shape[1] // 2
-    peak_idx = np.unravel_index(np.argmax(cutout), cutout.shape)
-    peak_y, peak_x = peak_idx
-
-    return np.sqrt((peak_x - cx) ** 2 + (peak_y - cy) ** 2)
+def _compute_peak_offset(cutout, geom):
+    """Compute distance from center to peak pixel."""
+    peak_y, peak_x = np.unravel_index(np.argmax(cutout), cutout.shape)
+    return np.sqrt((peak_x - geom.cx) ** 2 + (peak_y - geom.cy) ** 2)
 
 
-def _compute_edge_gradient(cutout):
-    """
-    Compute maximum radial gradient at edge.
-
-    Cosmic rays have sharp edges; real sources have smooth profiles.
-    """
-    if cutout is None:
-        return np.nan
-
-    # Sobel gradient magnitude
+def _compute_edge_gradient(cutout, _geom):
+    """Compute max gradient magnitude normalized by peak flux."""
     gx = ndimage.sobel(cutout, axis=1)
     gy = ndimage.sobel(cutout, axis=0)
     gradient = np.sqrt(gx**2 + gy**2)
 
-    # Normalize by peak flux
     peak = np.max(np.abs(cutout))
     if peak <= 0:
         return np.nan
@@ -460,24 +387,12 @@ def _compute_edge_gradient(cutout):
     return np.max(gradient) / peak
 
 
-def _compute_background_consistency(cutout, radius=None):
-    """
-    Compute consistency of background around the source.
+def _compute_background_consistency(cutout, geom, bg_radius=None):
+    """Compute coefficient of variation of background annulus."""
+    if bg_radius is None:
+        bg_radius = cutout.shape[0] // 2 - 2
 
-    Real sources have uniform local background; artifacts near edges don't.
-    """
-    if cutout is None:
-        return np.nan
-
-    if radius is None:
-        radius = cutout.shape[0] // 2 - 2
-
-    cy, cx = cutout.shape[0] // 2, cutout.shape[1] // 2
-    y, x = np.ogrid[: cutout.shape[0], : cutout.shape[1]]
-    r = np.sqrt((x - cx) ** 2 + (y - cy) ** 2)
-
-    # Background annulus
-    bg_mask = (r > radius) & (r <= radius + 2)
+    bg_mask = (geom.r > bg_radius) & (geom.r <= bg_radius + 2)
     if np.sum(bg_mask) < 4:
         return np.nan
 
@@ -488,7 +403,6 @@ def _compute_background_consistency(cutout, radius=None):
     if bg_median <= 0:
         return 0.0
 
-    # Coefficient of variation (lower = more consistent)
     return bg_std / bg_median
 
 
@@ -509,26 +423,23 @@ def _compute_cutout_snr(cutout, cutout_err):
 
 
 def _get_cutout_feature_specs(include_snr=False):
-    """Build cutout feature extraction specs."""
+    """Build cutout feature extraction specs.
+
+    Each spec is (name, fn(cutout, geom, cutout_err, fwhm) -> float).
+    """
     specs = [
-        ("sharpness", lambda cutout, _cutout_err, _fwhm: _compute_sharpness(cutout)),
-        ("concentration", lambda cutout, _cutout_err, _fwhm: _compute_concentration(cutout)),
-        ("symmetry", lambda cutout, _cutout_err, _fwhm: _compute_symmetry(cutout)),
-        ("roundness", lambda cutout, _cutout_err, _fwhm: _compute_roundness(cutout)),
-        ("psf_match", lambda cutout, _cutout_err, fwhm: _compute_psf_match(cutout, fwhm)),
-        ("peak_offset", lambda cutout, _cutout_err, _fwhm: _compute_peak_offset(cutout)),
-        ("edge_gradient", lambda cutout, _cutout_err, _fwhm: _compute_edge_gradient(cutout)),
-        (
-            "bg_consistency",
-            lambda cutout, _cutout_err, _fwhm: _compute_background_consistency(cutout),
-        ),
+        ("sharpness", lambda c, _g, _e, _f: _compute_sharpness(c)),
+        ("concentration", lambda c, g, _e, _f: _compute_concentration(c, g)),
+        ("symmetry", lambda c, g, _e, _f: _compute_symmetry(c, g)),
+        ("roundness", lambda c, g, _e, _f: _compute_roundness(c, g)),
+        ("psf_match", lambda c, g, _e, f: _compute_psf_match(c, g, f)),
+        ("peak_offset", lambda c, g, _e, _f: _compute_peak_offset(c, g)),
+        ("edge_gradient", lambda c, g, _e, _f: _compute_edge_gradient(c, g)),
+        ("bg_consistency", lambda c, g, _e, _f: _compute_background_consistency(c, g)),
     ]
     if include_snr:
         specs.append(
-            (
-                "cutout_snr",
-                lambda cutout, cutout_err, _fwhm: _compute_cutout_snr(cutout, cutout_err),
-            )
+            ("cutout_snr", lambda c, _g, e, _f: _compute_cutout_snr(c, e))
         )
     return specs
 
@@ -585,7 +496,7 @@ def extract_cutout_features(
     for i, row in enumerate(obj):
         x, y = row["x"], row["y"]
 
-        cutout, cutout_mask, cutout_err, _offset = _extract_cutout(
+        cutout, cutout_mask, cutout_err = _extract_cutout(
             image, x, y, radius, bg=bg, err=err, mask=mask
         )
 
@@ -602,9 +513,11 @@ def extract_cutout_features(
                 median_err = np.nanmedian(cutout_err[~cutout_mask])
                 cutout_err[cutout_mask] = median_err
 
-        # Compute features from declarative spec list.
+        # Pre-compute geometry once per cutout (shared across features)
+        geom = _CutoutGeometry(cutout.shape)
+
         for name, compute_fn in feature_specs:
-            features[name][i] = compute_fn(cutout, cutout_err, fwhm)
+            features[name][i] = compute_fn(cutout, geom, cutout_err, fwhm)
 
     feature_names = list(features.keys())
     log(f"Extracted {len(feature_names)} cutout features for {n} objects")
@@ -985,13 +898,9 @@ class ScoringClassifier:
     from the "typical" real source value.
     """
 
-    # Default weights and thresholds for each feature
-    # (feature_name, weight, ideal_value, bad_direction)
-    # bad_direction: 'high' means high values are bad, 'low' means low values are bad
-    # Default weights and thresholds calibrated on simulated data
-    # (feature_name, weight, ideal_value, bad_direction, threshold)
-    # bad_direction: 'high' means high values are bad, 'low' means low, 'both' means either
-    # threshold: deviation at which penalty is 50% (score_component = 0.5)
+    # Scoring rules calibrated on simulated data.
+    # bad_direction: 'high' penalizes above ideal, 'low' below, 'both' either
+    # threshold: deviation at which penalty is 50%
     DEFAULT_RULES = {
         # Cutout features - calibrated on simulated astronomical images
         # Thresholds are lenient to avoid over-rejection; tune for your data
@@ -1019,7 +928,6 @@ class ScoringClassifier:
             Custom scoring rules. Default: use DEFAULT_RULES.
         """
         self.rules = rules if rules is not None else self.DEFAULT_RULES.copy()
-        self._fitted = True  # No fitting needed
 
     def fit(self, X, y=None):
         """Fit is a no-op for scoring classifier."""
@@ -1668,32 +1576,31 @@ def generate_training_data(
             features, _ = remove_trends(features, obj, trend_cols=trend_cols, verbose=False)
 
         # Match detected objects to catalog to get labels
-        labels = np.zeros(len(obj))
-        for j, row in enumerate(obj):
-            x, y = row["x"], row["y"]
-            # Check if near a real source
-            for cat_row in catalog:
-                if cat_row["type"] in ["star", "galaxy"]:
-                    dist = np.sqrt((x - cat_row["x"]) ** 2 + (y - cat_row["y"]) ** 2)
-                    if dist < fwhm:
-                        labels[j] = 1
-                        break
+        from scipy.spatial import cKDTree
 
-        # Accumulate
+        real_mask = [row["type"] in ("star", "galaxy") for row in catalog]
+        labels = np.zeros(len(obj))
+        if any(real_mask):
+            cat_real = catalog[real_mask]
+            tree = cKDTree(np.column_stack([cat_real["x"], cat_real["y"]]))
+            dists, _ = tree.query(np.column_stack([obj["x"], obj["y"]]))
+            labels = (dists < fwhm).astype(float)
+
+        # Accumulate arrays for later concatenation
         if all_features is None:
-            all_features = {k: list(v) for k, v in features.items()}
+            all_features = {k: [v] for k, v in features.items()}
         else:
             for k, v in features.items():
-                all_features[k].extend(v)
-        all_labels.extend(labels)
+                all_features[k].append(v)
+        all_labels.append(labels)
 
     # Convert to arrays
     if all_features is None:
         log("No detections accumulated from simulations")
         return {}, np.array([], dtype=np.int8)
 
-    all_features = {k: np.array(v) for k, v in all_features.items()}
-    all_labels = np.array(all_labels)
+    all_features = {k: np.concatenate(v) for k, v in all_features.items()}
+    all_labels = np.concatenate(all_labels)
 
     n_real = np.sum(all_labels == 1)
     n_bogus = np.sum(all_labels == 0)

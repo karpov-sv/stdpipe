@@ -687,7 +687,8 @@ class TestFeatureMathEdgeCases:
         """Roundness should still be finite with positive core on negative background."""
         cutout = np.full((5, 5), -1.0)
         cutout[2, 2] = 5.0
-        roundness = rbf._compute_roundness(cutout)
+        geom = rbf._CutoutGeometry(cutout.shape)
+        roundness = rbf._compute_roundness(cutout, geom)
 
         assert np.isfinite(roundness)
         assert 0 <= roundness <= 1

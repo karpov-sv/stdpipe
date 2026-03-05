@@ -103,28 +103,6 @@ class TestCutoutPreprocessing:
     """Test cutout preprocessing functions."""
 
     @pytest.mark.unit
-    def test_normalize_cutout_robust(self):
-        """Test robust z-score normalization."""
-        cutout = np.random.randn(31, 31) * 10 + 100
-
-        normalized = realbogus._normalize_cutout(cutout, method='robust')
-
-        # Should have approximately mean=0, std=1
-        assert abs(np.median(normalized)) < 0.5
-        assert 0.5 < np.std(normalized) < 2.0
-
-    @pytest.mark.unit
-    def test_normalize_cutout_standard(self):
-        """Test standard z-score normalization."""
-        cutout = np.random.randn(31, 31) * 10 + 100
-
-        normalized = realbogus._normalize_cutout(cutout, method='standard')
-
-        # Should have approximately mean=0, std=1
-        assert abs(np.mean(normalized)) < 0.1
-        assert 0.9 < np.std(normalized) < 1.1
-
-    @pytest.mark.unit
     def test_downscale_cutout_2x(self):
         """Test 2x downscaling."""
         cutout = np.random.randn(32, 32) * 10 + 100
@@ -239,7 +217,7 @@ class TestCutoutExtraction:
         """Test basic cutout extraction."""
         image, obj = simple_image_with_objects
 
-        cutouts, fwhm_features, valid_indices = realbogus.extract_cutouts(
+        cutouts, valid_indices = realbogus.extract_cutouts(
             obj,
             image,
             radius=15,
@@ -253,7 +231,6 @@ class TestCutoutExtraction:
 
         # Check shapes
         assert cutouts.shape[1:] == (31, 31, 2)  # 2 channels
-        assert fwhm_features.shape == (len(cutouts), 1)
         assert len(valid_indices) == len(cutouts)
 
     @pytest.mark.unit
@@ -263,7 +240,7 @@ class TestCutoutExtraction:
 
         bg = np.full_like(image, 1000.0)
 
-        cutouts, fwhm_features, valid_indices = realbogus.extract_cutouts(
+        cutouts, valid_indices = realbogus.extract_cutouts(
             obj,
             image,
             bg=bg,
@@ -286,7 +263,7 @@ class TestCutoutExtraction:
             'y': [50.0, 50.0, 50.0],
         })
 
-        cutouts, fwhm_features, valid_indices = realbogus.extract_cutouts(
+        cutouts, valid_indices = realbogus.extract_cutouts(
             obj,
             image,
             radius=15,
@@ -314,18 +291,15 @@ class TestTrainingDataGeneration:
 
         assert 'X' in data
         assert 'y' in data
-        assert 'fwhm' in data
 
         # Check shapes
         X = data['X']
         y = data['y']
-        fwhm = data['fwhm']
 
-        assert len(X) == len(y) == len(fwhm)
+        assert len(X) == len(y)
         assert X.ndim == 4  # (N, H, W, C)
         assert X.shape[-1] == 2  # 2 channels
         assert y.ndim == 1
-        assert fwhm.ndim == 2
 
         # Should have mix of real and bogus
         assert 0 < np.sum(y) < len(y)
@@ -354,13 +328,11 @@ class TestTrainingDataGeneration:
     @pytest.mark.unit
     def test_augment_training_data(self):
         """Test data augmentation function."""
-        # Create dummy data
         X = np.random.randn(10, 31, 31, 2).astype(np.float32)
         y = np.array([1, 0, 1, 0, 1, 0, 1, 0, 1, 0])
-        fwhm = np.random.randn(10, 1).astype(np.float32)
 
-        X_aug, y_aug, fwhm_aug = simulation._augment_training_data(
-            X, y, fwhm,
+        X_aug, y_aug = simulation._augment_training_data(
+            X, y,
             augment_factor=4,
             verbose=False
         )
@@ -368,7 +340,6 @@ class TestTrainingDataGeneration:
         # Should have 4x more samples (rotations)
         assert len(X_aug) == 4 * len(X)
         assert len(y_aug) == 4 * len(y)
-        assert len(fwhm_aug) == 4 * len(fwhm)
 
 
 class TestClassification:

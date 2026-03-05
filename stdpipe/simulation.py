@@ -1583,7 +1583,6 @@ def generate_realbogus_training_data(
     # Containers for training data
     all_cutouts = []
     all_labels = []
-    all_fwhms = []
     all_metadata = []
 
     for img_idx in range(n_images):
@@ -1740,7 +1739,7 @@ def generate_realbogus_training_data(
 
         # Extract cutouts
         try:
-            cutouts, fwhm_features, valid_indices = realbogus.extract_cutouts(
+            cutouts, valid_indices = realbogus.extract_cutouts(
                 detected,
                 image,
                 bg=background,
@@ -1759,7 +1758,6 @@ def generate_realbogus_training_data(
         # Store data
         all_cutouts.append(cutouts)
         all_labels.append(labels)
-        all_fwhms.append(fwhm_features)
 
         # Metadata for each cutout
         metadata = {
@@ -1775,19 +1773,17 @@ def generate_realbogus_training_data(
 
     X = np.concatenate(all_cutouts, axis=0)
     y = np.concatenate(all_labels, axis=0)
-    fwhm_feat = np.concatenate(all_fwhms, axis=0)
 
     log(f"Total samples: {len(X)} ({np.sum(y)} real, {len(y) - np.sum(y)} bogus)")
 
     # Apply data augmentation
     if augment:
         log("Applying data augmentation...")
-        X_aug, y_aug, fwhm_aug = _augment_training_data(X, y, fwhm_feat, verbose=verbose)
+        X_aug, y_aug = _augment_training_data(X, y, verbose=verbose)
         log(f"After augmentation: {len(X_aug)} samples")
     else:
         X_aug = X
         y_aug = y
-        fwhm_aug = fwhm_feat
 
     # Convert labels to binary (ensure proper dtype)
     y_aug = y_aug.astype(np.float32)
@@ -1795,14 +1791,13 @@ def generate_realbogus_training_data(
     result = {
         'X': X_aug,
         'y': y_aug,
-        'fwhm': fwhm_aug,
         'metadata': all_metadata,
     }
 
     return result
 
 
-def _augment_training_data(X, y, fwhm, augment_factor=8, verbose=False):
+def _augment_training_data(X, y, augment_factor=8, verbose=False):
     """
     Apply data augmentation to training cutouts.
 
@@ -1813,50 +1808,33 @@ def _augment_training_data(X, y, fwhm, augment_factor=8, verbose=False):
 
     :param X: Input cutouts (N, H, W, C)
     :param y: Labels (N,)
-    :param fwhm: FWHM features (N, 1)
     :param augment_factor: Target augmentation factor
     :param verbose: Print progress
-    :returns: (X_aug, y_aug, fwhm_aug) with augmented data
+    :returns: (X_aug, y_aug) with augmented data
     """
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     n_samples = len(X)
     X_list = [X]
     y_list = [y]
-    fwhm_list = [fwhm]
 
     # Rotation augmentation (90°, 180°, 270°)
     for angle in [90, 180, 270]:
-        X_rot = np.rot90(X, k=angle // 90, axes=(1, 2))
-        X_list.append(X_rot)
+        X_list.append(np.rot90(X, k=angle // 90, axes=(1, 2)))
         y_list.append(y)
-        fwhm_list.append(fwhm)
 
     # Flip augmentation
     if augment_factor >= 8:
-        # Horizontal flip
-        X_flip_h = np.flip(X, axis=2)
-        X_list.append(X_flip_h)
+        X_list.append(np.flip(X, axis=2))       # Horizontal flip
         y_list.append(y)
-        fwhm_list.append(fwhm)
-
-        # Vertical flip
-        X_flip_v = np.flip(X, axis=1)
-        X_list.append(X_flip_v)
+        X_list.append(np.flip(X, axis=1))       # Vertical flip
         y_list.append(y)
-        fwhm_list.append(fwhm)
-
-        # Both flips
-        X_flip_both = np.flip(np.flip(X, axis=1), axis=2)
-        X_list.append(X_flip_both)
+        X_list.append(np.flip(np.flip(X, axis=1), axis=2))  # Both flips
         y_list.append(y)
-        fwhm_list.append(fwhm)
 
-    # Concatenate
     X_aug = np.concatenate(X_list, axis=0)
     y_aug = np.concatenate(y_list, axis=0)
-    fwhm_aug = np.concatenate(fwhm_list, axis=0)
 
     log(f"Augmentation: {n_samples} → {len(X_aug)} samples ({len(X_aug)/n_samples:.1f}× increase)")
 
-    return X_aug, y_aug, fwhm_aug
+    return X_aug, y_aug

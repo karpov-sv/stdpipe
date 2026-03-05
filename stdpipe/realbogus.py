@@ -35,8 +35,7 @@ from __future__ import absolute_import, division, print_function
 import numpy as np
 import os
 import warnings
-from astropy.table import Table, Column
-from astropy.stats import mad_std
+from astropy.table import Column
 
 # Conditional TensorFlow import
 try:
@@ -147,37 +146,6 @@ def create_realbogus_model(
     )
 
     return model
-
-
-def _normalize_cutout(cutout, method='robust'):
-    """
-    Normalize cutout using z-score normalization.
-
-    Parameters
-    ----------
-    cutout : ndarray
-        2D image cutout
-    method : str, optional
-        Normalization method: 'robust' (median/MAD) or 'standard' (mean/std)
-        Default: 'robust'
-
-    Returns
-    -------
-    normalized : ndarray
-        Normalized cutout (mean=0, std=1)
-    """
-    if method == 'robust':
-        center = np.median(cutout)
-        scale = mad_std(cutout)
-    else:
-        center = np.mean(cutout)
-        scale = np.std(cutout)
-
-    # Avoid division by zero
-    if scale < 1e-10:
-        scale = 1.0
-
-    return (cutout - center) / scale
 
 
 def _downscale_cutout(cutout, scale_factor, mode='mean'):
@@ -313,28 +281,28 @@ def _pad_to_size(cutout, target_size, mode='edge'):
         Padded cutout (target_size x target_size)
     """
     h, w = cutout.shape
-    if h >= target_size and w >= target_size:
-        # Already large enough, crop center
+
+    # Crop dimensions that exceed target
+    if h > target_size:
         start_h = (h - target_size) // 2
+        cutout = cutout[start_h:start_h+target_size, :]
+        h = target_size
+    if w > target_size:
         start_w = (w - target_size) // 2
-        return cutout[start_h:start_h+target_size, start_w:start_w+target_size]
+        cutout = cutout[:, start_w:start_w+target_size]
+        w = target_size
 
-    # Calculate padding
-    pad_h = max(0, target_size - h)
-    pad_w = max(0, target_size - w)
+    # Pad dimensions that are smaller than target
+    pad_h = target_size - h
+    pad_w = target_size - w
+    if pad_h > 0 or pad_w > 0:
+        cutout = np.pad(
+            cutout,
+            ((pad_h // 2, pad_h - pad_h // 2), (pad_w // 2, pad_w - pad_w // 2)),
+            mode=mode
+        )
 
-    pad_top = pad_h // 2
-    pad_bottom = pad_h - pad_top
-    pad_left = pad_w // 2
-    pad_right = pad_w - pad_left
-
-    padded = np.pad(
-        cutout,
-        ((pad_top, pad_bottom), (pad_left, pad_right)),
-        mode=mode
-    )
-
-    return padded
+    return cutout
 
 
 def preprocess_cutout(
@@ -386,9 +354,9 @@ def preprocess_cutout(
         Science image cutout (assumed to be background-subtracted if cutout_bg is None)
     cutout_bg : ndarray, optional
         Background cutout (or scalar value). If None, estimated from cutout edges.
-    cutout_err : ndarray, optional
-        Error/noise cutout (or scalar value). Not used in current implementation
-        (kept for backward compatibility).
+    cutout_err : ndarray or float, optional
+        Error/noise cutout (or scalar value). Used to estimate the noise level
+        (sigma) for asinh softening. Only the median value is used.
     fwhm : float, optional
         Image FWHM in pixels. If provided, cutout will be downscaled to target_fwhm.
     target_fwhm : float, optional
@@ -424,13 +392,17 @@ def preprocess_cutout(
     if np.isscalar(cutout_bg):
         cutout_bg = np.full_like(cutout_sci, cutout_bg)
 
-    # Handle error/noise
+    # Estimate noise sigma for asinh softening (only the median is needed,
+    # so compute before any scaling to avoid unnecessary array operations)
     if cutout_err is None:
-        # Estimate from MAD
-        cutout_err = mad_std(cutout_sci)
-
-    if np.isscalar(cutout_err):
-        cutout_err = np.full_like(cutout_sci, cutout_err)
+        from astropy.stats import mad_std
+        sigma = float(mad_std(cutout_sci))
+    elif np.isscalar(cutout_err):
+        sigma = float(cutout_err)
+    else:
+        sigma = float(np.nanmedian(cutout_err))
+    if not np.isfinite(sigma) or sigma <= 0:
+        sigma = 1.0
 
     # Scaling to canonical FWHM (both downscale and upscale)
     scale_factor = 1.0
@@ -442,14 +414,12 @@ def preprocess_cutout(
             factor = round(scale_factor)
             cutout_sci = _downscale_cutout(cutout_sci, factor)
             cutout_bg = _downscale_cutout(cutout_bg, factor)
-            cutout_err = _downscale_cutout(cutout_err, factor)
 
         # Upscale if PSF too sharp (symmetric with downscaling)
         elif scale_factor < 1.0 / downscale_threshold:
             factor = round(1.0 / scale_factor)
             cutout_sci = _upscale_cutout(cutout_sci, factor)
             cutout_bg = _upscale_cutout(cutout_bg, factor)
-            cutout_err = _upscale_cutout(cutout_err, factor)
 
     # Create background-subtracted channel
     cutout_bgsub = cutout_sci - cutout_bg
@@ -457,10 +427,6 @@ def preprocess_cutout(
     # Create asinh-scaled channel for dynamic range compression
     if asinh_softening is None:
         asinh_softening = DEFAULT_ASINH_SOFTENING_SIGMA
-
-    sigma = float(np.nanmedian(cutout_err))
-    if not np.isfinite(sigma) or sigma <= 0:
-        sigma = 1.0
 
     softening = float(asinh_softening) * sigma
     if not np.isfinite(softening) or softening <= 0:
@@ -473,19 +439,11 @@ def preprocess_cutout(
     channels = [cutout_bgsub, cutout_asinh]
 
     # Peak normalization for brightness invariance
-    # Each channel normalized by its own peak value
     if normalize:
-        normalized_channels = []
-        for ch in channels:
+        for i, ch in enumerate(channels):
             peak = np.max(np.abs(ch))
             if peak > 1e-10:
-                # Normalize to [-1, 1] range based on peak
-                ch_normalized = ch / peak
-            else:
-                # Empty or near-zero cutout
-                ch_normalized = ch
-            normalized_channels.append(ch_normalized)
-        channels = normalized_channels
+                channels[i] = ch / peak
 
     # Pad/crop to target size
     channels = [_pad_to_size(ch, target_size) for ch in channels]
@@ -539,8 +497,6 @@ def extract_cutouts(
     -------
     cutouts : ndarray
         Array of preprocessed cutouts (N, 2*radius+1, 2*radius+1, 2)
-    fwhm_features : ndarray
-        Array of normalized FWHM values (N, 1)
     valid_indices : ndarray
         Indices of successfully extracted cutouts
     """
@@ -557,10 +513,8 @@ def extract_cutouts(
             fwhm = 3.0  # Fallback
         log(f"Estimated FWHM: {fwhm:.2f} pixels")
 
-    # Prepare containers
     cutout_size = 2 * radius + 1
     cutouts = []
-    fwhm_features = []
     valid_indices = []
 
     h, w = image.shape
@@ -622,11 +576,7 @@ def extract_cutouts(
                 asinh_softening=asinh_softening,
             )
 
-            # Normalize FWHM feature
-            fwhm_norm = (fwhm / target_fwhm - 1.0) / 2.0  # ~[-0.5, 0.5] for FWHM=1-10
-
             cutouts.append(preprocessed)
-            fwhm_features.append([fwhm_norm])
             valid_indices.append(i)
 
         except Exception as e:
@@ -637,12 +587,11 @@ def extract_cutouts(
         raise ValueError("No valid cutouts extracted")
 
     cutouts = np.array(cutouts, dtype=np.float32)
-    fwhm_features = np.array(fwhm_features, dtype=np.float32)
     valid_indices = np.array(valid_indices, dtype=int)
 
     log(f"Extracted {len(cutouts)} valid cutouts from {len(obj)} objects")
 
-    return cutouts, fwhm_features, valid_indices
+    return cutouts, valid_indices
 
 
 def load_realbogus_model(model_file=None, verbose=False):
@@ -799,7 +748,7 @@ def classify_realbogus(
     log(f"Classifying {len(obj)} objects (threshold={threshold:.2f})")
 
     # Extract cutouts
-    cutouts, fwhm_features, valid_indices = extract_cutouts(
+    cutouts, valid_indices = extract_cutouts(
         obj,
         image,
         bg=bg,
@@ -811,7 +760,7 @@ def classify_realbogus(
         verbose=verbose
     )
 
-    # Batch inference (pure image-based, no FWHM auxiliary input)
+    # Batch inference
     log(f"Running inference on {len(cutouts)} cutouts (batch_size={batch_size})")
     predictions = model.predict(
         cutouts,
@@ -931,7 +880,7 @@ def train_realbogus_classifier(
     >>> # Or use pre-generated data
     >>> data = realbogus.generate_training_data(...)
     >>> model, history = realbogus.train_realbogus_classifier(
-    ...     training_data=(data['X'], data['y'], data['fwhm']),
+    ...     training_data=(data['X'], data['y']),
     ...     epochs=30
     ... )
     """
@@ -954,15 +903,15 @@ def train_realbogus_classifier(
         )
         X = data['X']
         y = data['y']
-        fwhm_features = data['fwhm']
     else:
         # Handle both tuple and dict formats
         if isinstance(training_data, dict):
             X = training_data['X']
             y = training_data['y']
-            fwhm_features = training_data.get('fwhm', None)
+        elif len(training_data) == 3:
+            X, y, _fwhm_features = training_data  # Legacy 3-tuple format
         else:
-            X, y, fwhm_features = training_data
+            X, y = training_data
 
     log(f"Training data: {len(X)} samples, {np.sum(y)} real, {len(y) - np.sum(y)} bogus")
 
@@ -1022,10 +971,3 @@ def train_realbogus_classifier(
         save_realbogus_model(model, model_file=model_file, verbose=verbose)
 
     return model, history
-
-
-# Backwards compatibility aliases
-classify_objects = classify_realbogus
-create_model = create_realbogus_model
-load_model = load_realbogus_model
-save_model = save_realbogus_model
