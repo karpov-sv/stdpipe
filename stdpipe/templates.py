@@ -292,10 +292,12 @@ def mask_template(
 
         # First, we select all catalogue objects with masked measurements
         if mask_masked:
-            tidx = cat[cat_col_mag].mask == True
+            mag_mask = getattr(cat[cat_col_mag], 'mask', np.zeros(len(cat), dtype=bool))
+            tidx = np.asarray(mag_mask, dtype=bool)
             tidx |= ~np.isfinite(cat[cat_col_mag])
             if cat_col_mag_err:
-                tidx |= cat[cat_col_mag_err].mask == True
+                err_mask = getattr(cat[cat_col_mag_err], 'mask', np.zeros(len(cat), dtype=bool))
+                tidx |= np.asarray(err_mask, dtype=bool)
                 tidx |= ~np.isfinite(cat[cat_col_mag_err])
 
         # Next, we also add the ones corresponding to saturation limit
@@ -333,11 +335,14 @@ def mask_template(
 
         tmask[cy[tidx], cx[tidx]] = True
 
-        log(
-            np.sum(tmask),
-            'template pixels masked after checking saturated (%s < %.1f) stars'
-            % (cat_col_mag, cat_saturation_mag),
-        )
+        if cat_saturation_mag is not None:
+            log(
+                np.sum(tmask),
+                'template pixels masked after checking saturated (%s < %.1f) stars'
+                % (cat_col_mag, cat_saturation_mag),
+            )
+        else:
+            log(np.sum(tmask), 'template pixels masked after catalogue checking')
 
     if dilate and dilate > 0:
         log('Dilating the mask with %d x %d kernel' % (dilate, dilate))
@@ -621,7 +626,7 @@ def get_survey_image(
     width=None,
     height=None,
     header=None,
-    extra={},
+    extra=None,
     _cachedir=None,
     _cache_downscale=1,
     _tmpdir=None,
@@ -746,13 +751,13 @@ def get_ls_image_and_mask(band='r', **kwargs):
 
 # Image re-projection and mosaicking code
 def reproject_swarp(
-    input=[],
+    input=None,
     wcs=None,
     shape=None,
     width=None,
     height=None,
     header=None,
-    extra={},
+    extra=None,
     is_flags=False,
     use_nans=True,
     get_weights=False,
@@ -776,6 +781,11 @@ def reproject_swarp(
     should be the dictionary with parameter names as keys.
 
     """
+
+    if input is None:
+        input = []
+    if extra is None:
+        extra = {}
 
     # Simple wrapper around print for logging in verbose mode only
     log = (
@@ -942,7 +952,6 @@ def reproject_swarp(
     if res == 0 and os.path.exists(coaddname) and os.path.exists(weightsname):
         log('SWarp run successfully in %.2f seconds' % (t1 - t0))
 
-        cheader = fits.getdata(coaddname)
         coadd = fits.getdata(coaddname)
         weights = fits.getdata(weightsname)
 
@@ -952,7 +961,7 @@ def reproject_swarp(
             coadd -= bzero
 
         if use_nans:
-            if isinstance(coadd[0][0], np.floating):
+            if np.issubdtype(coadd.dtype, np.floating):
                 coadd[weights == 0] = np.nan
             else:
                 coadd[weights == 0] = 0xFFFF
