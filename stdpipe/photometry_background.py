@@ -10,10 +10,6 @@ import numpy as np
 
 from astropy.stats import mad_std
 
-import sep
-import photutils
-import photutils.background
-
 
 def get_background_percentile(
     image, mask=None, size=51, percentile=25.0, maxiters=3, sigma=3.0, use_mode=False
@@ -60,14 +56,23 @@ def get_background_percentile(
     - For very crowded fields, use lower percentiles (10-15)
     - Handles arbitrary background shapes (not limited to polynomial forms)
     """
-    from scipy.ndimage import percentile_filter, median_filter, generic_filter
+    from scipy.ndimage import percentile_filter, median_filter
 
     # Work with a copy to avoid modifying input
     img = image.copy()
 
     # Apply mask by replacing with NaN (will be ignored in percentile computation)
+    has_nan = False
     if mask is not None:
         img[mask] = np.nan
+        has_nan = True
+
+    # Fix #3: Define masked_percentile closure once before the loop
+    def masked_percentile(values):
+        valid = values[~np.isnan(values)]
+        if len(valid) < 3:
+            return np.nan
+        return np.percentile(valid, percentile)
 
     # Iterative sigma-clipping approach
     for iteration in range(maxiters):
@@ -76,17 +81,23 @@ def get_background_percentile(
             # This is expensive, so use median as approximation
             back = median_filter(img, size=size)
         else:
-            # Percentile filter
-            # Note: percentile_filter doesn't handle NaN, so we need masked array approach
-            if mask is not None:
-                # Use generic_filter with custom function for masked arrays
-                def masked_percentile(values):
-                    valid = values[~np.isnan(values)]
-                    if len(valid) < 3:
-                        return np.nan
-                    return np.percentile(valid, percentile)
+            # Fix #2 & #4: Use fast percentile_filter with NaN-filling approach
+            # instead of slow generic_filter with Python callback
+            if has_nan:
+                # Two-pass approach: fill NaN with local median, then run fast filter
+                # Pass 1: Fill NaN pixels with local median
+                img_filled = img.copy()
+                nan_mask = np.isnan(img_filled)
+                if np.any(nan_mask):
+                    # Use median filter to get fill values
+                    # Temporarily replace NaN with image median for the filter
+                    fill_val = np.nanmedian(img_filled)
+                    img_filled[nan_mask] = fill_val
+                    local_med = median_filter(img_filled, size=min(size, 15))
+                    img_filled[nan_mask] = local_med[nan_mask]
 
-                back = generic_filter(img, masked_percentile, size=size)
+                # Pass 2: Run fast C-based percentile_filter on the filled image
+                back = percentile_filter(img_filled, percentile=percentile, size=size)
             else:
                 back = percentile_filter(img, percentile=percentile, size=size)
 
@@ -103,6 +114,8 @@ def get_background_percentile(
             # Clip positive outliers (stars)
             outliers = residual > sigma * rms
             img[outliers] = np.nan
+            if np.any(outliers):
+                has_nan = True
 
     # Fill any remaining NaN values
     if np.any(np.isnan(back)):
@@ -139,8 +152,8 @@ def get_background_morphology(image, mask=None, size=25, iterations=1, smooth=Tr
         If True, apply additional smoothing to reduce kernel-sized artifacts.
         This significantly improves the smoothness of the result.
     smooth_size : int, optional
-        Size of smoothing kernel. If None, automatically set to size//3 for
-        Gaussian smoothing (good default). Use larger values for smoother results.
+        Size of smoothing kernel in pixels. If None, automatically set based on
+        the structuring element size. Use larger values for smoother results.
 
     Returns
     -------
@@ -182,6 +195,7 @@ def get_background_morphology(image, mask=None, size=25, iterations=1, smooth=Tr
         back = grey_opening(back, structure=structure)
 
     # Apply smoothing to reduce kernel-sized artifacts
+    # Fix #6: smooth_size consistently means filter size in pixels for both paths
     if smooth:
         if mask is not None and np.any(mask):
             # Use median filter for masked images (more robust to artifacts)
@@ -194,16 +208,16 @@ def get_background_morphology(image, mask=None, size=25, iterations=1, smooth=Tr
             # Use Gaussian smoothing for clean images (smoother results)
             if smooth_size is None:
                 # Default: adaptive smoothing based on kernel size
-                # Use size/5 for good balance of smoothness and locality
-                sigma = max(2.0, size / 5.0)
+                sigma_val = max(2.0, size / 5.0)
             else:
-                sigma = smooth_size / 2.355  # Convert FWHM to sigma
-            back = gaussian_filter(back, sigma=sigma, mode='reflect')
+                # Convert filter size to sigma (size ~ 3*sigma is a reasonable heuristic)
+                sigma_val = smooth_size / 3.0
+            back = gaussian_filter(back, sigma=sigma_val, mode='reflect')
 
     return back
 
 
-def estimate_background_rms_percentile(image, mask=None, size=51, **kwargs):
+def estimate_background_rms_percentile(image, mask=None, size=51):
     """
     Estimate background RMS using percentile range.
 
@@ -217,32 +231,33 @@ def estimate_background_rms_percentile(image, mask=None, size=51, **kwargs):
         Boolean mask (True = masked pixels)
     size : int
         Kernel size for local percentile estimation
-    **kwargs : dict
-        Additional parameters (ignored, for compatibility)
 
     Returns
     -------
     rms : ndarray
         Background RMS map
     """
-    from scipy.ndimage import percentile_filter
+    from scipy.ndimage import percentile_filter, median_filter
 
-    # Compute 25th and 75th percentiles
+    # Fix #4: Replace slow generic_filter with fast two-pass approach
     if mask is not None:
         img = image.copy()
         img[mask] = np.nan
 
-        def masked_percentile_25(values):
-            valid = values[~np.isnan(values)]
-            return np.percentile(valid, 25) if len(valid) > 3 else np.nan
+        # Two-pass: fill NaN with local median, then run fast percentile_filter
+        nan_mask = np.isnan(img)
+        if np.any(nan_mask):
+            fill_val = np.nanmedian(img)
+            img_filled = img.copy()
+            img_filled[nan_mask] = fill_val
+            local_med = median_filter(img_filled, size=min(size, 15))
+            img_filled[nan_mask] = local_med[nan_mask]
+        else:
+            img_filled = img
 
-        def masked_percentile_75(values):
-            valid = values[~np.isnan(values)]
-            return np.percentile(valid, 75) if len(valid) > 3 else np.nan
-
-        from scipy.ndimage import generic_filter
-        p25 = generic_filter(img, masked_percentile_25, size=size)
-        p75 = generic_filter(img, masked_percentile_75, size=size)
+        # Fix #9: Always use p25/p75 for IQR regardless of caller's percentile
+        p25 = percentile_filter(img_filled, percentile=25, size=size)
+        p75 = percentile_filter(img_filled, percentile=75, size=size)
     else:
         p25 = percentile_filter(image, percentile=25, size=size)
         p75 = percentile_filter(image, percentile=75, size=size)
@@ -275,22 +290,36 @@ def estimate_background_rms_local(image, background, mask=None, size=51):
     rms : ndarray
         Background RMS map
     """
-    from scipy.ndimage import generic_filter
+    from scipy.ndimage import uniform_filter
 
     residual = image - background
 
     if mask is not None:
+        residual = residual.copy()
         residual[mask] = np.nan
 
-    # Local standard deviation
-    def local_std(values):
-        valid = values[~np.isnan(values)]
-        if len(valid) < 3:
-            return np.nan
-        # Use MAD for robustness
-        return mad_std(valid)
+    # Fix #4: Replace slow generic_filter with fast uniform_filter-based local std
+    # For masked data, fill NaN first then use fast filters
+    has_nan = np.any(np.isnan(residual))
 
-    rms = generic_filter(residual, local_std, size=size)
+    if has_nan:
+        nan_mask = np.isnan(residual)
+        res_filled = residual.copy()
+        fill_val = np.nanmedian(res_filled)
+        res_filled[nan_mask] = fill_val
+
+        # Local mean and mean of squares via uniform_filter
+        local_mean = uniform_filter(res_filled, size=size, mode='reflect')
+        local_mean_sq = uniform_filter(res_filled**2, size=size, mode='reflect')
+    else:
+        local_mean = uniform_filter(residual, size=size, mode='reflect')
+        local_mean_sq = uniform_filter(residual**2, size=size, mode='reflect')
+
+    # Var = E[X^2] - E[X]^2
+    local_var = local_mean_sq - local_mean**2
+    # Clamp negative values from numerical precision
+    local_var = np.maximum(local_var, 0.0)
+    rms = np.sqrt(local_var)
 
     # Fill NaN values
     if np.any(np.isnan(rms)):
@@ -372,7 +401,7 @@ def get_background_gp(
     random_state : int
         Random seed for reproducibility
     get_uncertainty : bool
-        If True, return uncertainty map. If False, return scalar RMS.
+        If True, return uncertainty map. If False, return None for RMS.
     chunk_rows : int
         Process prediction in chunks of this many rows to reduce memory usage
 
@@ -380,9 +409,9 @@ def get_background_gp(
     -------
     background : ndarray
         Estimated background map
-    uncertainty : ndarray or float
+    uncertainty : ndarray or None
         If get_uncertainty=True: 2D array of GP posterior standard deviation
-        If get_uncertainty=False: Scalar robust RMS of residuals
+        If get_uncertainty=False: None
 
     Notes
     -----
@@ -419,14 +448,6 @@ def get_background_gp(
             "Install with: pip install scikit-learn"
         )
 
-    # Helper function for robust sigma estimation
-    def robust_sigma(x):
-        """Robust sigma estimate via MAD."""
-        x_valid = x[np.isfinite(x)]
-        if x_valid.size < 5:
-            return np.nan
-        return mad_std(x_valid)
-
     # Prepare image and mask
     img = np.asarray(image, dtype=float)
     if img.ndim != 2:
@@ -448,13 +469,14 @@ def get_background_gp(
         raise RuntimeError("Too few valid pixels to estimate background")
 
     # Iterative sigma clipping to remove stars
+    # Fix #7: Use mad_std directly instead of inner robust_sigma function
     keep = np.ones(y_vals.shape, dtype=bool)
     for _ in range(max(0, int(n_clip_iter))):
         yy = y_vals[keep]
         if yy.size < 50:
             break
         med = np.median(yy)
-        sig = robust_sigma(yy)
+        sig = mad_std(yy, ignore_nan=True)
         if not np.isfinite(sig) or sig <= 0:
             break
         lo = med - clip_sigma * sig
@@ -536,15 +558,9 @@ def get_background_gp(
             pred = gp.predict(X_pred, return_std=False)
             background[y0:y1, :] = pred.reshape((y1 - y0, nx))
 
-    # Return results
-    if get_uncertainty:
-        return background, uncertainty
-    else:
-        # Return scalar RMS based on training set residuals
-        y_pred_train = gp.predict(X_train, return_std=False)
-        resid = y_train - y_pred_train
-        rms = robust_sigma(resid)
-        return background, float(rms)
+    # Fix #8: Always return (background, uncertainty_or_None)
+    # When get_uncertainty=False, return None so caller can compute RMS if needed
+    return background, uncertainty
 
 
 def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kwargs):
@@ -644,29 +660,37 @@ def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kw
 
     **Performance**:
 
-    - SEP: ~1-3 ms (512×512 image)
-    - Morphology: ~300 ms (512×512 image)
-    - Percentile: ~2-5 seconds (512×512 image)
-    - GP: ~1-10 seconds (512×512 image, depends on max_points)
+    - SEP: ~1-3 ms (512x512 image)
+    - Morphology: ~300 ms (512x512 image)
+    - Percentile: ~2-5 seconds (512x512 image)
+    - GP: ~1-10 seconds (512x512 image, depends on max_points)
 
     For complex backgrounds (strong curvature, vignetting), consider using
     local gradient fitting instead (bkg_order parameter in measure_objects),
     or the GP method for maximum flexibility.
     """
     if method == 'sep':
-        # Ensure correct byte order for SEP
-        image = image.astype(np.double)
+        # Fix #1: Lazy import
+        import sep
+
+        # Fix #5: Avoid unnecessary copy if already float64 and contiguous
+        image = np.ascontiguousarray(image, dtype=np.double)
         bg = sep.Background(image, mask=mask, bw=size, bh=size, **kwargs)
 
         back, backrms = bg.back(), bg.rms()
     elif method == 'photutils':
+        # Fix #1: Lazy import
+        import photutils.background
+
         bg = photutils.background.Background2D(image, size, mask=mask, **kwargs)
         back, backrms = bg.background, bg.background_rms
     elif method == 'percentile':
         back = get_background_percentile(image, mask=mask, size=size, **kwargs)
         # Estimate RMS from percentile range if needed
+        # Fix #9: Don't pass **kwargs to RMS estimator (percentile param would
+        # incorrectly override the fixed p25/p75 used for IQR)
         if get_rms:
-            backrms = estimate_background_rms_percentile(image, mask=mask, size=size, **kwargs)
+            backrms = estimate_background_rms_percentile(image, mask=mask, size=size)
         else:
             backrms = None
     elif method == 'morphology':
@@ -682,7 +706,16 @@ def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kw
             kwargs['length_scale'] = float(size)
         # Set get_uncertainty based on get_rms
         kwargs['get_uncertainty'] = get_rms
-        back, backrms = get_background_gp(image, mask=mask, **kwargs)
+        back, gp_uncertainty = get_background_gp(image, mask=mask, **kwargs)
+        # Fix #8: When get_uncertainty=False, gp_uncertainty is None.
+        # Compute RMS via estimate_background_rms_local if get_rms is requested.
+        if get_rms:
+            if gp_uncertainty is not None:
+                backrms = gp_uncertainty
+            else:
+                backrms = estimate_background_rms_local(image, back, mask=mask, size=size)
+        else:
+            backrms = None
     else:
         raise ValueError(f"Unknown background method: {method}")
 

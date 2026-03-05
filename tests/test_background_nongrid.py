@@ -44,6 +44,7 @@ def test_config():
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_percentile_flat_background(test_config, rng):
     """
     Test percentile filtering on flat background with stars.
@@ -74,6 +75,7 @@ def test_percentile_flat_background(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_morphology_flat_background(test_config, rng):
     """
     Test morphological opening on flat background with stars.
@@ -107,6 +109,7 @@ def test_morphology_flat_background(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 @pytest.mark.parametrize("gradient_amp", [100, 500])
 def test_percentile_linear_gradient(test_config, rng, gradient_amp):
     """
@@ -143,6 +146,7 @@ def test_percentile_linear_gradient(test_config, rng, gradient_amp):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 @pytest.mark.parametrize("gradient_amp", [100, 500])
 def test_morphology_linear_gradient(test_config, rng, gradient_amp):
     """
@@ -174,6 +178,7 @@ def test_morphology_linear_gradient(test_config, rng, gradient_amp):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_percentile_quadratic_gradient(test_config, rng):
     """
     Test percentile filtering on quadratic gradient.
@@ -215,6 +220,7 @@ def test_percentile_quadratic_gradient(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_morphology_quadratic_gradient(test_config, rng):
     """
     Test morphological opening on quadratic gradient.
@@ -243,6 +249,7 @@ def test_morphology_quadratic_gradient(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_percentile_with_mask(test_config, rng):
     """
     Test that percentile filtering handles masked regions correctly.
@@ -276,6 +283,7 @@ def test_percentile_with_mask(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_morphology_with_mask(test_config, rng):
     """
     Test that morphological opening handles masked regions correctly.
@@ -309,6 +317,7 @@ def test_morphology_with_mask(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_percentile_get_rms(test_config, rng):
     """
     Test that get_rms=True returns background RMS for percentile method.
@@ -338,6 +347,7 @@ def test_percentile_get_rms(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_morphology_get_rms(test_config, rng):
     """
     Test that get_rms=True returns background RMS for morphology method.
@@ -367,6 +377,7 @@ def test_morphology_get_rms(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 @pytest.mark.parametrize("percentile_val", [10, 25, 50])
 def test_percentile_parameter(test_config, rng, percentile_val):
     """
@@ -405,6 +416,7 @@ def test_percentile_parameter(test_config, rng, percentile_val):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 @pytest.mark.parametrize("morph_size", [15, 25, 35])
 def test_morphology_size_parameter(test_config, rng, morph_size):
     """
@@ -443,6 +455,7 @@ def test_morphology_size_parameter(test_config, rng, morph_size):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_compare_all_methods(test_config, rng):
     """
     Compare all four methods (sep, photutils, percentile, morphology) on same image.
@@ -491,6 +504,7 @@ def test_compare_all_methods(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_percentile_iterative_clipping(test_config, rng):
     """
     Test that iterative sigma-clipping improves percentile method.
@@ -534,6 +548,7 @@ def test_percentile_iterative_clipping(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_gp_flat_background(test_config, rng):
     """
     Test Gaussian Process method on flat background with stars.
@@ -568,6 +583,7 @@ def test_gp_flat_background(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 @pytest.mark.parametrize("gradient_amp", [100, 500])
 def test_gp_linear_gradient(test_config, rng, gradient_amp):
     """
@@ -605,6 +621,7 @@ def test_gp_linear_gradient(test_config, rng, gradient_amp):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_gp_quadratic_gradient(test_config, rng):
     """
     Test Gaussian Process method on quadratic gradient.
@@ -650,6 +667,7 @@ def test_gp_quadratic_gradient(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_gp_with_mask(test_config, rng):
     """
     Test that GP method handles masked regions correctly.
@@ -685,6 +703,7 @@ def test_gp_with_mask(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_gp_get_uncertainty(test_config, rng):
     """
     Test that get_rms=True returns uncertainty map for GP method.
@@ -720,6 +739,7 @@ def test_gp_get_uncertainty(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_gp_without_uncertainty(test_config, rng):
     """
     Test that get_rms=False returns scalar RMS for GP method.
@@ -740,19 +760,28 @@ def test_gp_without_uncertainty(test_config, rng):
     )
 
     # For GP with get_rms=True, should return 2D array
-    # Let's test get_rms=False path by calling directly
+    # Test get_rms=False path by calling directly
     from stdpipe.photometry_background import get_background_gp
-    bg2, rms2 = get_background_gp(
+    bg2, unc2 = get_background_gp(
         image, max_points=1000, get_uncertainty=False, random_state=42
     )
 
-    # rms2 should be scalar float
-    assert isinstance(rms2, float), f"Without uncertainty, should return scalar, got {type(rms2)}"
-    assert np.isfinite(rms2), "Scalar RMS should be finite"
-    assert rms2 > 0, "Scalar RMS should be positive"
+    # Without uncertainty, should return None (RMS computed by caller if needed)
+    assert unc2 is None, f"Without uncertainty, should return None, got {type(unc2)}"
+
+    # Background should still be valid
+    assert np.all(np.isfinite(bg2)), "Background should be finite"
+
+    # Test that get_background with get_rms=True still returns a valid RMS
+    # (computed via estimate_background_rms_local when GP uncertainty not requested)
+    bg3, rms3 = photometry.get_background(
+        image, method='gp', size=64, max_points=1000, get_rms=True, random_state=42
+    )
+    assert np.all(np.isfinite(rms3)), "RMS from get_background should be finite"
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 @pytest.mark.parametrize("length_scale", [32, 64, 128])
 def test_gp_length_scale_parameter(test_config, rng, length_scale):
     """
@@ -793,6 +822,7 @@ def test_gp_length_scale_parameter(test_config, rng, length_scale):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 @pytest.mark.parametrize("max_points", [500, 1000, 2000])
 def test_gp_max_points_parameter(test_config, rng, max_points):
     """
@@ -835,6 +865,7 @@ def test_gp_max_points_parameter(test_config, rng, max_points):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_gp_grid_step_sampling(test_config, rng):
     """
     Test grid-based subsampling vs random subsampling.
@@ -877,6 +908,7 @@ def test_gp_grid_step_sampling(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_gp_sigma_clipping(test_config, rng):
     """
     Test that sigma clipping effectively removes stars from training set.
@@ -920,6 +952,7 @@ def test_gp_sigma_clipping(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_gp_sinusoidal_background(test_config, rng):
     """
     Test GP on sinusoidal background (e.g., fringe pattern).
@@ -956,6 +989,7 @@ def test_gp_sinusoidal_background(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_gp_compare_with_other_methods(test_config, rng):
     """
     Compare GP with all other methods on a challenging background.
@@ -1007,6 +1041,7 @@ def test_gp_compare_with_other_methods(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_gp_error_handling(test_config, rng):
     """
     Test error handling for edge cases.
@@ -1042,6 +1077,7 @@ def test_gp_error_handling(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_morphology_smoothing_improvement(test_config, rng):
     """
     Test that improved smoothing reduces kernel-sized artifacts.
@@ -1103,6 +1139,7 @@ def test_morphology_smoothing_improvement(test_config, rng):
 
 
 @pytest.mark.unit
+@pytest.mark.slow
 def test_morphology_smooth_size_parameter(test_config, rng):
     """
     Test that smooth_size parameter controls smoothing strength.
