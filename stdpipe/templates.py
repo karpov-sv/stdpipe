@@ -24,7 +24,7 @@ from . import photometry
 from . import pipeline
 from . import astrometry
 from . import cutouts
-from .reproject import reproject_swarp  # backward compat
+from .reproject import reproject_swarp, reproject_lanczos  # backward compat
 
 # HiPS images
 
@@ -627,6 +627,7 @@ def get_survey_image(
     width=None,
     height=None,
     header=None,
+    reproject='lanczos',
     extra=None,
     _cachedir=None,
     _cache_downscale=1,
@@ -652,13 +653,14 @@ def get_survey_image(
     :param width: Output image width in pixels, optional
     :param height: Output image height in pixels, optional
     :param header: The header containing image dimensions and WCS, to be used instead of `wcs`, `width` and `height`
-    :param extra: Dictionary of extra SWarp parameters to be passed to underlying call to :func:`stdpipe.templates.reproject_swarp`
+    :param reproject: Reprojection method - ``'lanczos'`` (default, pure-Python Lanczos with oversampling and flux conservation) or ``'swarp'`` (external SWarp binary)
+    :param extra: Dictionary of extra SWarp parameters to be passed to underlying call to :func:`stdpipe.reproject.reproject_swarp` (only used when ``reproject='swarp'``)
     :param _cachedir: If specified, this directory will be used as a location to cache downloaded images so that they may be re-used between calls. If not specified, directory with survey name will be created for it in your system temporary directory (:file:`/tmp` on Linux)
     :param _cache_downscale: Downscale integer factor for caching downloaded images in smaller resolution.
     :param _tmpdir: If specified, all temporary files will be created in a dedicated directory (that will be deleted after running the executable) inside this path.
     :param _workdir: If specified, all temporary files will be created in this directory, and will be kept intact after running SWarp. May be used for debugging exact inputs and outputs of the executable. Optional
     :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :param \\**kwargs: The rest of parameters will be directly passed to :func:`stdpipe.templates.reproject_swarp`
+    :param \\**kwargs: The rest of parameters will be directly passed to the selected reprojection function
     :returns: Returns the image re-projected onto requested pixel grid
 
     """
@@ -696,18 +698,32 @@ def get_survey_image(
     if height is None:
         height = header['NAXIS2']
 
-    coadd = reproject_swarp(
-        cellnames,
-        wcs=wcs,
-        width=width,
-        height=height,
-        is_flags=(ext == 'mask'),
-        extra=extra,
-        _tmpdir=_tmpdir,
-        _workdir=_workdir,
-        verbose=verbose,
-        **kwargs
-    )
+    if reproject == 'lanczos':
+        coadd = reproject_lanczos(
+            cellnames,
+            wcs=wcs,
+            width=width,
+            height=height,
+            is_flags=(ext == 'mask'),
+            verbose=verbose,
+            **kwargs
+        )
+    elif reproject == 'swarp':
+        coadd = reproject_swarp(
+            cellnames,
+            wcs=wcs,
+            width=width,
+            height=height,
+            is_flags=(ext == 'mask'),
+            extra=extra,
+            _tmpdir=_tmpdir,
+            _workdir=_workdir,
+            verbose=verbose,
+            **kwargs
+        )
+    else:
+        log("Unknown reproject method '%s', use 'lanczos' or 'swarp'" % reproject)
+        return None
 
     if ext == 'mask' and survey == 'ps1':
         coadd &= (
