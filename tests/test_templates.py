@@ -624,3 +624,93 @@ class TestMaskTemplate:
 
         # Should have logged at least one message about NaN masking
         assert len(log_messages) > 0
+
+
+# ========================================================================
+# Skycell footprint filtering tests
+# ========================================================================
+
+
+def _make_wcs(ra0=180.0, dec0=45.0, cdelt=1.0/3600, nx=256, ny=256):
+    """Build a simple TAN WCS for testing."""
+    from astropy.wcs import WCS
+
+    header = fits.Header()
+    header['NAXIS'] = 2
+    header['NAXIS1'] = nx
+    header['NAXIS2'] = ny
+    header['CTYPE1'] = 'RA---TAN'
+    header['CTYPE2'] = 'DEC--TAN'
+    header['CRVAL1'] = ra0
+    header['CRVAL2'] = dec0
+    header['CRPIX1'] = nx / 2 + 0.5
+    header['CRPIX2'] = ny / 2 + 0.5
+    header['CD1_1'] = -cdelt
+    header['CD1_2'] = 0.0
+    header['CD2_1'] = 0.0
+    header['CD2_2'] = cdelt
+    header['EQUINOX'] = 2000.0
+    return WCS(header)
+
+
+@pytest.mark.unit
+class TestFilterCellsByFootprint:
+
+    def test_cell_inside_kept(self):
+        """Cell at image centre should be kept."""
+        wcs = _make_wcs()
+        keep = templates._filter_cells_by_footprint(
+            np.array([180.0]), np.array([45.0]),
+            cell_radius=0.01, wcs=wcs, width=256, height=256,
+        )
+        assert keep[0]
+
+    def test_cell_outside_rejected(self):
+        """Cell far from image should be rejected."""
+        wcs = _make_wcs()
+        keep = templates._filter_cells_by_footprint(
+            np.array([185.0]), np.array([45.0]),
+            cell_radius=0.01, wcs=wcs, width=256, height=256,
+        )
+        assert not keep[0]
+
+    def test_cell_near_edge_kept(self):
+        """Cell just outside image edge but within cell_radius should be kept."""
+        wcs = _make_wcs()
+        # Image half-width in Dec: 128 px * (1/3600) deg = 0.0356 deg
+        # Place cell 0.04 deg away in Dec (just outside) with cell_radius=0.01 (36 px margin)
+        keep = templates._filter_cells_by_footprint(
+            np.array([180.0]),
+            np.array([45.0 + 0.04]),
+            cell_radius=0.01, wcs=wcs, width=256, height=256,
+        )
+        assert keep[0]
+
+    def test_elongated_field_rejects_corner_cells(self):
+        """For an elongated field, cells near the bounding circle corners
+        but outside the rectangle should be rejected."""
+        # 1024 x 128 image: very elongated
+        wcs = _make_wcs(nx=1024, ny=128)
+        # The circumscribed circle has radius ~sqrt(512^2+64^2)*cdelt ~0.143 deg
+        # A cell at (ra0+0.12, dec0+0.03) is within that circle but
+        # outside the narrow height extent (~0.018 deg from centre)
+        offset_ra = 0.12 / np.cos(np.radians(45))
+        keep = templates._filter_cells_by_footprint(
+            np.array([180.0 - offset_ra]),
+            np.array([45.03]),
+            cell_radius=0.003, wcs=wcs, width=1024, height=128,
+        )
+        assert not keep[0]
+
+    def test_multiple_cells_mixed(self):
+        """Mix of inside, edge and outside cells."""
+        wcs = _make_wcs()
+        # Half-width in Dec: 0.0356 deg; in RA: 0.0356/cos(45)=0.0503 deg
+        ras = np.array([180.0, 180.0, 185.0])
+        decs = np.array([45.0, 45.1, 45.0])  # 0.1 deg in Dec is well outside
+        keep = templates._filter_cells_by_footprint(
+            ras, decs, cell_radius=0.01, wcs=wcs, width=256, height=256,
+        )
+        assert keep[0]       # centre
+        assert not keep[1]   # 0.1 deg away in Dec, far outside
+        assert not keep[2]   # 5 deg away in RA

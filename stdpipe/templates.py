@@ -378,7 +378,51 @@ def point_in_ls(ra, dec):
     return res
 
 
-def find_skycells(ra, dec, sr, band='r', ext='image', survey='ps1'):
+def _filter_cells_by_footprint(cell_ra, cell_dec, cell_radius, wcs, width, height):
+    """Return boolean mask of cells that overlap the image footprint.
+
+    After the coarse spherical-match preselection, this projects each
+    candidate cell center into the image pixel grid and keeps only
+    those whose centre falls within ``cell_radius`` (in pixels) of the
+    image boundaries.
+    """
+    from astropy.wcs.utils import proj_plane_pixel_scales
+
+    pixscale = np.mean(proj_plane_pixel_scales(wcs))  # deg/pixel
+    margin = cell_radius / pixscale  # cell radius in pixels
+
+    # Project cell centres to pixel coordinates (may be outside image)
+    px, py = wcs.all_world2pix(cell_ra, cell_dec, 0)
+
+    keep = (
+        (px > -margin) & (px < width + margin)
+        & (py > -margin) & (py < height + margin)
+    )
+    return keep
+
+
+def find_skycells(ra, dec, sr, band='r', ext='image', survey='ps1',
+                  wcs=None, width=None, height=None):
+    """Find survey skycell URLs covering a sky region.
+
+    Parameters
+    ----------
+    ra, dec, sr : float
+        Centre and radius (degrees) of the search region.
+    band : str
+        Photometric band.
+    ext : str
+        ``'image'`` or ``'mask'``.
+    survey : str
+        ``'ps1'`` or ``'ls'``.
+    wcs : `~astropy.wcs.WCS`, optional
+        If provided together with *width*/*height*, used to reject
+        cells that fall outside the actual rectangular image footprint
+        (the default circular search can over-select for elongated
+        or rotated fields).
+    width, height : int, optional
+        Image dimensions in pixels (required when *wcs* is given).
+    """
     results = []
 
     if survey == 'ps1':
@@ -392,12 +436,22 @@ def find_skycells(ra, dec, sr, band='r', ext='image', survey='ps1'):
 
         cell_radius = 0.3
 
-        # FIXME: here we may select the cells that are too far from actual footprint
+        # Coarse spherical preselection
         _, idx, _ = astrometry.spherical_match(
             ra, dec, __ps1_skycells['ra0'], __ps1_skycells['dec0'], sr + cell_radius
         )
 
-        for cell in __ps1_skycells[idx]:
+        candidates = __ps1_skycells[idx]
+
+        # Refine against actual rectangular footprint when WCS is available
+        if wcs is not None and width is not None and height is not None:
+            keep = _filter_cells_by_footprint(
+                candidates['ra0'], candidates['dec0'],
+                cell_radius, wcs, width, height,
+            )
+            candidates = candidates[keep]
+
+        for cell in candidates:
             url = 'http://ps1images.stsci.edu/'
             url += 'rings.v3.skycell/%04d/%03d/' % (
                 cell['projectionID'],
@@ -422,12 +476,22 @@ def find_skycells(ra, dec, sr, band='r', ext='image', survey='ps1'):
 
         cell_radius = 0.186
 
-        # FIXME: here we may select the cells that are too far from actual footprint
+        # Coarse spherical preselection
         _, idx, _ = astrometry.spherical_match(
             ra, dec, __ls_skycells['ra'], __ls_skycells['dec'], sr + cell_radius
         )
 
-        for cell in __ls_skycells[idx]:
+        candidates = __ls_skycells[idx]
+
+        # Refine against actual rectangular footprint when WCS is available
+        if wcs is not None and width is not None and height is not None:
+            keep = _filter_cells_by_footprint(
+                candidates['ra'], candidates['dec'],
+                cell_radius, wcs, width, height,
+            )
+            candidates = candidates[keep]
+
+        for cell in candidates:
             url = 'https://portal.nersc.gov/cfs/cosmo/data/legacysurvey/'
             url += 'dr10/south/' if (cell['survey'] == 'S') else 'dr9/north/'
             url += 'coadd/%s/%s/' % (cell['brickname'][:3], cell['brickname'])
@@ -480,6 +544,9 @@ def get_skycells(
     survey='ps1',
     normalize=True,
     overwrite=False,
+    wcs=None,
+    width=None,
+    height=None,
     _cachedir=None,
     _cache_downscale=1,
     _tmpdir=None,
@@ -519,7 +586,8 @@ def get_skycells(
 
     filenames = []
 
-    cells = find_skycells(ra0, dec0, sr0, band=band, ext=ext, survey=survey)
+    cells = find_skycells(ra0, dec0, sr0, band=band, ext=ext, survey=survey,
+                          wcs=wcs, width=width, height=height)
 
     for cell in cells:
         cellname = os.path.basename(cell)
@@ -672,8 +740,18 @@ def get_survey_image(
         else lambda *args, **kwargs: None
     )
 
+    # Resolve WCS and dimensions early so we can use them for cell filtering
+    if wcs is None:
+        wcs = WCS(header)
+    if shape is not None:
+        height, width = shape
+    if width is None:
+        width = header['NAXIS1']
+    if height is None:
+        height = header['NAXIS2']
+
     ra0, dec0, sr0 = astrometry.get_frame_center(
-        header=header, wcs=wcs, shape=shape, width=width, height=height
+        wcs=wcs, width=width, height=height
     )
 
     cellnames = get_skycells(
@@ -683,20 +761,14 @@ def get_survey_image(
         band=band,
         ext=ext,
         survey=survey,
+        wcs=wcs,
+        width=width,
+        height=height,
         _cachedir=_cachedir,
         _cache_downscale=_cache_downscale,
         _tmpdir=_tmpdir,
         verbose=verbose,
     )
-
-    if wcs is None:
-        wcs = WCS(header)
-    if shape is not None:
-        height, width = shape
-    if width is None:
-        width = header['NAXIS1']
-    if height is None:
-        height = header['NAXIS2']
 
     if reproject == 'lanczos':
         coadd = reproject_lanczos(
