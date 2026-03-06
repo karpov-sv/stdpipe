@@ -531,14 +531,26 @@ def place_psf_stamp(image, psf, x0, y0, flux=1, gain=None):
     image[y1[idx], x1[idx]] += stamp[y[idx], x[idx]]
 
 
-def create_psf_model(image, obj=None, fwhm=None, size=25, mask=None,
-                     oversampling=2, get_raw=False, verbose=False):
+def create_psf_model(image, obj=None, fwhm=None, size=None, mask=None,
+                     oversampling=2, degree=0, regularization=1e-6,
+                     subtract_neighbors=True,
+                     get_raw=False, verbose=False):
     """
-    Create an empirical PSF (ePSF) model from stars in the image using photutils.
+    Create an empirical PSF (ePSF) model from stars in the image.
 
-    This function builds an effective PSF by combining postage stamps of
-    isolated stars in the image. This is useful when you don't have a
-    PSFEx model or want a purely empirical PSF.
+    For ``degree=0`` (default), builds a position-invariant ePSF using
+    photutils ``EPSFBuilder`` (iterative recentering and stacking).
+
+    For ``degree > 0``, builds a position-dependent PSF model by fitting
+    per-pixel polynomial coefficients to resampled star stamps, following
+    the same approach as PSFEx. The polynomial model is:
+
+    .. math::
+
+        PSF(i,j; x,y) = \\sum_k c_k(i,j) \\cdot dx^{p1_k} \\cdot dy^{p2_k}
+
+    where ``(dx, dy)`` are normalized image coordinates and ``(p1_k, p2_k)``
+    are polynomial exponents with ``p1_k + p2_k <= degree``.
 
     The returned dictionary structure is compatible with PSFEx output from
     :func:`stdpipe.psf.run_psfex` and can be used with the same evaluation
@@ -547,12 +559,15 @@ def create_psf_model(image, obj=None, fwhm=None, size=25, mask=None,
     :param image: Input image as a NumPy array, must be background subtracted
     :param obj: Table of star positions. If None, stars will be detected automatically. Should have 'x', 'y' columns and optionally 'flux'.
     :param fwhm: Approximate FWHM of stars in pixels. If None, will be estimated.
-    :param size: Size of cutouts to extract around stars (should be odd)
+    :param size: Size of cutouts to extract around stars (should be odd). If None, automatically determined from FWHM as ``max(25, round_up_to_odd(8 * fwhm))``.
     :param mask: Image mask as a boolean array (True values will be masked), optional
     :param oversampling: Oversampling factor for the ePSF (default: 2)
-    :param get_raw: If True, returns raw EPSFImage object
+    :param degree: Polynomial degree for spatial PSF variation (default: 0 = constant). Degree 1 = linear (3 coefficients), degree 2 = quadratic (6 coefficients), etc.
+    :param regularization: Tikhonov regularization parameter for polynomial fitting (default: 1e-6). Only used when ``degree > 0``. Set to 0 for unregularized least-squares.
+    :param subtract_neighbors: If True (default), subtract estimated flux from neighboring stars before extracting cutouts. Reduces contamination in crowded fields. Only used when ``degree > 0``.
+    :param get_raw: If True and ``degree=0``, returns raw photutils EPSFModel object. Ignored when ``degree > 0``.
     :param verbose: Whether to show verbose messages
-    :returns: Dictionary with PSFEx-compatible structure containing the ePSF model
+    :returns: Dictionary with PSFEx-compatible structure containing the PSF model
 
     """
 
@@ -561,9 +576,6 @@ def create_psf_model(image, obj=None, fwhm=None, size=25, mask=None,
         if verbose
         else lambda *args, **kwargs: None
     )
-
-    if size % 2 == 0:
-        size += 1  # Make sure size is odd
 
     # Detect stars if not provided
     if obj is None:
@@ -605,7 +617,28 @@ def create_psf_model(image, obj=None, fwhm=None, size=25, mask=None,
             fwhm = 3.0
             log('FWHM not available, using default: %.2f pixels' % fwhm)
 
-    # Extract cutouts
+    # Auto-size stamps based on FWHM if not specified
+    if size is None:
+        size = max(25, int(np.ceil(8 * fwhm)))
+    if size % 2 == 0:
+        size += 1  # Make sure size is odd
+    log('Using stamp size: %d pixels (FWHM=%.1f)' % (size, fwhm))
+
+    if degree == 0:
+        return _create_psf_model_constant(
+            image, obj, fwhm, size, mask, oversampling, get_raw, verbose, log
+        )
+    else:
+        return _create_psf_model_polynomial(
+            image, obj, fwhm, size, mask, oversampling, degree,
+            regularization, subtract_neighbors, log
+        )
+
+
+def _create_psf_model_constant(image, obj, fwhm, size, mask, oversampling,
+                                get_raw, verbose, log):
+    """Build position-invariant ePSF using photutils EPSFBuilder."""
+
     log('Extracting %dx%d cutouts around %d stars' % (size, size, len(obj)))
 
     nddata = NDData(data=image, mask=mask)
@@ -618,7 +651,7 @@ def create_psf_model(image, obj=None, fwhm=None, size=25, mask=None,
     epsf_builder = photutils.psf.EPSFBuilder(
         oversampling=oversampling,
         maxiters=10,
-        progress_bar=verbose
+        progress_bar=bool(verbose)
     )
 
     epsf, fitted_stars = epsf_builder(stars)
@@ -650,6 +683,201 @@ def create_psf_model(image, obj=None, fwhm=None, size=25, mask=None,
         'data': psf_data,
         'oversampling': oversampling,  # Keep for reference
         'type': 'epsf',  # Identify PSF type
+    }
+
+    return psf
+
+
+def _create_psf_model_polynomial(image, obj, fwhm, size, mask, oversampling,
+                                  degree, regularization, subtract_neighbors, log):
+    """Build position-dependent PSF by fitting per-pixel polynomials to star stamps.
+
+    Follows the PSFEx algorithm: resamples star cutouts onto an oversampled
+    grid, then fits polynomial coefficients per pixel via least squares.
+    """
+
+    ncoeffs = (degree + 1) * (degree + 2) // 2
+    log('Building position-dependent PSF model: degree=%d (%d coefficients)'
+        % (degree, ncoeffs))
+
+    if len(obj) < ncoeffs:
+        raise ValueError(
+            "Need at least %d stars for degree=%d polynomial, got %d"
+            % (ncoeffs, degree, len(obj))
+        )
+
+    sampling = 1.0 / oversampling
+
+    # Oversampled stamp size (keep odd for centered stamps)
+    os_size = size * oversampling
+    if os_size % 2 == 0:
+        os_size += 1
+    os_center = (os_size - 1) / 2.0
+    cut_center = (size - 1) / 2.0
+
+    # Normalization parameters: image center and half-size
+    # This maps coordinates to approximately [-1, 1] range
+    x0 = image.shape[1] / 2.0
+    y0 = image.shape[0] / 2.0
+    sx = image.shape[1] / 2.0
+    sy = image.shape[0] / 2.0
+
+    # Oversampled coordinate grid (computed once, reused for all stamps)
+    oy, ox = np.mgrid[0:os_size, 0:os_size]
+    ox_rel = (ox - os_center) * sampling  # relative to stamp center, in image pixels
+    oy_rel = (oy - os_center) * sampling
+
+    # Build neighbor subtraction image if requested
+    # We subtract Gaussian approximations of all OTHER stars from each cutout
+    if subtract_neighbors and 'flux' in obj.colnames:
+        sigma = fwhm / 2.3548  # FWHM to sigma
+        star_x = np.array(obj['x'], dtype=np.float64)
+        star_y = np.array(obj['y'], dtype=np.float64)
+        star_flux = np.array(obj['flux'], dtype=np.float64)
+    else:
+        subtract_neighbors = False
+
+    # Extract and resample stamps
+    stamps = []
+    positions_x = []
+    positions_y = []
+    half = size // 2
+
+    for i in range(len(obj)):
+        x_star = float(obj['x'][i])
+        y_star = float(obj['y'][i])
+
+        # Integer center and sub-pixel offset
+        ix = int(np.round(x_star))
+        iy = int(np.round(y_star))
+        dx = x_star - ix
+        dy = y_star - iy
+
+        # Cutout boundaries
+        x1, x2 = ix - half, ix + half + 1
+        y1, y2 = iy - half, iy + half + 1
+
+        # Skip if cutout extends beyond image
+        if x1 < 0 or x2 > image.shape[1] or y1 < 0 or y2 > image.shape[0]:
+            continue
+
+        cutout = image[y1:y2, x1:x2].astype(np.float64).copy()
+
+        # Subtract estimated neighbor flux from cutout
+        if subtract_neighbors:
+            # Pixel coordinate grids for this cutout
+            cy, cx = np.mgrid[y1:y2, x1:x2]
+            for j in range(len(obj)):
+                if j == i:
+                    continue
+                # Only consider neighbors close enough to affect this cutout
+                ndx = star_x[j] - ix
+                ndy = star_y[j] - iy
+                if abs(ndx) > half + 5 * sigma and abs(ndy) > half + 5 * sigma:
+                    continue
+                # Subtract Gaussian approximation
+                r2 = (cx - star_x[j])**2 + (cy - star_y[j])**2
+                amp = star_flux[j] / (2 * np.pi * sigma**2)
+                cutout -= amp * np.exp(-r2 / (2 * sigma**2))
+
+        # Skip if mask has too many bad pixels in this cutout
+        if mask is not None:
+            mask_cutout = mask[y1:y2, x1:x2]
+            if np.sum(mask_cutout) > 0.1 * cutout.size:
+                continue
+            cutout[mask_cutout] = 0.0
+
+        # Subtract local background (median of edge pixels)
+        edge_pixels = np.concatenate([
+            cutout[0, :], cutout[-1, :],
+            cutout[1:-1, 0], cutout[1:-1, -1]
+        ])
+        if mask is not None:
+            edge_mask = np.concatenate([
+                mask_cutout[0, :], mask_cutout[-1, :],
+                mask_cutout[1:-1, 0], mask_cutout[1:-1, -1]
+            ])
+            edge_pixels = edge_pixels[~edge_mask]
+        if len(edge_pixels) > 0:
+            cutout -= np.median(edge_pixels)
+
+        # Resample to oversampled grid, centering star at stamp center
+        # Map each oversampled pixel back to cutout coordinates
+        cutout_x = cut_center + dx + ox_rel
+        cutout_y = cut_center + dy + oy_rel
+
+        stamp = ndimage.map_coordinates(cutout, [cutout_y, cutout_x],
+                                        order=3, mode='constant', cval=0.0)
+
+        # Normalize to unit flux
+        total = np.sum(stamp)
+        if not np.isfinite(total) or total <= 0:
+            continue
+        stamp /= total
+
+        stamps.append(stamp)
+        positions_x.append(x_star)
+        positions_y.append(y_star)
+
+    nstars = len(stamps)
+    log('Extracted %d valid stamps for polynomial fitting' % nstars)
+
+    if nstars < ncoeffs:
+        raise ValueError(
+            "Only %d valid stamps, need at least %d for degree=%d"
+            % (nstars, ncoeffs, degree)
+        )
+
+    # Build Vandermonde matrix [nstars x ncoeffs]
+    # Same term ordering as get_supersampled_psf_stamp: i2 outer, i1 inner
+    x_norm = (np.array(positions_x) - x0) / sx
+    y_norm = (np.array(positions_y) - y0) / sy
+
+    V = []
+    for i2 in range(degree + 1):
+        for i1 in range(degree + 1 - i2):
+            V.append(x_norm**i1 * y_norm**i2)
+    V = np.column_stack(V)
+
+    # Stack stamps as [nstars, npixels]
+    stamps_array = np.array(stamps)  # [nstars, os_size, os_size]
+    pixels = stamps_array.reshape(nstars, -1)  # [nstars, npixels]
+
+    # Solve per-pixel polynomial: V @ coeffs = pixels
+    with np.errstate(over='ignore', invalid='ignore', divide='ignore'):
+        if regularization > 0:
+            # Tikhonov regularization: (V^T V + lambda I) c = V^T p
+            VTV = V.T @ V + regularization * np.eye(ncoeffs)
+            VTp = V.T @ pixels
+            coeffs = np.linalg.solve(VTV, VTp)  # [ncoeffs, npixels]
+        else:
+            coeffs, _, _, _ = np.linalg.lstsq(V, pixels, rcond=None)
+
+    # Reshape to [ncoeffs, os_size, os_size]
+    psf_data = coeffs.reshape(ncoeffs, os_size, os_size)
+
+    # Compute and report residual statistics
+    with np.errstate(over='ignore', invalid='ignore', divide='ignore'):
+        reconstructed = V @ coeffs  # [nstars, npixels]
+        residuals = pixels - reconstructed
+        rms = np.sqrt(np.nanmean(residuals**2))
+    log('Polynomial PSF fit: %d x %d pixels, %d coefficients, '
+        'RMS residual %.2e (per pixel, normalized)' % (os_size, os_size, ncoeffs, rms))
+
+    psf = {
+        'width': os_size,
+        'height': os_size,
+        'fwhm': fwhm,
+        'sampling': sampling,
+        'ncoeffs': ncoeffs,
+        'degree': degree,
+        'x0': x0,
+        'y0': y0,
+        'sx': sx,
+        'sy': sy,
+        'data': psf_data,
+        'oversampling': oversampling,
+        'type': 'epsf',
     }
 
     return psf
