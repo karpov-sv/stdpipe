@@ -23,6 +23,7 @@ import sep
 from . import astrometry
 from . import pipeline
 from . import psf
+from . import sfft as sfft_module
 
 
 def run_hotpants(
@@ -863,3 +864,281 @@ def run_zogy(
         result += [Fpsf_full, Fpsf_err_full]
 
     return result
+
+
+def _build_err_map(image, mask, gain=None, verbose_log=None):
+    """Build a noise map from image and gain, following the HOTPANTS/ZOGY convention.
+
+    Combines background RMS from SEP with source Poisson noise contribution.
+
+    Returns
+    -------
+    err : (ny, nx) noise map (per-pixel standard deviation)
+    bg : sep.Background object
+    """
+    log = verbose_log or (lambda *a, **k: None)
+
+    bg = sep.Background(image.astype(np.double), mask)
+    err = bg.rms()  # Background noise level
+
+    # Source Poisson noise contribution
+    source = np.abs(image - bg.back())
+    if gain is not None and gain > 0:
+        source /= gain
+    else:
+        source[:] = 0
+    err = np.sqrt(err ** 2 + source)
+
+    log(
+        'Noise model: background %.1f, rms %.2f ADU'
+        % (bg.globalback, bg.globalrms)
+    )
+
+    return err, bg
+
+
+def run_sfft(
+    image,
+    template,
+    mask=None,
+    template_mask=None,
+    err=None,
+    template_err=None,
+    image_gain=None,
+    template_gain=None,
+    kernel_shape=(7, 7),
+    kernel_poly_order=2,
+    bg_poly_order=2,
+    flux_poly_order=1,
+    flux_penalty=1e3,
+    ridge=1e-6,
+    sigma_clip=3.0,
+    max_iter=5,
+    get_convolved=False,
+    get_scaled=False,
+    get_noise=False,
+    get_kernel=False,
+    verbose=False,
+):
+    """Image subtraction using SFFT with spatially varying kernel.
+
+    Wrapper around :func:`stdpipe.sfft.solve` that handles noise model
+    construction, difference image noise propagation, and follows the same
+    interface conventions as :func:`run_hotpants` and :func:`run_zogy`.
+
+    The noise model for both science and template images may be provided
+    directly (as arrays), or built automatically from the images using
+    background estimation and gain values (same approach as HOTPANTS).
+    If ``err`` or ``template_err`` is set to ``True``, the routine builds
+    a noise map from the image using SEP background estimation and the
+    corresponding gain parameter.
+
+    :param image: Input science image as a Numpy array
+    :param template: Input template image, same shape as science image
+    :param mask: Science image mask (True = bad), optional
+    :param template_mask: Template image mask (True = bad), optional
+    :param err: Science image noise map (per-pixel RMS). If ``True``,
+        built from the image and ``image_gain``. Optional
+    :param template_err: Template image noise map. If ``True``, built
+        from the template and ``template_gain``. Optional
+    :param image_gain: Gain of science image in e-/ADU
+    :param template_gain: Gain of template image in e-/ADU
+    :param kernel_shape: (ky, kx) kernel size, must be odd. Default (7, 7)
+    :param kernel_poly_order: Polynomial order for kernel spatial variation.
+        Default 2
+    :param bg_poly_order: Polynomial order for differential background.
+        Default 2
+    :param flux_poly_order: Polynomial order for kernel-sum (flux scale)
+        constraint. Default 1
+    :param flux_penalty: Penalty weight for kernel-sum constraint.
+        Default 1e3
+    :param ridge: Tikhonov regularization. Default 1e-6
+    :param sigma_clip: Sigma threshold for outlier rejection. Default 3.0
+    :param max_iter: Maximum sigma-clipping iterations. Default 5
+    :param get_convolved: Whether to also return the convolved template
+    :param get_scaled: Whether to also return noise-normalized difference
+    :param get_noise: Whether to also return the difference image noise map
+    :param get_kernel: Whether to also return the :class:`~stdpipe.sfft.SFFTResult`
+        object containing kernel coefficients and fit metadata
+    :param verbose: Whether to show verbose messages. May be boolean or
+        a ``print``-like function
+    :returns: The difference image, or a list ``[diff, ...]`` if any
+        ``get_*`` option is set
+    """
+
+    # Simple wrapper around print for logging in verbose mode only
+    log = (
+        (verbose if callable(verbose) else print)
+        if verbose
+        else lambda *args, **kwargs: None
+    )
+
+    # --- Masks ---
+    if mask is None:
+        mask = ~np.isfinite(image)
+    else:
+        mask = np.asarray(mask, dtype=bool) | ~np.isfinite(image)
+
+    if template_mask is None:
+        template_mask = ~np.isfinite(template)
+    else:
+        template_mask = np.asarray(template_mask, dtype=bool) | ~np.isfinite(
+            template
+        )
+
+    combined_mask = mask | template_mask
+
+    # --- Build noise models ---
+    image_f = np.asarray(image, dtype=np.float64)
+    template_f = np.asarray(template, dtype=np.float64)
+
+    if err is True:
+        log('Building noise model from the image')
+        # SEP cannot handle NaN — replace with median for background estimation
+        image_clean = image_f.copy()
+        image_clean[~np.isfinite(image_clean)] = np.nanmedian(image_clean)
+        err, _ = _build_err_map(
+            image_clean, mask, gain=image_gain, verbose_log=log
+        )
+    elif err is not None:
+        err = np.asarray(err, dtype=np.float64)
+
+    if template_err is True:
+        log('Building noise model from the template')
+        template_clean = template_f.copy()
+        template_clean[~np.isfinite(template_clean)] = np.nanmedian(template_clean)
+        template_err, _ = _build_err_map(
+            template_clean, template_mask,
+            gain=template_gain, verbose_log=log,
+        )
+    elif template_err is not None:
+        template_err = np.asarray(template_err, dtype=np.float64)
+
+    # Build combined weight map for SFFT solver
+    # SFFT uses inverse-variance weighting internally when err is provided
+    # We pass the science err to weight the fit
+    sfft_err = err  # may be None for uniform weighting
+
+    # --- Run SFFT ---
+    log('Running SFFT subtraction')
+
+    sfft_result = sfft_module.solve(
+        image_f,
+        template_f,
+        mask=combined_mask,
+        err=sfft_err,
+        kernel_shape=kernel_shape,
+        kernel_poly_order=kernel_poly_order,
+        bg_poly_order=bg_poly_order,
+        flux_poly_order=flux_poly_order,
+        flux_penalty=flux_penalty,
+        ridge=ridge,
+        sigma_clip=sigma_clip,
+        max_iter=max_iter,
+        verbose=verbose,
+    )
+
+    diff = sfft_result.diff
+
+    result = [diff]
+
+    # --- Convolved template ---
+    if get_convolved:
+        # model = convolved_template + background
+        # Extract background contribution to get convolved template alone
+        bg_model = sfft_module.evaluate_background(
+            sfft_result,
+            *np.meshgrid(np.arange(diff.shape[1]), np.arange(diff.shape[0])),
+            diff.shape,
+        )
+        convolved = sfft_result.model - bg_model
+        result.append(convolved)
+
+    # --- Noise map for difference image ---
+    noise = None
+
+    if get_noise or get_scaled:
+        noise = _compute_diff_noise(
+            sfft_result, err, template_err, combined_mask, log
+        )
+        if get_noise:
+            result.append(noise)
+
+    # --- Noise-scaled difference ---
+    if get_scaled:
+        scaled = np.zeros_like(diff)
+        good = (noise > 0) & np.isfinite(noise) & ~combined_mask
+        scaled[good] = diff[good] / noise[good]
+        result.append(scaled)
+
+    # --- Kernel info ---
+    if get_kernel:
+        result.append(sfft_result)
+
+    if len(result) == 1:
+        return result[0]
+    else:
+        return result
+
+
+def _compute_diff_noise(sfft_result, err, template_err, mask, log):
+    """Compute per-pixel noise map for the SFFT difference image.
+
+    diff = science - model, where model = Σ_α a_α(x,y) · R_α(x,y) + bg(x,y)
+
+    var_diff(x,y) = var_sci(x,y) + Σ_α a_α²(x,y) · var_tmpl(x+dy, x+dx)
+
+    If template_err is not available, assumes the template contributes no
+    noise (deep template limit) and returns just the science noise.
+    """
+
+    ny, nx = sfft_result.diff.shape
+
+    # Science noise contribution
+    if err is not None and hasattr(err, 'shape'):
+        var_sci = err ** 2
+    else:
+        # Estimate from difference image residuals
+        rms = sfft_result.rms if np.isfinite(sfft_result.rms) else mad_std(
+            sfft_result.diff[~mask]
+        )
+        var_sci = np.full((ny, nx), rms ** 2, dtype=np.float64)
+        log(
+            'No science err provided, using constant RMS = %.2f for noise map'
+            % rms
+        )
+
+    # Template noise contribution (convolved through the kernel)
+    if template_err is not None and hasattr(template_err, 'shape'):
+        log('Computing convolved template noise contribution')
+
+        var_tmpl = template_err ** 2
+
+        # var_convolved = Σ_α a_α²(x,y) · var_tmpl_shifted(x,y)
+        ky, kx = sfft_result.kernel_shape
+        offsets = sfft_module._kernel_offsets(ky, kx)
+        n_kpoly = sfft_module._n_poly(sfft_result.kernel_poly_order)
+        x_norm, y_norm = sfft_module._norm_coords(ny, nx)
+        poly_k = sfft_module._poly_terms_2d(
+            x_norm, y_norm, sfft_result.kernel_poly_order
+        )
+
+        # Compute a_α(x,y) maps = kernel_coeffs[α] @ poly_k
+        kernel_coeffs = sfft_result.kernel_coeffs  # (n_kernel, n_kpoly)
+        poly_k_flat = poly_k.reshape(n_kpoly, ny * nx)
+        with np.errstate(over='ignore', invalid='ignore', divide='ignore'):
+            a_maps = kernel_coeffs @ poly_k_flat  # (n_kernel, npix)
+
+        var_conv = np.zeros(ny * nx, dtype=np.float64)
+        for alpha, (dy, dx) in enumerate(offsets):
+            shifted_var = sfft_module._shift_image(var_tmpl, dy, dx).ravel()
+            var_conv += a_maps[alpha] ** 2 * shifted_var
+
+        var_conv = var_conv.reshape(ny, nx)
+        var_total = var_sci + var_conv
+    else:
+        var_total = var_sci
+
+    noise = np.sqrt(np.clip(var_total, 0, None))
+
+    return noise
