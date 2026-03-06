@@ -6,7 +6,6 @@ from astropy.io import fits
 from astropy.stats import mad_std
 from astropy.table import Table
 
-from astropy.convolution import convolve, Gaussian2DKernel
 
 # Drop-in replacement for numpy.fft which is supposedly faster
 import pyfftw
@@ -223,26 +222,7 @@ def run_hotpants(
     # Error map for input image
     if err is not None:
         if type(err) is bool and err == True:
-            # err=True means that we should estimate the noise
-            log('Building noise model from the image')
-
-            bg = sep.Background(image, mask)
-            # image[mask] = bg.back()[mask]
-            err = bg.rms()  # Background noise level
-            # Noise should be estimated on smoothed image
-            kernel = Gaussian2DKernel(1)
-            smooth = image.copy()
-            smooth[~np.isfinite(smooth)] = np.nanmedian(smooth)
-            # smooth = convolve(smooth, kernel, mask=mask, preserve_nan=True)
-            smooth[mask] = bg.back()[mask]
-            serr = np.abs((smooth - bg.back()))
-            if image_gain is not None and image_gain:
-                serr /= image_gain
-            err = np.sqrt(err ** 2 + serr)  # Contribution from the sources
-            # err[mask] = 1/_nan
-
-            # image[mask|template_mask] = np.random.normal(0, bg.rms()[mask|template_mask])
-            # fits.writeto(imagename, image, overwrite=True)
+            err, _ = _build_err_map(image, mask, gain=image_gain, verbose_log=log)
 
         if hasattr(err, 'shape'):
             errname = os.path.join(workdir, 'err.fits')
@@ -251,27 +231,7 @@ def run_hotpants(
 
     if template_err is not None:
         if type(template_err) is bool and template_err == True:
-            # err=True means that we should estimate the noise
-            log('Building noise model from the template')
-
-            bg = sep.Background(template, template_mask)
-            template_err = bg.rms()  # Background noise level
-            # Noise should be estimated on smoothed image
-            kernel = Gaussian2DKernel(1)
-            smooth = template.copy()
-            smooth[~np.isfinite(smooth)] = np.nanmedian(smooth)
-            # smooth = convolve(smooth, kernel, mask=template_mask, preserve_nan=True)
-            smooth[template_mask] = bg.back()[template_mask]
-            serr = np.abs((smooth - bg.back()))
-            if template_gain is not None and template_gain:
-                serr /= template_gain
-            template_err = np.sqrt(
-                template_err ** 2 + serr
-            )  # Contribution from the sources
-            # template_err[template_mask] = 1/_nan
-
-            # template[mask|template_mask] = np.random.normal(0, bg.rms()[mask|template_mask])
-            # fits.writeto(templatename, template, overwrite=True)
+            template_err, _ = _build_err_map(template, template_mask, gain=template_gain, verbose_log=log)
 
         if hasattr(template_err, 'shape'):
             terrname = os.path.join(workdir, 'terr.fits')
@@ -545,39 +505,28 @@ def run_zogy(
     else:
         template_mask = template_mask | ~np.isfinite(template)
 
-    # Subtract the background
-    image_bg = sep.Background(image, mask)
-    template_bg = sep.Background(template.astype(np.double), template_mask)
+    # Build noise models and subtract background
+    if err is None:
+        U_N_full, image_bg = _build_err_map(image, mask, gain=image_gain, verbose_log=log)
+        SN = image_bg.globalrms
+    else:
+        image_bg = sep.Background(image, mask)
+        U_N_full = err
+        SN = np.median(err)
+
+    if template_err is None:
+        U_R_full, template_bg = _build_err_map(template.astype(np.double), template_mask, gain=template_gain, verbose_log=log)
+        SR = template_bg.globalrms
+    else:
+        template_bg = sep.Background(template.astype(np.double), template_mask)
+        U_R_full = template_err
+        SR = np.median(template_err)
 
     N_full = image - image_bg.back()
     R_full = template - template_bg.back()
     # Set to zero the regions where we have no data
     N_full[~np.isfinite(image)] = 0
     R_full[~np.isfinite(template)] = 0
-
-    if err is None:
-        log('Building noise model from the image')
-        U_N_full = image_bg.rms()
-        if image_gain:
-            U_N_full = np.sqrt(U_N_full ** 2 + np.abs(N_full) / image_gain)
-
-        SN = image_bg.globalrms
-        log('Image mean %.1f rms %.2f ADU' % (image_bg.globalback, image_bg.globalrms))
-    else:
-        U_N_full = err
-        SN = np.median(err)
-
-    if template_err is None:
-        log('Building noise model from the template')
-        U_R_full = template_bg.rms()
-        if template_gain:
-            U_R_full = np.sqrt(U_R_full ** 2 + np.abs(R_full) / template_gain)
-
-        SR = template_bg.globalrms
-        log('Template mean %.1f rms %.2f ADU' % (template_bg.globalback, template_bg.globalrms))
-    else:
-        U_R_full = template_err
-        SR= np.median(template_err)
 
     # Artificially assign large uncertainty to the regions we set to zero
     U_N_full[~np.isfinite(image)] = np.nanmax(U_N_full)
