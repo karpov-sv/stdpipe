@@ -86,3 +86,7 @@ backup/
 
 test_data/
 pyraf/
+tmp/
+notebooks/
+claude/
+evaluation/
