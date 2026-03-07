@@ -745,6 +745,228 @@ class TestCreatePSFModel:
         assert epsf['oversampling'] == 4
 
 
+class TestCreatePSFModelPolynomial:
+    """Test position-dependent PSF model creation via polynomial fitting."""
+
+    @staticmethod
+    def _make_varying_psf_image(size=256, n_stars=60, fwhm_center=3.0,
+                                 fwhm_gradient=0.5, noise_std=5.0, seed=42):
+        """Create a test image with position-dependent PSF.
+
+        Stars have FWHM that varies linearly across the field:
+        FWHM(x,y) = fwhm_center + fwhm_gradient * (x/size - 0.5)
+        """
+        rng = np.random.RandomState(seed)
+
+        image = rng.normal(100, noise_std, (size, size))
+        margin = 30
+        xs = rng.uniform(margin, size - margin, n_stars)
+        ys = rng.uniform(margin, size - margin, n_stars)
+        fluxes = rng.uniform(5000, 15000, n_stars)
+
+        yy, xx = np.ogrid[:size, :size]
+        for x_s, y_s, flux in zip(xs, ys, fluxes):
+            local_fwhm = fwhm_center + fwhm_gradient * (x_s / size - 0.5)
+            sigma = local_fwhm / (2 * np.sqrt(2 * np.log(2)))
+            amp = flux / (2 * np.pi * sigma**2)
+            image += amp * np.exp(-((xx - x_s)**2 + (yy - y_s)**2) / (2 * sigma**2))
+
+        obj = Table()
+        obj['x'] = xs
+        obj['y'] = ys
+        obj['flux'] = fluxes
+        obj['fwhm'] = [fwhm_center + fwhm_gradient * (x / size - 0.5) for x in xs]
+        obj['flags'] = np.zeros(n_stars, dtype=int)
+
+        return image.astype(np.float64), obj
+
+    @pytest.mark.unit
+    def test_degree1_structure(self):
+        """Test degree=1 produces correct PSFEx-compatible structure."""
+        image, obj = self._make_varying_psf_image()
+
+        result = psf.create_psf_model(
+            image, obj=obj, size=25, degree=1, verbose=False
+        )
+
+        assert isinstance(result, dict)
+        assert result['degree'] == 1
+        assert result['ncoeffs'] == 3  # (1+1)(1+2)/2 = 3
+        assert result['data'].ndim == 3
+        assert result['data'].shape[0] == 3
+
+        # Check normalization parameters
+        assert result['x0'] == image.shape[1] / 2.0
+        assert result['y0'] == image.shape[0] / 2.0
+        assert result['sx'] == image.shape[1] / 2.0
+        assert result['sy'] == image.shape[0] / 2.0
+
+    @pytest.mark.unit
+    def test_degree2_structure(self):
+        """Test degree=2 produces correct coefficient count."""
+        image, obj = self._make_varying_psf_image()
+
+        result = psf.create_psf_model(
+            image, obj=obj, size=25, degree=2, verbose=False
+        )
+
+        assert result['degree'] == 2
+        assert result['ncoeffs'] == 6  # (2+1)(2+2)/2 = 6
+        assert result['data'].shape[0] == 6
+
+    @pytest.mark.unit
+    def test_polynomial_psf_varies_with_position(self):
+        """Test that the polynomial model produces different PSF at different positions."""
+        image, obj = self._make_varying_psf_image(fwhm_gradient=1.0)
+
+        result = psf.create_psf_model(
+            image, obj=obj, size=25, degree=1, verbose=False
+        )
+
+        # Evaluate at two different x positions
+        stamp_left = psf.get_supersampled_psf_stamp(result, x=30, y=128, normalize=True)
+        stamp_right = psf.get_supersampled_psf_stamp(result, x=226, y=128, normalize=True)
+
+        # Stamps should differ (PSF varies with position)
+        assert not np.allclose(stamp_left, stamp_right, atol=1e-6)
+
+    @pytest.mark.unit
+    def test_polynomial_psf_recovers_variation(self):
+        """Test that polynomial model captures the PSF width gradient."""
+        image, obj = self._make_varying_psf_image(fwhm_gradient=1.0)
+
+        result = psf.create_psf_model(
+            image, obj=obj, size=25, degree=1, verbose=False
+        )
+
+        # Evaluate PSF at left and right sides of the image
+        stamp_left = psf.get_psf_stamp(result, x=30, y=128, normalize=True)
+        stamp_right = psf.get_psf_stamp(result, x=226, y=128, normalize=True)
+
+        # Compare peak values: narrower PSF (left) should have higher peak
+        # when normalized to unit flux
+        peak_left = stamp_left.max()
+        peak_right = stamp_right.max()
+
+        # Left side has narrower PSF (negative gradient offset) → higher peak
+        assert peak_left > peak_right, (
+            "Left peak %.6f should be > right peak %.6f "
+            "(narrower PSF = higher peak)" % (peak_left, peak_right)
+        )
+
+    @pytest.mark.unit
+    def test_compatible_with_get_psf_stamp(self):
+        """Test that polynomial PSF works with get_psf_stamp."""
+        image, obj = self._make_varying_psf_image()
+
+        result = psf.create_psf_model(
+            image, obj=obj, size=25, degree=1, verbose=False
+        )
+
+        stamp = psf.get_psf_stamp(result, x=100.3, y=100.7, normalize=True)
+
+        assert stamp is not None
+        assert stamp.ndim == 2
+        assert np.isclose(np.sum(stamp), 1.0, rtol=0.01)
+
+    @pytest.mark.unit
+    def test_compatible_with_place_psf_stamp(self):
+        """Test that polynomial PSF works with place_psf_stamp."""
+        image, obj = self._make_varying_psf_image()
+
+        result = psf.create_psf_model(
+            image, obj=obj, size=25, degree=1, verbose=False
+        )
+
+        test_image = np.zeros((100, 100))
+        psf.place_psf_stamp(test_image, result, x0=50.5, y0=50.5, flux=1000)
+
+        assert np.sum(test_image) > 0
+        assert np.isclose(np.sum(test_image), 1000, rtol=0.05)
+
+    @pytest.mark.unit
+    def test_compatible_with_measure_objects_psf(self):
+        """Test that polynomial PSF works with PSF photometry."""
+        image, obj = self._make_varying_psf_image()
+
+        psf_model = psf.create_psf_model(
+            image, obj=obj, size=25, degree=1, verbose=False
+        )
+
+        # Use a subset for photometry
+        result = photometry_psf.measure_objects_psf(
+            obj[:10], image, psf=psf_model,
+            use_position_dependent_psf=True, verbose=False
+        )
+
+        assert isinstance(result, Table)
+        assert len(result) > 0
+        assert 'flux' in result.colnames
+
+    @pytest.mark.unit
+    def test_too_few_stars_raises(self):
+        """Test that too few stars for the polynomial degree raises ValueError."""
+        image, obj = self._make_varying_psf_image(n_stars=60)
+
+        # degree=2 needs 6 coefficients, but only 2 stars
+        with pytest.raises(ValueError, match="Need at least"):
+            psf.create_psf_model(
+                image, obj=obj[:2], size=25, degree=2, verbose=False
+            )
+
+    @pytest.mark.unit
+    def test_regularization_effect(self):
+        """Test that regularization affects the result."""
+        image, obj = self._make_varying_psf_image(n_stars=10)
+
+        result_low = psf.create_psf_model(
+            image, obj=obj, size=15, degree=1,
+            regularization=1e-10, verbose=False
+        )
+        result_high = psf.create_psf_model(
+            image, obj=obj, size=15, degree=1,
+            regularization=1.0, verbose=False
+        )
+
+        # High regularization should shrink polynomial coefficients
+        # toward zero, making the non-constant coefficients smaller
+        norm_low = np.sum(result_low['data'][1:]**2)
+        norm_high = np.sum(result_high['data'][1:]**2)
+        assert norm_high < norm_low
+
+    @pytest.mark.unit
+    def test_degree0_backward_compatible(self):
+        """Test that degree=0 still uses EPSFBuilder (backward compatible)."""
+        image, obj = self._make_varying_psf_image()
+
+        result = psf.create_psf_model(
+            image, obj=obj, size=25, degree=0, verbose=False
+        )
+
+        assert result['degree'] == 0
+        assert result['ncoeffs'] == 1
+        assert result['data'].shape[0] == 1
+
+    @pytest.mark.unit
+    def test_oversampling_with_polynomial(self):
+        """Test oversampling parameter works with polynomial fitting."""
+        image, obj = self._make_varying_psf_image()
+
+        result_2x = psf.create_psf_model(
+            image, obj=obj, size=15, degree=1,
+            oversampling=2, verbose=False
+        )
+        result_4x = psf.create_psf_model(
+            image, obj=obj, size=15, degree=1,
+            oversampling=4, verbose=False
+        )
+
+        assert result_2x['sampling'] == 0.5
+        assert result_4x['sampling'] == 0.25
+        # 4x oversampled should have larger stamp
+        assert result_4x['width'] > result_2x['width']
+
+
 class TestPSFPhotometryIntegration:
     """Integration tests combining ePSF building and PSF photometry."""
 
