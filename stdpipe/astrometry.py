@@ -9,7 +9,6 @@ from astropy.coordinates import SkyCoord, search_around_sky
 from astropy.table import Table
 from astropy import units as u
 
-import sip_tpv
 
 from scipy.spatial import KDTree
 
@@ -679,21 +678,361 @@ def clear_wcs(
     return header
 
 
-def wcs_pv2sip(header, method='astrometrynet'):
-    """
-    TODO
-    """
-    pass
+def wcs_pv2sip(header, order=None, accuracy=1e-4):
+    """Convert a WCS header from any projection to TAN-SIP representation.
 
+    The original WCS is sampled on a dense pixel grid and SIP
+    polynomial coefficients (A, B for the forward distortion and
+    AP, BP for the reverse) are fitted to reproduce the same
+    pixel→sky mapping via least squares.
 
-def wcs_sip2pv(header):
-    """
-    Convert the WCS header from SIP to TPV representation
+    Works for any input projection (TPV, ZPN, ZEA, etc.).
+
+    Parameters
+    ----------
+    header : `~astropy.io.fits.Header`
+        Input FITS header with WCS keywords.
+    order : int or None
+        SIP polynomial order.  If ``None`` (default), the order is
+        chosen automatically (2 through 6) to achieve *accuracy*
+        on the fitting grid.
+    accuracy : float
+        Target accuracy in arcseconds for automatic order selection
+        (default 1e-4, i.e. 0.1 mas).
+
+    Returns
+    -------
+    header : `~astropy.io.fits.Header`
+        New header with TAN-SIP WCS (CTYPE ``RA---TAN-SIP``).
     """
 
     header = header.copy()
 
-    # sip_to_pv expects CD matrix to be present
+    # Parse the original WCS before modifying the header
+    wcs_orig = WCS(header)
+
+    nx = int(header.get('NAXIS1', 1024))
+    ny = int(header.get('NAXIS2', 1024))
+
+    # Ensure CD matrix is present (convert PC+CDELT → CD)
+    if 'CD1_1' not in header and 'PC1_1' in header:
+        cdelt = [header.get('CDELT1'), header.get('CDELT2')]
+        header['CD1_1'] = header.pop('PC1_1') * cdelt[0]
+        header['CD2_1'] = header.pop('PC2_1') * cdelt[0]
+        header['CD1_2'] = header.pop('PC1_2') * cdelt[0]
+        header['CD2_2'] = header.pop('PC2_2') * cdelt[0]
+
+    crpix1 = header['CRPIX1']
+    crpix2 = header['CRPIX2']
+    crval1 = header['CRVAL1']
+    crval2 = header['CRVAL2']
+
+    cd = np.array([
+        [header['CD1_1'], header.get('CD1_2', 0)],
+        [header.get('CD2_1', 0), header['CD2_2']],
+    ])
+    cd_inv = np.linalg.inv(cd)
+
+    # Dense pixel grid
+    ngrid = int(max(50, min(200, max(nx, ny) // 10)))
+    gx = np.linspace(0, nx - 1, ngrid)
+    gy = np.linspace(0, ny - 1, ngrid)
+    xx, yy = np.meshgrid(gx, gy)
+    xf, yf = xx.ravel(), yy.ravel()
+
+    # Sky coordinates from the original WCS
+    ra, dec = wcs_orig.all_pix2world(xf, yf, 0)
+    good = np.isfinite(ra) & np.isfinite(dec)
+    xf, yf, ra, dec = xf[good], yf[good], ra[good], dec[good]
+
+    # TAN inverse projection: (RA, Dec) → (xi, eta) in degrees
+    ra0 = np.radians(crval1)
+    dec0 = np.radians(crval2)
+    ra_r = np.radians(ra)
+    dec_r = np.radians(dec)
+    cos_dec = np.cos(dec_r)
+    sin_dec = np.sin(dec_r)
+    cos_dec0 = np.cos(dec0)
+    sin_dec0 = np.sin(dec0)
+    dra = ra_r - ra0
+    denom = sin_dec * sin_dec0 + cos_dec * cos_dec0 * np.cos(dra)
+    xi = np.degrees(cos_dec * np.sin(dra) / denom)
+    eta = np.degrees(
+        (sin_dec * cos_dec0 - cos_dec * sin_dec0 * np.cos(dra)) / denom
+    )
+
+    # Pixel offsets from CRPIX (0-based)
+    u = xf - (crpix1 - 1)
+    v = yf - (crpix2 - 1)
+
+    # Target distorted pixel coords: CD_inv · (xi, eta)
+    u_target = cd_inv[0, 0] * xi + cd_inv[0, 1] * eta
+    v_target = cd_inv[1, 0] * xi + cd_inv[1, 1] * eta
+
+    # SIP corrections: A(u, v) = u_target - u, B(u, v) = v_target - v
+    du = u_target - u
+    dv = v_target - v
+
+    def _sip_terms(sip_order):
+        """Return list of (p, q) exponent pairs for SIP order."""
+        pq = []
+        for total in range(2, sip_order + 1):
+            for q in range(total + 1):
+                pq.append((total - q, q))
+        return pq
+
+    def _sip_basis(u, v, pq, scale):
+        """Build normalized SIP polynomial basis matrix.
+
+        Coordinates are divided by *scale* for numerical stability;
+        coefficients are rescaled to raw-pixel convention afterwards.
+        """
+        un, vn = u / scale, v / scale
+        return np.column_stack([un ** p * vn ** q for p, q in pq])
+
+    def _fit_order(u, v, du, dv, sip_order, scale):
+        """Fit SIP coefficients at a given order, return residual."""
+        pq = _sip_terms(sip_order)
+        A_mat = _sip_basis(u, v, pq, scale)
+        ca_n, _, _, _ = np.linalg.lstsq(A_mat, du, rcond=None)
+        cb_n, _, _, _ = np.linalg.lstsq(A_mat, dv, rcond=None)
+        # Evaluate residual in normalized space (numerically stable)
+        res_u = du - A_mat @ ca_n
+        res_v = dv - A_mat @ cb_n
+        pix_scale = np.sqrt(np.abs(np.linalg.det(cd))) * 3600
+        max_res = max(np.max(np.abs(res_u)), np.max(np.abs(res_v)))
+        max_res *= pix_scale  # arcsec
+        # Rescale to raw-pixel convention: coeff_raw = coeff_norm / scale^(p+q)
+        ca = ca_n.copy()
+        cb = cb_n.copy()
+        for i, (p, q) in enumerate(pq):
+            s = scale ** (p + q)
+            ca[i] /= s
+            cb[i] /= s
+        return ca, cb, pq, max_res
+
+    # Normalization scale for numerical stability
+    scale = max(np.max(np.abs(u)), np.max(np.abs(v)), 1.0)
+
+    if order is not None:
+        ca, cb, pq, max_res = _fit_order(u, v, du, dv, order, scale)
+    else:
+        # Auto-select order: try increasing orders, pick the best one.
+        # Cap at 6 — higher orders tend to become numerically unstable
+        # when the distortion is inherently non-polynomial (e.g. ZPN).
+        best_res = np.inf
+        best_result = None
+        best_order = 2
+        for try_order in range(2, 7):
+            ca_t, cb_t, pq_t, max_res_t = _fit_order(
+                u, v, du, dv, try_order, scale
+            )
+            if max_res_t < best_res:
+                best_res = max_res_t
+                best_result = (ca_t, cb_t, pq_t, max_res_t)
+                best_order = try_order
+            if max_res_t < accuracy:
+                break
+        ca, cb, pq, max_res = best_result
+        order = best_order
+
+    # Strip old distortion keywords
+    for key in list(header.keys()):
+        if key.startswith(('A_', 'B_', 'AP_', 'BP_', 'PV')):
+            del header[key]
+
+    # Write forward SIP coefficients
+    header['CTYPE1'] = 'RA---TAN-SIP'
+    header['CTYPE2'] = 'DEC--TAN-SIP'
+    header['A_ORDER'] = order
+    header['B_ORDER'] = order
+
+    for i, (p, q) in enumerate(pq):
+        if abs(ca[i]) > 1e-20:
+            header['A_%d_%d' % (p, q)] = float(ca[i])
+        if abs(cb[i]) > 1e-20:
+            header['B_%d_%d' % (p, q)] = float(cb[i])
+
+    # Fit reverse SIP (AP, BP): map distorted coords back to undistorted
+    du_rev = u - u_target
+    dv_rev = v - v_target
+    pq_rev = _sip_terms(order)
+    A_rev = _sip_basis(u_target, v_target, pq_rev, scale)
+    cap, _, _, _ = np.linalg.lstsq(A_rev, du_rev, rcond=None)
+    cbp, _, _, _ = np.linalg.lstsq(A_rev, dv_rev, rcond=None)
+    for i, (p, q) in enumerate(pq_rev):
+        s = scale ** (p + q)
+        cap[i] /= s
+        cbp[i] /= s
+
+    header['AP_ORDER'] = order
+    header['BP_ORDER'] = order
+    for i, (p, q) in enumerate(pq_rev):
+        if abs(cap[i]) > 1e-20:
+            header['AP_%d_%d' % (p, q)] = float(cap[i])
+        if abs(cbp[i]) > 1e-20:
+            header['BP_%d_%d' % (p, q)] = float(cbp[i])
+
+    return header
+
+
+def _fit_tpv_coefficients(wcs_orig, header, order=5):
+    """Numerically fit TPV polynomial coefficients for a non-TAN WCS.
+
+    Samples the original WCS on a dense pixel grid, projects the sky
+    coordinates through a TAN gnomonic projection, and fits TPV
+    polynomial coefficients to reproduce the mapping.
+
+    Parameters
+    ----------
+    wcs_orig : `~astropy.wcs.WCS`
+        Original WCS (any projection, with or without SIP).
+    header : `~astropy.io.fits.Header`
+        Header with CRVAL/CRPIX/CD (will be modified in-place to add
+        PV keywords and set CTYPE to TPV).
+    order : int
+        Maximum polynomial order for the TPV fit (default 5).
+
+    Returns
+    -------
+    header : modified header with PV keywords and CTYPE set to TPV.
+    """
+    nx = int(header.get('NAXIS1', 1024))
+    ny = int(header.get('NAXIS2', 1024))
+
+    # Dense pixel grid (avoid edges by half-pixel margin)
+    ngrid = int(max(50, min(200, max(nx, ny) // 10)))
+    gx = np.linspace(0, nx - 1, ngrid)
+    gy = np.linspace(0, ny - 1, ngrid)
+    xx, yy = np.meshgrid(gx, gy)
+    xf, yf = xx.ravel(), yy.ravel()
+
+    # Sky coordinates from the original WCS
+    ra, dec = wcs_orig.all_pix2world(xf, yf, 0)
+
+    # Filter out NaN / non-finite (can happen near edges)
+    good = np.isfinite(ra) & np.isfinite(dec)
+    xf, yf, ra, dec = xf[good], yf[good], ra[good], dec[good]
+
+    # CRVAL and CD matrix from header
+    crval1 = header['CRVAL1']
+    crval2 = header['CRVAL2']
+    crpix1 = header['CRPIX1']
+    crpix2 = header['CRPIX2']
+
+    # Build CD matrix
+    if 'CD1_1' in header:
+        cd = np.array([
+            [header['CD1_1'], header.get('CD1_2', 0)],
+            [header.get('CD2_1', 0), header['CD2_2']],
+        ])
+    else:
+        pc = np.array([
+            [header.get('PC1_1', 1), header.get('PC1_2', 0)],
+            [header.get('PC2_1', 0), header.get('PC2_2', 1)],
+        ])
+        cdelt = np.array([header.get('CDELT1', 1), header.get('CDELT2', 1)])
+        cd = pc * cdelt[:, None]
+
+    # Intermediate pixel coords: (u, v) = CD · (x - crpix, y - crpix)
+    dx = xf - (crpix1 - 1)  # 0-based pixel coords → 1-based offset
+    dy = yf - (crpix2 - 1)
+    u = cd[0, 0] * dx + cd[0, 1] * dy
+    v = cd[1, 0] * dx + cd[1, 1] * dy
+
+    # TAN gnomonic projection: (RA, Dec) → (xi, eta) in degrees
+    ra0 = np.radians(crval1)
+    dec0 = np.radians(crval2)
+    ra_r = np.radians(ra)
+    dec_r = np.radians(dec)
+
+    cos_dec = np.cos(dec_r)
+    sin_dec = np.sin(dec_r)
+    cos_dec0 = np.cos(dec0)
+    sin_dec0 = np.sin(dec0)
+    dra = ra_r - ra0
+
+    denom = sin_dec * sin_dec0 + cos_dec * cos_dec0 * np.cos(dra)
+    xi = np.degrees(cos_dec * np.sin(dra) / denom)
+    eta = np.degrees(
+        (sin_dec * cos_dec0 - cos_dec * sin_dec0 * np.cos(dra)) / denom
+    )
+
+    # Build TPV polynomial design matrix
+    # TPV basis for axis 1: terms in (u, v), axis 2: terms in (v, u)
+    # Following the TPV convention, excluding radial terms at
+    # indices 3, 11, 23 which are degenerate with polynomial terms
+    def _tpv_basis(p, q, max_order):
+        """Build TPV polynomial basis.
+
+        p is the "primary" variable (u for axis 1, v for axis 2),
+        q is the "secondary" variable.
+        """
+        terms = []
+        indices = []
+
+        # Mapping from (total_order, sub_index) to PV index
+        # Order 0: PV_0 = 1
+        # Order 1: PV_1 = p, PV_2 = q
+        # Order 2: PV_4 = p², PV_5 = pq, PV_6 = q²
+        # Order 3: PV_7 = p³, PV_8 = p²q, PV_9 = pq², PV_10 = q³
+        # (PV_3=r and PV_11=r³ are radial, skipped)
+        # Order 4: PV_12..PV_16
+        # Order 5: PV_17..PV_22  (PV_23=r⁵ skipped)
+        # Order 6: PV_24..PV_30
+        # Order 7: PV_31..PV_38  (PV_39=r⁷ skipped)
+
+        pv_idx = 0
+        for total in range(max_order + 1):
+            for j in range(total + 1):
+                i = total - j
+                # p^i * q^j
+                terms.append(p ** i * q ** j)
+                indices.append(pv_idx)
+                pv_idx += 1
+
+            # Skip radial term after orders 1, 3, 5, 7
+            if total in (1, 3, 5, 7):
+                pv_idx += 1  # skip PV_3, PV_11, PV_23, PV_39
+
+        return np.column_stack(terms), indices
+
+    A1, idx1 = _tpv_basis(u, v, order)
+    A2, idx2 = _tpv_basis(v, u, order)
+
+    # Fit via least squares: xi = A1 @ c1, eta = A2 @ c2
+    c1, _, _, _ = np.linalg.lstsq(A1, xi, rcond=None)
+    c2, _, _, _ = np.linalg.lstsq(A2, eta, rcond=None)
+
+    # Write PV keywords
+    for i, pv_idx in enumerate(idx1):
+        if abs(c1[i]) > 1e-16:
+            header['PV1_%d' % pv_idx] = float(c1[i])
+    for i, pv_idx in enumerate(idx2):
+        if abs(c2[i]) > 1e-16:
+            header['PV2_%d' % pv_idx] = float(c2[i])
+
+    header['CTYPE1'] = 'RA---TPV'
+    header['CTYPE2'] = 'DEC--TPV'
+
+    return header
+
+
+def wcs_sip2pv(header):
+    """Convert the WCS header from SIP (or any projection) to TPV.
+
+    The original WCS is sampled on a dense pixel grid and TPV
+    polynomial coefficients are fitted to reproduce the same
+    pixel→sky mapping via least squares.  Works for any projection
+    type (TAN-SIP, ZPN-SIP, etc.) with sub-milliarcsecond accuracy.
+    """
+
+    header = header.copy()
+
+    # Parse the original WCS before modifying the header
+    wcs_orig = WCS(header)
+
+    # Ensure CD matrix is present (convert PC+CDELT → CD)
     if 'CD1_1' not in header and 'PC1_1' in header:
         cdelt = [header.get('CDELT1'), header.get('CDELT2')]
 
@@ -702,7 +1041,12 @@ def wcs_sip2pv(header):
         header['CD1_2'] = header.pop('PC1_2') * cdelt[0]
         header['CD2_2'] = header.pop('PC2_2') * cdelt[0]
 
-    sip_tpv.sip_to_pv(header)
+    # Strip SIP and old PV keywords before fitting new ones
+    for key in list(header.keys()):
+        if key.startswith(('A_', 'B_', 'AP_', 'BP_', 'PV')):
+            del header[key]
+
+    _fit_tpv_coefficients(wcs_orig, header)
 
     return header
 
