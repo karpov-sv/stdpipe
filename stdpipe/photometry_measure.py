@@ -310,13 +310,21 @@ def _solve_weighted_leastsq(A, D, W):
     :returns: (x, cov) - solution vector and covariance matrix, or (None, None) on failure
     """
     # A^T W A and A^T W D using weight vector
-    AtW = A.T * W  # Broadcasting: (K, npix) * (npix,) -> (K, npix)
-    AtWA = AtW @ A  # (K, K)
-    AtWD = AtW @ D  # (K,)
+    # Near-singular systems (e.g. overlapping sources) can produce
+    # non-finite intermediates — catch and return failure gracefully
+    with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+        AtW = A.T * W  # Broadcasting: (K, npix) * (npix,) -> (K, npix)
+        AtWA = AtW @ A  # (K, K)
+        AtWD = AtW @ D  # (K,)
+
+    if not np.all(np.isfinite(AtWA)) or not np.all(np.isfinite(AtWD)):
+        return None, None
 
     # Solve and get covariance
     try:
         x = np.linalg.solve(AtWA, AtWD)
+        if not np.all(np.isfinite(x)):
+            return None, None
         cov = np.linalg.solve(AtWA, np.eye(AtWA.shape[0]))
     except np.linalg.LinAlgError:
         return None, None
@@ -501,9 +509,10 @@ def _grouped_optimal_extraction(image, err, positions, psf, bg_local=None, mask=
     # Compute chi-squared for the group fit
     # Use variance weighting for chi2 (not W, which is 1 for unweighted fit)
     # This gives the proper goodness-of-fit metric: χ² = Σ((data - model)² / variance)
-    model = A @ x_sol
-    residuals = D - model
-    chi2 = np.sum(residuals**2 / V)
+    with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+        model = A @ x_sol
+        residuals = D - model
+        chi2 = np.sum(residuals**2 / V)
 
     # Reduced chi-squared (degrees of freedom = N - n_params)
     dof = n_pix - n_params
@@ -764,15 +773,19 @@ def measure_objects(
             log('Using COM centroiding with %d iterations within %dx%d box' % (centroid_iter, box_size, box_size))
 
         # Keep original pixel positions
-        obj['x_orig'] = obj['x'].copy()
-        obj['y_orig'] = obj['y'].copy()
+        obj['x_orig'] = np.array(obj['x'])
+        obj['y_orig'] = np.array(obj['y'])
 
         # Combined mask for centroiding
         centroid_mask = mask | mask0
 
+        # Get plain arrays to avoid MaskedColumn warnings
+        xs = np.array(obj['x'], dtype=float)
+        ys = np.array(obj['y'], dtype=float)
+
         # Process each object individually
         for i in range(len(obj)):
-            x, y = float(obj['x'][i]), float(obj['y'][i])
+            x, y = xs[i], ys[i]
 
             # Skip invalid positions (NaN or outside image with margin for box)
             if not np.isfinite(x) or not np.isfinite(y):
@@ -1256,8 +1269,8 @@ def measure_objects_sep(
         log('Using SEP windowed centroiding (maxstep=%.2f pix)' % maxstep)
 
         # Keep original pixel positions
-        obj['x_orig'] = obj['x'].copy()
-        obj['y_orig'] = obj['y'].copy()
+        obj['x_orig'] = np.array(obj['x'])
+        obj['y_orig'] = np.array(obj['y'])
 
         x_vals, y_vals, valid_pos = _extract_valid_positions(obj)
 
