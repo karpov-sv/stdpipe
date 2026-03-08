@@ -496,10 +496,11 @@ def solve(
     n_kernel_params = n_kernel_pixels * n_kpoly
     n_total = n_kernel_params + n_bgpoly
 
+    n_fpoly = _n_poly(flux_poly_order)
     log("SFFT: image %dx%d, kernel %dx%d, kernel_poly=%d (%d terms), "
-        "bg_poly=%d (%d terms)"
+        "bg_poly=%d (%d terms), flux_poly=%d (%d terms)"
         % (nx, ny, kx, ky, kernel_poly_order, n_kpoly,
-           bg_poly_order, n_bgpoly))
+           bg_poly_order, n_bgpoly, flux_poly_order, n_fpoly))
     log("SFFT: %d kernel + %d background = %d total parameters"
         % (n_kernel_params, n_bgpoly, n_total))
 

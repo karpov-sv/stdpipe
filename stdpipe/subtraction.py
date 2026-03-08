@@ -863,6 +863,8 @@ def run_sfft(
     ridge=1e-6,
     sigma_clip=3.0,
     max_iter=5,
+    obj=None,
+    obj_size=None,
     get_convolved=False,
     get_scaled=False,
     get_noise=False,
@@ -904,6 +906,15 @@ def run_sfft(
     :param ridge: Tikhonov regularization. Default 1e-6
     :param sigma_clip: Sigma threshold for outlier rejection. Default 3.0
     :param max_iter: Maximum sigma-clipping iterations. Default 5
+    :param obj: List of detected objects (Astropy Table with ``x``, ``y``
+        columns). If provided, kernel fitting is restricted to rectangular
+        regions around these objects, analogous to HOTPANTS stamp placement.
+        This concentrates the fit on high-S/N regions and can improve
+        kernel quality. Optional
+    :param obj_size: Half-size in pixels of the fitting region around each
+        object. If ``None`` (default), derived from the median ``fwhm``
+        column of *obj* (``3 × median(fwhm)``), or 15 pixels if ``fwhm``
+        is not available
     :param get_convolved: Whether to also return the convolved template
     :param get_scaled: Whether to also return noise-normalized difference
     :param get_noise: Whether to also return the difference image noise map
@@ -968,13 +979,57 @@ def run_sfft(
     # We pass the science err to weight the fit
     sfft_err = err  # may be None for uniform weighting
 
+    # --- Build fitting mask from object positions ---
+    fitting_mask = combined_mask
+    if obj is not None and len(obj):
+        obj = Table(obj)
+
+        # Determine region half-size
+        if obj_size is not None:
+            size = int(obj_size)
+        elif 'fwhm' in obj.colnames:
+            size = int(np.ceil(3 * np.nanmedian(obj['fwhm'])))
+        else:
+            size = 15
+
+        # Build good-regions map
+        good_regions = np.zeros(image.shape[:2], dtype=bool)
+        ny_img, nx_img = image.shape[:2]
+        n_used = 0
+
+        for row in obj:
+            x0 = int(row['x'])
+            y0 = int(row['y'])
+
+            # Skip objects too close to edges
+            if (x0 < size or x0 >= nx_img - size
+                    or y0 < size or y0 >= ny_img - size):
+                continue
+
+            # Skip regions containing masked pixels
+            region_mask = combined_mask[
+                y0 - size:y0 + size, x0 - size:x0 + size
+            ]
+            if np.any(region_mask):
+                continue
+
+            good_regions[y0 - size:y0 + size, x0 - size:x0 + size] = True
+            n_used += 1
+
+        if n_used > 0:
+            log('Using %d object regions (%d px half-size) for kernel fitting'
+                % (n_used, size))
+            fitting_mask = combined_mask | ~good_regions
+        else:
+            log('No usable object regions, fitting on whole image')
+
     # --- Run SFFT ---
     log('Running SFFT subtraction')
 
     sfft_result = sfft_module.solve(
         image_f,
         template_f,
-        mask=combined_mask,
+        mask=fitting_mask,
         err=sfft_err,
         kernel_shape=kernel_shape,
         kernel_poly_order=kernel_poly_order,
