@@ -799,7 +799,7 @@ def get_survey_image(
 
     if ext == 'mask' and survey == 'ps1':
         coadd &= (
-            ~0x8000
+            0xffff - 0x8000
         )  # Remove undocumented PS1 'temporary marked' mask bit that is masking seemingly good pixels
 
     return coadd
@@ -836,5 +836,3 @@ def get_ls_image(band='r', **kwargs):
 
 def get_ls_image_and_mask(band='r', **kwargs):
     return get_survey_image_and_mask(band=band, survey='ls', **kwargs)
-
-
