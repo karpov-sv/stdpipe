@@ -282,6 +282,136 @@ def fit_zpn_wcs_from_points(
     return w_curr, res_last
 
 
+def _fit_zpn_sip(
+    wcs_zpn,
+    xy,
+    sky,
+    sip_degree=2,
+    pv_deg=5,
+    n_iter=3,
+    robust_loss="soft_l1",
+    f_scale_arcsec=2.0,
+    max_nfev=200,
+):
+    """Add SIP distortion corrections on top of a ZPN WCS.
+
+    The SIP polynomials A(u,v), B(u,v) correct for non-radial distortions
+    (coma, astigmatism, etc.) that the ZPN radial model cannot capture.
+
+    Iterates between fitting SIP coefficients (pixel-space residuals) and
+    re-optimizing PV parameters with SIP applied.
+
+    Parameters
+    ----------
+    wcs_zpn : WCS
+        ZPN WCS with PV parameters already fitted (no SIP).
+    xy : (N, 2) array
+        Pixel coordinates of matched sources (0-based).
+    sky : SkyCoord
+        Reference sky positions.
+    sip_degree : int
+        SIP polynomial order (default 2).
+    pv_deg : int
+        ZPN PV polynomial degree for re-fitting.
+    n_iter : int
+        Number of PV+SIP alternation iterations.
+    robust_loss, f_scale_arcsec, max_nfev :
+        Passed to ``fit_zpn_wcs_from_points`` for PV re-fitting.
+
+    Returns
+    -------
+    wcs_sip : WCS
+        ZPN-SIP WCS with both PV and SIP coefficients.
+    """
+    from astropy.wcs.wcs import Sip
+
+    xy = np.asarray(xy, dtype=float)
+    w = wcs_zpn.deepcopy()
+
+    # SIP term indices: (p, q) with 2 <= p+q <= sip_degree
+    pq = []
+    for total in range(2, sip_degree + 1):
+        for q in range(total + 1):
+            pq.append((total - q, q))
+
+    crpix = np.array(w.wcs.crpix, dtype=float)  # 1-based
+
+    for iteration in range(n_iter):
+        # Strip SIP to get the base ZPN-only WCS
+        w_nosip = w.deepcopy()
+        w_nosip.sip = None
+        if '-SIP' in w_nosip.wcs.ctype[0]:
+            w_nosip.wcs.ctype = [c.replace('-SIP', '') for c in w_nosip.wcs.ctype]
+
+        # Undistorted pixel coords: where ZPN projection places catalog stars
+        x_cat, y_cat = w_nosip.all_world2pix(sky.ra.deg, sky.dec.deg, 0)
+        u_cat = x_cat - (crpix[0] - 1)
+        v_cat = y_cat - (crpix[1] - 1)
+
+        # Observed (distorted) pixel coords
+        u_obs = xy[:, 0] - (crpix[0] - 1)
+        v_obs = xy[:, 1] - (crpix[1] - 1)
+
+        # SIP convention: u_distorted = u_undistorted + A(u, v)
+        # u_obs = undistorted (raw pixel); u_cat = distorted (from ZPN inverse)
+        # So: A(u_obs, v_obs) = u_cat - u_obs
+        du = u_cat - u_obs
+        dv = v_cat - v_obs
+
+        # Filter outliers (use median absolute deviation)
+        dist = np.sqrt(du**2 + dv**2)
+        med_dist = np.median(dist)
+        mad = np.median(np.abs(dist - med_dist))
+        good = dist < med_dist + 5 * max(mad, 0.5)  # generous 5-sigma clip
+
+        if np.sum(good) < len(pq) + 5:
+            # Not enough points for SIP fitting
+            break
+
+        # SIP basis uses undistorted (raw pixel) coordinates
+        u_fit = u_obs[good]
+        v_fit = v_obs[good]
+        du_fit = du[good]
+        dv_fit = dv[good]
+
+        # Build SIP basis matrix
+        basis = np.column_stack([u_fit**p * v_fit**q for p, q in pq])
+
+        # Fit A and B coefficients via least squares
+        ca, _, _, _ = np.linalg.lstsq(basis, du_fit, rcond=None)
+        cb, _, _, _ = np.linalg.lstsq(basis, dv_fit, rcond=None)
+
+        # Build SIP arrays
+        a_vals = np.zeros((sip_degree + 1, sip_degree + 1))
+        b_vals = np.zeros((sip_degree + 1, sip_degree + 1))
+        for k, (p, q) in enumerate(pq):
+            a_vals[p, q] = ca[k]
+            b_vals[p, q] = cb[k]
+
+        # Apply SIP to the WCS
+        if '-SIP' not in w.wcs.ctype[0]:
+            w.wcs.ctype = [c + '-SIP' for c in w.wcs.ctype]
+
+        w.sip = Sip(
+            a_vals, b_vals,
+            np.zeros((sip_degree + 1, sip_degree + 1)),
+            np.zeros((sip_degree + 1, sip_degree + 1)),
+            crpix,
+        )
+
+        # Re-fit PV with SIP now applied (last iteration skip PV refit)
+        if iteration < n_iter - 1:
+            w, _ = fit_zpn_wcs_from_points(
+                xy, sky, w, pv_deg=pv_deg,
+                robust_loss=robust_loss,
+                f_scale_arcsec=f_scale_arcsec,
+                max_nfev=max_nfev,
+            )
+            crpix = np.array(w.wcs.crpix, dtype=float)
+
+    return w
+
+
 def tan_wcs_to_zpn(
     w_tan: WCS,
     pv_deg: int = 7,
@@ -644,7 +774,8 @@ def fit_wcs_from_points(
     pv_deg=5,
 ):
     """Drop-in wrapper around :func:`astropy.wcs.utils.fit_wcs_from_points`
-    that also handles **ZPN** projection (which astropy does not natively fit).
+    that also handles **ZPN** projection (which astropy does not natively fit)
+    and **ZPN-SIP** (ZPN radial distortion plus SIP polynomial corrections).
 
     Parameters
     ----------
@@ -656,13 +787,13 @@ def fit_wcs_from_points(
         Passed through to astropy for non-ZPN projections.
     projection : `~astropy.wcs.WCS` or other, optional
         Projection template.  If this is a WCS with ``RA---ZPN / DEC--ZPN``
-        CTYPEs, :func:`fit_zpn_wcs_from_points` is used instead.
+        CTYPEs, the ZPN fitter is used instead of astropy's.
     sip_degree : int or None, optional
-        SIP polynomial degree (TAN only).  For ZPN this is used as the
-        PV polynomial degree when >0; otherwise *pv_deg* is used.
+        SIP polynomial degree.  For TAN projections, controls SIP distortion
+        order.  For ZPN projections, if > 0, SIP corrections are fitted on
+        top of ZPN PV parameters to capture non-radial distortions.
     pv_deg : int, optional
-        ZPN PV polynomial degree (``PV2_0 … PV2_pv_deg``).  Used for ZPN
-        when ``sip_degree`` is None or <= 0.  Default 5.
+        ZPN PV polynomial degree (``PV2_0 … PV2_pv_deg``).  Default 5.
 
     Returns
     -------
@@ -691,15 +822,21 @@ def fit_wcs_from_points(
             # (2, N) -> (N, 2)
             xy_arr = xy_arr.T
 
-        # For ZPN, reuse sip_degree as the PV polynomial degree when provided
-        if sip_degree is not None and int(sip_degree) > 0:
-            zpn_deg = int(sip_degree)
-        else:
-            zpn_deg = int(pv_deg)
+        zpn_deg = int(pv_deg)
 
+        # First fit ZPN PV parameters (radial distortion)
         wcs_best, _result = fit_zpn_wcs_from_points(
             xy_arr, world_coords, wcs_init=projection, pv_deg=zpn_deg
         )
+
+        # Then fit SIP corrections for non-radial distortions
+        if sip_degree is not None and int(sip_degree) > 0:
+            wcs_best = _fit_zpn_sip(
+                wcs_best, xy_arr, world_coords,
+                sip_degree=int(sip_degree),
+                pv_deg=zpn_deg,
+            )
+
         return wcs_best
 
     # ---------- Non-ZPN ----------
