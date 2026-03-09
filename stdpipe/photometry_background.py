@@ -434,34 +434,42 @@ def get_background_polynomial(
     if order < 2:
         directional = False
 
-    # --- coordinate grids ------------------------------------------------
-    # 1D arrays for memory-efficient evaluation via broadcasting
-    x_1d = (np.arange(nx, dtype=np.float64) - nx / 2) / max(nx / 2, 1)
-    y_1d = (np.arange(ny, dtype=np.float64) - ny / 2) / max(ny / 2, 1)
+    # --- build a fixed-size working sample -------------------------------
+    # All fitting and sigma-clipping operates on this subsample only;
+    # the full-grid evaluation is a single pass at the end.
+    MAX_SAMPLE = 100_000
 
-    # Flat coordinate arrays (for fitting sub-samples)
-    yy_idx, xx_idx = np.mgrid[0:ny, 0:nx]
-    x_flat = x_1d[xx_idx.ravel()]
-    y_flat = y_1d[yy_idx.ravel()]
-    data = image.ravel().astype(np.float64)
-
-    valid = np.isfinite(data)
+    data_flat = image.ravel()
+    valid_idx = np.where(np.isfinite(data_flat))[0]
     if mask is not None:
-        valid &= ~mask.ravel()
+        valid_idx = valid_idx[~mask.ravel()[valid_idx]]
 
-    n_valid = int(np.sum(valid))
-    if n_valid == 0:
-        rms = np.nan
-        return np.full_like(image, np.nan, dtype=np.float64), rms
+    if len(valid_idx) == 0:
+        return np.full_like(image, np.nan, dtype=np.float64), np.nan
 
-    # --- helpers for polynomial basis and evaluation ---------------------
-    MAX_FIT_POINTS = 100_000
+    # Subsample once — reused for every clipping iteration
+    if len(valid_idx) > MAX_SAMPLE:
+        rng = np.random.RandomState(0)
+        sample_idx = rng.choice(valid_idx, MAX_SAMPLE, replace=False)
+    else:
+        sample_idx = valid_idx
 
+    # Coordinates and data for the working sample (normalised to [-1, 1])
+    x_scale = max(nx / 2, 1)
+    y_scale = max(ny / 2, 1)
+    sample_y, sample_x = np.divmod(sample_idx, nx)
+    xs = (sample_x.astype(np.float64) - nx / 2) / x_scale
+    ys = (sample_y.astype(np.float64) - ny / 2) / y_scale
+    ds = data_flat[sample_idx].astype(np.float64)
+
+    # --- helpers ---------------------------------------------------------
     def _poly_terms(ord_):
         """Return list of (p, q) exponent pairs for full 2D polynomial."""
         return [(p, q)
                 for p in range(ord_ + 1)
                 for q in range(ord_ + 1 - p)]
+
+    terms = _poly_terms(order)
 
     def _build_basis(x, y, theta_rad):
         """Build design matrix for the current model."""
@@ -473,19 +481,20 @@ def get_background_polynomial(
                 tk = tk * t
                 cols.append(tk)
             return np.column_stack(cols)
-        else:
-            cols = []
-            for p, q in _poly_terms(order):
-                col = np.ones_like(x)
-                if p:
-                    col = col * x ** p
-                if q:
-                    col = col * y ** q
-                cols.append(col)
-            return np.column_stack(cols)
+        cols = []
+        for p, q in terms:
+            col = np.ones_like(x)
+            if p:
+                col = col * x ** p
+            if q:
+                col = col * y ** q
+            cols.append(col)
+        return np.column_stack(cols)
 
     def _eval_2d(coeffs, theta_rad):
         """Evaluate polynomial on the full pixel grid via broadcasting."""
+        x_1d = (np.arange(nx, dtype=np.float64) - nx / 2) / x_scale
+        y_1d = (np.arange(ny, dtype=np.float64) - ny / 2) / y_scale
         bg = np.full((ny, nx), coeffs[0], dtype=np.float64)
         if directional:
             bg += coeffs[1] * x_1d[np.newaxis, :]
@@ -498,7 +507,7 @@ def get_background_polynomial(
                 bg += coeffs[k + 1] * tk
         else:
             idx = 0
-            for p, q in _poly_terms(order):
+            for p, q in terms:
                 if idx == 0:
                     idx += 1
                     continue  # constant already handled
@@ -514,67 +523,60 @@ def get_background_polynomial(
     # --- auto-detect gradient direction ----------------------------------
     theta_rad = 0.0
     if directional and direction_deg is None:
-        idx_v = np.where(valid)[0]
-        if len(idx_v) > MAX_FIT_POINTS:
-            rng = np.random.RandomState(0)
-            sub = rng.choice(idx_v, MAX_FIT_POINTS, replace=False)
-        else:
-            sub = idx_v
-        A = np.column_stack([np.ones(len(sub)), x_flat[sub], y_flat[sub]])
-        c, _, _, _ = np.linalg.lstsq(A, data[sub], rcond=None)
+        A = np.column_stack([np.ones_like(xs), xs, ys])
+        c, _, _, _ = np.linalg.lstsq(A, ds, rcond=None)
         theta_rad = np.arctan2(c[2], c[1])
     elif direction_deg is not None:
         theta_rad = np.radians(direction_deg)
 
     # --- iterative sigma-clipped polynomial fit --------------------------
-    good = valid.copy()
+    # All iterations work on the fixed subsample (xs, ys, ds).
+    # Note: some BLAS implementations (e.g. Apple Accelerate) raise
+    # spurious divide-by-zero warnings during matmul/lstsq even when
+    # all inputs and outputs are finite.
+    good = np.ones(len(xs), dtype=bool)
     coeffs = None
     rms_val = np.nan
 
-    for iteration in range(maxiters + 1):
-        idx_good = np.where(good)[0]
-        n_good = len(idx_good)
+    n_params = (order + 2) if directional else len(terms)
 
-        n_params = (order + 2) if directional else len(_poly_terms(order))
-        if n_good < n_params + 1:
-            break
+    with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+        for iteration in range(maxiters + 1):
+            n_good = int(np.sum(good))
+            if n_good < n_params + 1:
+                break
 
-        # Sub-sample for fitting to limit memory
-        if n_good > MAX_FIT_POINTS:
-            rng = np.random.RandomState(iteration)
-            idx_fit = rng.choice(idx_good, MAX_FIT_POINTS, replace=False)
-        else:
-            idx_fit = idx_good
+            A = _build_basis(xs[good], ys[good], theta_rad)
+            coeffs, _, _, _ = np.linalg.lstsq(A, ds[good], rcond=None)
 
-        A = _build_basis(x_flat[idx_fit], y_flat[idx_fit], theta_rad)
-        coeffs, _, _, _ = np.linalg.lstsq(A, data[idx_fit], rcond=None)
+            if iteration == maxiters:
+                break
 
-        if iteration == maxiters:
-            break
+            # Evaluate model on the subsample for clipping
+            model = _build_basis(xs, ys, theta_rad) @ coeffs
+            res = ds - model
 
-        # Evaluate model on full grid, compute residuals for valid pixels
-        model_2d = _eval_2d(coeffs, theta_rad)
-        res = data[valid] - model_2d.ravel()[valid]
+            # Robust RMS via MAD
+            med_res = np.median(res)
+            rms_val = 1.4826 * np.median(np.abs(res - med_res))
+            if rms_val <= 0:
+                break
 
-        # Robust RMS via MAD
-        med_res = np.median(res)
-        rms_val = 1.4826 * np.median(np.abs(res - med_res))
-        if rms_val <= 0:
-            break
+            good = np.abs(res - med_res) < sigma * rms_val
 
-        clip = np.abs(res - med_res) < sigma * rms_val
-        good = np.zeros(len(data), dtype=bool)
-        good[valid] = clip
-
-    # --- final evaluation ------------------------------------------------
+    # --- final evaluation on the full grid (single pass) -----------------
     if coeffs is None:
         return np.full_like(image, np.nan, dtype=np.float64), np.nan
 
     background = _eval_2d(coeffs, theta_rad)
 
-    # Final RMS from clipped residuals
-    res_final = data[good] - background.ravel()[good]
-    rms_val = float(mad_std(res_final)) if len(res_final) > 0 else np.nan
+    # Final RMS from clipped subsample residuals
+    if np.any(good) and np.all(np.isfinite(coeffs)):
+        with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+            model_good = _build_basis(xs[good], ys[good], theta_rad) @ coeffs
+        rms_val = float(mad_std(ds[good] - model_good))
+    else:
+        rms_val = np.nan
 
     return background, rms_val
 
