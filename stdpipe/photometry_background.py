@@ -331,6 +331,254 @@ def estimate_background_rms_local(image, background, mask=None, size=51):
     return rms
 
 
+def get_background_polynomial(
+    image,
+    mask=None,
+    order=1,
+    sigma=3.0,
+    maxiters=5,
+    directional=False,
+    direction=None,
+):
+    """Estimate background as a low-order 2D polynomial.
+
+    Fits a smooth polynomial surface to the image using iterative
+    sigma-clipping to reject stars and other outliers.  By construction,
+    low-order polynomials cannot represent localised features such as
+    nebulae, so only the smooth gradient component is captured.
+
+    Parameters
+    ----------
+    image : 2D ndarray
+        Input image.
+    mask : 2D bool ndarray, optional
+        Pixels to exclude (True = masked).
+    order : int
+        Polynomial order: 1 = plane, 2 = quadratic, 3 = cubic, etc.
+        Default 1.
+    sigma : float
+        Sigma threshold for iterative outlier clipping.  Default 3.0.
+    maxiters : int
+        Maximum number of sigma-clipping iterations.  Default 5.
+    directional : bool or float
+        Controls directional constraint for higher-order (≥ 2) terms.
+
+        - ``False`` (default) — use all 2D polynomial terms.
+        - ``True`` — auto-detect the gradient direction from a linear
+          fit, then restrict order ≥ 2 terms to powers of the
+          directional coordinate *t* = *x* cos θ + *y* sin θ.
+          This prevents high-order polynomials from fitting localised
+          features while still capturing curvature along the gradient.
+        - A ``float`` value — same as ``True`` but uses the given angle
+          (degrees, 0 = x-axis, 90 = y-axis) instead of auto-detecting.
+
+        For order ≤ 1 this parameter has no effect (a plane already
+        has only 3 coefficients).
+    direction : float or None
+        *Deprecated* synonym for ``directional=<angle>``.  If both are
+        given, *directional* takes precedence.
+
+    Returns
+    -------
+    background : 2D ndarray
+        Fitted polynomial background, same shape as *image*.
+    rms : float
+        Scalar RMS of the residuals (clipped pixels excluded).
+
+    Notes
+    -----
+    **Full 2D mode** (``directional=False``):
+
+    Number of polynomial coefficients = (order+1)(order+2)/2:
+    order 1 → 3, order 2 → 6, order 3 → 10, order 4 → 15.
+
+    **Directional mode** (``directional=True`` or angle):
+
+    Number of coefficients = order + 2 (full linear + higher-order
+    directional terms): order 2 → 4, order 3 → 5, order 4 → 6.
+
+    Coordinates are normalised to [-1, 1] internally for numerical
+    stability.  The fit uses random sub-sampling (100 000 points) for
+    images larger than ~300×300 to keep memory and CPU bounded.
+
+    Examples
+    --------
+    Remove a linear gradient:
+
+    >>> bg, rms = get_background_polynomial(image, order=1)
+
+    Fit a cubic curve along the gradient direction (5 parameters):
+
+    >>> bg, rms = get_background_polynomial(image, order=3, directional=True)
+
+    Specify the gradient direction explicitly (e.g. 45°):
+
+    >>> bg, rms = get_background_polynomial(image, order=3, directional=45.0)
+    """
+    ny, nx = image.shape
+
+    # --- resolve directional / direction arguments -----------------------
+    if isinstance(directional, (int, float)) and not isinstance(directional, bool):
+        # directional=45.0  →  direction angle in degrees
+        direction_deg = float(directional)
+        directional = True
+    elif directional and direction is not None:
+        direction_deg = float(direction)
+    elif direction is not None:
+        direction_deg = float(direction)
+        directional = True
+    else:
+        direction_deg = None  # auto-detect later if directional=True
+
+    # Directional constraint only matters for order >= 2
+    if order < 2:
+        directional = False
+
+    # --- coordinate grids ------------------------------------------------
+    # 1D arrays for memory-efficient evaluation via broadcasting
+    x_1d = (np.arange(nx, dtype=np.float64) - nx / 2) / max(nx / 2, 1)
+    y_1d = (np.arange(ny, dtype=np.float64) - ny / 2) / max(ny / 2, 1)
+
+    # Flat coordinate arrays (for fitting sub-samples)
+    yy_idx, xx_idx = np.mgrid[0:ny, 0:nx]
+    x_flat = x_1d[xx_idx.ravel()]
+    y_flat = y_1d[yy_idx.ravel()]
+    data = image.ravel().astype(np.float64)
+
+    valid = np.isfinite(data)
+    if mask is not None:
+        valid &= ~mask.ravel()
+
+    n_valid = int(np.sum(valid))
+    if n_valid == 0:
+        rms = np.nan
+        return np.full_like(image, np.nan, dtype=np.float64), rms
+
+    # --- helpers for polynomial basis and evaluation ---------------------
+    MAX_FIT_POINTS = 100_000
+
+    def _poly_terms(ord_):
+        """Return list of (p, q) exponent pairs for full 2D polynomial."""
+        return [(p, q)
+                for p in range(ord_ + 1)
+                for q in range(ord_ + 1 - p)]
+
+    def _build_basis(x, y, theta_rad):
+        """Build design matrix for the current model."""
+        if directional:
+            t = x * np.cos(theta_rad) + y * np.sin(theta_rad)
+            cols = [np.ones_like(x), x, y]
+            tk = t.copy()
+            for _ in range(2, order + 1):
+                tk = tk * t
+                cols.append(tk)
+            return np.column_stack(cols)
+        else:
+            cols = []
+            for p, q in _poly_terms(order):
+                col = np.ones_like(x)
+                if p:
+                    col = col * x ** p
+                if q:
+                    col = col * y ** q
+                cols.append(col)
+            return np.column_stack(cols)
+
+    def _eval_2d(coeffs, theta_rad):
+        """Evaluate polynomial on the full pixel grid via broadcasting."""
+        bg = np.full((ny, nx), coeffs[0], dtype=np.float64)
+        if directional:
+            bg += coeffs[1] * x_1d[np.newaxis, :]
+            bg += coeffs[2] * y_1d[:, np.newaxis]
+            t = (np.cos(theta_rad) * x_1d[np.newaxis, :]
+                 + np.sin(theta_rad) * y_1d[:, np.newaxis])
+            tk = t.copy()
+            for k in range(2, order + 1):
+                tk = tk * t
+                bg += coeffs[k + 1] * tk
+        else:
+            idx = 0
+            for p, q in _poly_terms(order):
+                if idx == 0:
+                    idx += 1
+                    continue  # constant already handled
+                term = np.ones((ny, nx), dtype=np.float64)
+                if p:
+                    term *= x_1d[np.newaxis, :] ** p
+                if q:
+                    term *= y_1d[:, np.newaxis] ** q
+                bg += coeffs[idx] * term
+                idx += 1
+        return bg
+
+    # --- auto-detect gradient direction ----------------------------------
+    theta_rad = 0.0
+    if directional and direction_deg is None:
+        idx_v = np.where(valid)[0]
+        if len(idx_v) > MAX_FIT_POINTS:
+            rng = np.random.RandomState(0)
+            sub = rng.choice(idx_v, MAX_FIT_POINTS, replace=False)
+        else:
+            sub = idx_v
+        A = np.column_stack([np.ones(len(sub)), x_flat[sub], y_flat[sub]])
+        c, _, _, _ = np.linalg.lstsq(A, data[sub], rcond=None)
+        theta_rad = np.arctan2(c[2], c[1])
+    elif direction_deg is not None:
+        theta_rad = np.radians(direction_deg)
+
+    # --- iterative sigma-clipped polynomial fit --------------------------
+    good = valid.copy()
+    coeffs = None
+    rms_val = np.nan
+
+    for iteration in range(maxiters + 1):
+        idx_good = np.where(good)[0]
+        n_good = len(idx_good)
+
+        n_params = (order + 2) if directional else len(_poly_terms(order))
+        if n_good < n_params + 1:
+            break
+
+        # Sub-sample for fitting to limit memory
+        if n_good > MAX_FIT_POINTS:
+            rng = np.random.RandomState(iteration)
+            idx_fit = rng.choice(idx_good, MAX_FIT_POINTS, replace=False)
+        else:
+            idx_fit = idx_good
+
+        A = _build_basis(x_flat[idx_fit], y_flat[idx_fit], theta_rad)
+        coeffs, _, _, _ = np.linalg.lstsq(A, data[idx_fit], rcond=None)
+
+        if iteration == maxiters:
+            break
+
+        # Evaluate model on full grid, compute residuals for valid pixels
+        model_2d = _eval_2d(coeffs, theta_rad)
+        res = data[valid] - model_2d.ravel()[valid]
+
+        # Robust RMS via MAD
+        med_res = np.median(res)
+        rms_val = 1.4826 * np.median(np.abs(res - med_res))
+        if rms_val <= 0:
+            break
+
+        clip = np.abs(res - med_res) < sigma * rms_val
+        good = np.zeros(len(data), dtype=bool)
+        good[valid] = clip
+
+    # --- final evaluation ------------------------------------------------
+    if coeffs is None:
+        return np.full_like(image, np.nan, dtype=np.float64), np.nan
+
+    background = _eval_2d(coeffs, theta_rad)
+
+    # Final RMS from clipped residuals
+    res_final = data[good] - background.ravel()[good]
+    rms_val = float(mad_std(res_final)) if len(res_final) > 0 else np.nan
+
+    return background, rms_val
+
+
 def get_background_gp(
     image,
     mask=None,
@@ -581,6 +829,7 @@ def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kw
 
         - 'sep': SEP grid-based (default) - Fast, accurate for flat/linear backgrounds
         - 'photutils': photutils grid-based - Similar to SEP
+        - 'polynomial': Low-order polynomial fit - Captures smooth gradients, preserves nebulae
         - 'percentile': Percentile filtering (non-grid, robust to stars) - Slow but very robust
         - 'morphology': Morphological opening (non-grid, fast) - Good for moderate gradients
         - 'gp': Gaussian Process regression (non-grid, very flexible) - Best for complex backgrounds
@@ -599,6 +848,8 @@ def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kw
     **kwargs : dict
         Additional parameters passed to the method:
 
+        - For polynomial: order, sigma, maxiters, directional, direction
+          (see get_background_polynomial for full list)
         - For percentile: percentile, maxiters, sigma
         - For morphology: iterations, smooth, smooth_size
         - For gp: max_points, grid_step, clip_sigma, n_clip_iter, matern_nu, etc.
@@ -641,8 +892,17 @@ def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kw
 
     >>> bg, bg_std = get_background(image, method='gp', get_rms=True)
 
+    Polynomial fit for gradient removal (preserves nebulae):
+
+    >>> bg = get_background(image, method='polynomial', order=2)
+
+    Directional gradient with cubic curvature:
+
+    >>> bg = get_background(image, method='polynomial', order=3, directional=True)
+
     See Also
     --------
+    get_background_polynomial : Polynomial fit details
     get_background_percentile : Percentile filtering details
     get_background_morphology : Morphological opening details
     get_background_gp : Gaussian Process regression details
@@ -653,6 +913,10 @@ def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kw
 
     - **Flat backgrounds**: Use 'sep' (default) - fastest and most accurate
     - **Linear gradients**: Use 'sep' with size=64-128
+    - **Smooth gradients with nebulae**: Use 'polynomial' — only captures the
+      gradient, preserves localised background features by construction
+    - **Directional gradients**: Use 'polynomial' with ``directional=True`` —
+      higher-order terms confined to the gradient direction
     - **Quadratic gradients**: Use 'morphology' or local gradient fitting (bkg_order)
     - **Complex backgrounds** (vignetting, strong curvature): Use 'gp'
     - **Very crowded fields**: Use 'percentile' with percentile=10-15
@@ -716,6 +980,9 @@ def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kw
                 backrms = estimate_background_rms_local(image, back, mask=mask, size=size)
         else:
             backrms = None
+    elif method == 'polynomial':
+        back, poly_rms = get_background_polynomial(image, mask=mask, **kwargs)
+        backrms = np.full_like(back, poly_rms) if get_rms else None
     else:
         raise ValueError(f"Unknown background method: {method}")
 
