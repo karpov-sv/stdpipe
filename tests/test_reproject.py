@@ -410,3 +410,111 @@ class TestReprojectLanczos:
                 [(flags, wcs_in)], wcs=wcs_in, header=hdr_in, is_flags=True,
             )
             assert result.dtype == dtype
+
+    # -----------------------------------------------------------------------
+    # Footprint tests
+    # -----------------------------------------------------------------------
+
+    @pytest.mark.unit
+    def test_return_footprint_identity(self):
+        """Footprint should be all 1.0 for identity reprojection."""
+        wcs_in, hdr_in = _make_wcs()
+        image = np.ones((256, 256), dtype=np.float64)
+        coadd, footprint = reproject_lanczos(
+            [(image, wcs_in)], wcs=wcs_in, header=hdr_in,
+            return_footprint=True,
+        )
+        assert coadd.shape == (256, 256)
+        assert footprint.shape == (256, 256)
+        assert footprint.dtype == np.float64
+        # Interior should be fully covered
+        assert np.all(footprint[10:-10, 10:-10] == 1.0)
+
+    @pytest.mark.unit
+    def test_return_footprint_partial_coverage(self):
+        """Footprint should be 0.0 where output falls outside input."""
+        wcs_in, hdr_in = _make_wcs(naxis=(64, 64), crpix=(32.5, 32.5))
+        # Larger output grid — edges will be uncovered
+        wcs_out, hdr_out = _make_wcs(naxis=(128, 128), crpix=(64.5, 64.5))
+        image = np.ones((64, 64), dtype=np.float64)
+
+        coadd, footprint = reproject_lanczos(
+            [(image, wcs_in)], wcs=wcs_out, header=hdr_out,
+            return_footprint=True,
+        )
+        # Corners of output should have no coverage
+        assert footprint[0, 0] == 0.0
+        assert footprint[-1, -1] == 0.0
+        # Centre should be covered
+        assert footprint[64, 64] == 1.0
+        # NaN pixels should have footprint 0
+        nan_mask = np.isnan(coadd)
+        assert np.all(footprint[nan_mask] == 0.0)
+
+    @pytest.mark.unit
+    def test_return_footprint_false_returns_single(self):
+        """return_footprint=False should return just the array."""
+        wcs_in, hdr_in = _make_wcs()
+        image = np.ones((256, 256), dtype=np.float64)
+        result = reproject_lanczos(
+            [(image, wcs_in)], wcs=wcs_in, header=hdr_in,
+            return_footprint=False,
+        )
+        assert isinstance(result, np.ndarray)
+
+    @pytest.mark.unit
+    def test_return_footprint_flags(self):
+        """Footprint should work for integer flag images."""
+        wcs_in, hdr_in = _make_wcs(naxis=(64, 64), crpix=(32.5, 32.5))
+        wcs_out, hdr_out = _make_wcs(naxis=(128, 128), crpix=(64.5, 64.5))
+        flags = np.ones((64, 64), dtype=np.uint16) * 3
+
+        coadd, footprint = reproject_lanczos(
+            [(flags, wcs_in)], wcs=wcs_out, header=hdr_out,
+            is_flags=True, return_footprint=True,
+        )
+        assert footprint.shape == coadd.shape
+        # Uncovered corners
+        assert footprint[0, 0] == 0.0
+        # Centre should be covered
+        assert footprint[64, 64] == 1.0
+
+    @pytest.mark.unit
+    def test_return_footprint_no_input(self):
+        """No input frames should return (None, None) with return_footprint."""
+        result = reproject_lanczos(
+            [], header=_make_wcs()[1], return_footprint=True,
+        )
+        assert result == (None, None)
+
+    @pytest.mark.unit
+    def test_return_footprint_coadd(self):
+        """Footprint for multi-frame coadd should reflect combined coverage."""
+        wcs_in, hdr_in = _make_wcs(naxis=(64, 64), crpix=(32.5, 32.5))
+        image = np.ones((64, 64), dtype=np.float64)
+
+        coadd, footprint = reproject_lanczos(
+            [(image, wcs_in), (image, wcs_in)],
+            wcs=wcs_in, header=hdr_in,
+            return_footprint=True,
+        )
+        # Both frames cover the same area, so footprint should be ~1.0
+        assert np.all(footprint[5:-5, 5:-5] > 0.9)
+
+    @pytest.mark.unit
+    def test_single_tuple_input(self):
+        """A single (image, wcs) tuple should be accepted like reproject."""
+        wcs_in, hdr_in = _make_wcs()
+        image = np.ones((256, 256), dtype=np.float64) * 5.0
+
+        # Single tuple (not wrapped in a list)
+        result = reproject_lanczos(
+            (image, wcs_in), wcs=wcs_in, header=hdr_in,
+        )
+        assert result is not None
+        assert result.shape == (256, 256)
+        # Should give same result as list input
+        result_list = reproject_lanczos(
+            [(image, wcs_in)], wcs=wcs_in, header=hdr_in,
+        )
+        np.testing.assert_array_equal(result, result_list)

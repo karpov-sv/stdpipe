@@ -16,11 +16,27 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 
 from astropy.wcs import WCS
-from astropy.wcs.utils import proj_plane_pixel_scales, pixel_to_pixel
+from astropy.wcs.utils import proj_plane_pixel_scales
 from astropy.io import fits
 
 from . import utils
 from . import astrometry
+
+
+def _pixel_to_pixel(wcs_from, wcs_to, x, y):
+    """Map pixel coordinates from one WCS to another.
+
+    Like :func:`astropy.wcs.utils.pixel_to_pixel` but uses ``quiet=True``
+    for the inverse SIP transformation so that out-of-domain pixels
+    produce NaN instead of raising convergence warnings.
+    """
+    sky = wcs_from.all_pix2world(x, y, 0)
+    try:
+        pix = wcs_to.all_world2pix(sky[0], sky[1], 0, quiet=True)
+    except Exception:
+        # Fallback if quiet mode is not supported
+        pix = wcs_to.all_world2pix(sky[0], sky[1], 0)
+    return pix
 
 
 # ---------------------------------------------------------------------------
@@ -113,15 +129,16 @@ def _reproject_single_flags(image, wcs_in, wcs_out, shape_out):
     Returns
     -------
     result : 2D integer array (0 where no data)
+    footprint : 2D float array (1.0 where covered, 0.0 elsewhere)
     """
     ny_out, nx_out = shape_out
     image = np.asarray(image)
     dtype = image.dtype
 
     yy, xx = np.mgrid[0:ny_out, 0:nx_out]
-    pixel_in = pixel_to_pixel(wcs_out, wcs_in,
-                              xx.ravel().astype(float),
-                              yy.ravel().astype(float))
+    pixel_in = _pixel_to_pixel(wcs_out, wcs_in,
+                               xx.ravel().astype(float),
+                               yy.ravel().astype(float))
     ix = np.round(np.asarray(pixel_in[0])).astype(int)
     iy = np.round(np.asarray(pixel_in[1])).astype(int)
 
@@ -134,27 +151,39 @@ def _reproject_single_flags(image, wcs_in, wcs_out, shape_out):
         result = np.zeros(ny_out * nx_out, dtype=dtype)
 
     result[valid] = image[iy[valid], ix[valid]]
-    return result.reshape(shape_out)
+
+    footprint = valid.astype(np.float64).reshape(shape_out)
+    return result.reshape(shape_out), footprint
 
 
 def _reproject_chunk(image, wcs_in, wcs_out, row_start, row_end, nx_out,
                      order, oversamp, area_ratio, sub_offsets):
-    """Reproject a horizontal chunk of rows.  Used by :func:`_reproject_single`."""
+    """Reproject a horizontal chunk of rows.  Used by :func:`_reproject_single`.
+
+    Returns
+    -------
+    row_start : int
+    result : 2D array (NaN where no data)
+    footprint : 2D float array (fractional coverage 0.0–1.0)
+    """
     ny_chunk = row_end - row_start
 
     if oversamp <= 1:
         yy, xx = np.mgrid[row_start:row_end, 0:nx_out]
-        pixel_in = pixel_to_pixel(wcs_out, wcs_in,
+        pixel_in = _pixel_to_pixel(wcs_out, wcs_in,
                                   xx.ravel().astype(float),
                                   yy.ravel().astype(float))
         coords = np.array([np.asarray(pixel_in[1]),
                            np.asarray(pixel_in[0])])
         values = _lanczos_map_coordinates(image, coords, a=order)
-        return row_start, values.reshape(ny_chunk, nx_out) * area_ratio
+        result = values.reshape(ny_chunk, nx_out) * area_ratio
+        footprint = np.isfinite(result).astype(np.float64)
+        return row_start, result, footprint
 
     chunk_shape = (ny_chunk, nx_out)
     accumulator = np.zeros(chunk_shape, dtype=np.float64)
     count = np.zeros(chunk_shape, dtype=np.int32)
+    n_sub = len(sub_offsets) ** 2
 
     for dy_off in sub_offsets:
         for dx_off in sub_offsets:
@@ -162,7 +191,7 @@ def _reproject_chunk(image, wcs_in, wcs_out, row_start, row_end, nx_out,
             pixel_out_x = (xx + dx_off).ravel().astype(float)
             pixel_out_y = (yy + dy_off).ravel().astype(float)
 
-            pixel_in = pixel_to_pixel(wcs_out, wcs_in,
+            pixel_in = _pixel_to_pixel(wcs_out, wcs_in,
                                       pixel_out_x, pixel_out_y)
             coords = np.array([np.asarray(pixel_in[1]),
                                np.asarray(pixel_in[0])])
@@ -176,7 +205,8 @@ def _reproject_chunk(image, wcs_in, wcs_out, row_start, row_end, nx_out,
     result = np.full(chunk_shape, np.nan, dtype=np.float64)
     good = count > 0
     result[good] = (accumulator[good] / count[good]) * area_ratio
-    return row_start, result
+    footprint = count.astype(np.float64) / n_sub
+    return row_start, result, footprint
 
 
 def _reproject_single(image, wcs_in, wcs_out, shape_out, order, conserve_flux,
@@ -192,6 +222,7 @@ def _reproject_single(image, wcs_in, wcs_out, shape_out, order, conserve_flux,
     Returns
     -------
     result : 2D array (NaN where no data)
+    footprint : 2D float array (fractional coverage 0.0–1.0)
     """
     ny_out, nx_out = shape_out
     image = np.asarray(image, dtype=np.float64)
@@ -225,10 +256,10 @@ def _reproject_single(image, wcs_in, wcs_out, shape_out, order, conserve_flux,
 
     if n_workers <= 1:
         # Sequential path
-        _, result = _reproject_chunk(image, wcs_in, wcs_out, 0, ny_out,
-                                     nx_out, order, oversamp, area_ratio,
-                                     sub_offsets)
-        return result
+        _, result, footprint = _reproject_chunk(
+            image, wcs_in, wcs_out, 0, ny_out,
+            nx_out, order, oversamp, area_ratio, sub_offsets)
+        return result, footprint
 
     # Threaded path — split by row chunks
     chunk_size = max(1, (ny_out + n_workers - 1) // n_workers)
@@ -240,6 +271,7 @@ def _reproject_single(image, wcs_in, wcs_out, shape_out, order, conserve_flux,
             row_ranges.append((rs, re))
 
     result = np.full(shape_out, np.nan, dtype=np.float64)
+    footprint = np.zeros(shape_out, dtype=np.float64)
     with ThreadPoolExecutor(max_workers=len(row_ranges)) as pool:
         futures = [
             pool.submit(_reproject_chunk, image, wcs_in, wcs_out,
@@ -248,10 +280,12 @@ def _reproject_single(image, wcs_in, wcs_out, shape_out, order, conserve_flux,
             for rs, re in row_ranges
         ]
         for f in futures:
-            row_start, chunk = f.result()
-            result[row_start:row_start + chunk.shape[0]] = chunk
+            row_start, chunk, fp_chunk = f.result()
+            nrows = chunk.shape[0]
+            result[row_start:row_start + nrows] = chunk
+            footprint[row_start:row_start + nrows] = fp_chunk
 
-    return result
+    return result, footprint
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +306,7 @@ def reproject_lanczos(
     is_flags=False,
     use_nans=True,
     parallel=False,
+    return_footprint=False,
     verbose=False,
 ):
     """Reproject images using Lanczos interpolation with automatic oversampling.
@@ -286,8 +321,10 @@ def reproject_lanczos(
 
     Parameters
     ----------
-    input : list
+    input : list or tuple
         List of ``(image, header_or_wcs)`` tuples or FITS filenames.
+        A single ``(image, header_or_wcs)`` tuple is also accepted
+        (wrapped into a list automatically for reproject compatibility).
     wcs : `~astropy.wcs.WCS`, optional
         Output WCS.  Ignored if *header* already contains WCS.
     shape : tuple, optional
@@ -317,6 +354,12 @@ def reproject_lanczos(
         If True, use threads for parallel interpolation (number chosen
         automatically).  If int > 1, use that many threads.  Gives
         ~3-4x speedup on multi-core machines.
+    return_footprint : bool
+        If True, return ``(coadd, footprint)`` where *footprint* is a
+        float array with values between 0.0 (no coverage) and 1.0 (full
+        coverage).  When oversampling is active, fractional values
+        indicate partial sub-pixel coverage.  Default is False for
+        backward compatibility.
     verbose : bool or callable
         Logging control.
 
@@ -324,9 +367,17 @@ def reproject_lanczos(
     -------
     coadd : 2D `~numpy.ndarray` or None
         Reprojected (and optionally coadded) image.
+    footprint : 2D `~numpy.ndarray`
+        Coverage map (only returned when ``return_footprint=True``).
     """
     if input is None:
         input = []
+
+    # Accept a single (image, header/WCS) tuple for reproject compatibility
+    if (isinstance(input, tuple)
+            and len(input) == 2
+            and isinstance(input[0], np.ndarray)):
+        input = [input]
 
     log = (
         (verbose if callable(verbose) else print)
@@ -384,19 +435,23 @@ def reproject_lanczos(
 
     if not frames:
         log("No input frames")
+        if return_footprint:
+            return None, None
         return None
 
     # Reproject each frame
     results = []
+    footprints = []
     for i, (img, wcs_in) in enumerate(frames):
         log('Reprojecting frame %d/%d' % (i + 1, len(frames)))
         if is_flags:
-            result = _reproject_single_flags(img, wcs_in, wcs_out, shape_out)
+            result, fp = _reproject_single_flags(img, wcs_in, wcs_out, shape_out)
         else:
-            result = _reproject_single(img, wcs_in, wcs_out, shape_out,
-                                       order, conserve_flux, oversamp,
-                                       parallel=parallel)
+            result, fp = _reproject_single(img, wcs_in, wcs_out, shape_out,
+                                           order, conserve_flux, oversamp,
+                                           parallel=parallel)
         results.append(result)
+        footprints.append(fp)
 
     # Coadd
     if is_flags:
@@ -404,6 +459,9 @@ def reproject_lanczos(
         coadd = results[0].copy()
         for r in results[1:]:
             coadd &= r
+
+        # Combined footprint: covered if any frame covers the pixel
+        footprint = np.maximum.reduce(footprints)
 
         if use_nans:
             # For integer flags there's no NaN; use 0xFFFF sentinel
@@ -416,6 +474,7 @@ def reproject_lanczos(
     else:
         if len(results) == 1:
             coadd = results[0]
+            footprint = footprints[0]
         else:
             stack = np.array(results)
             valid = np.isfinite(stack)
@@ -423,7 +482,11 @@ def reproject_lanczos(
             coadd = np.full(shape_out, np.nan, dtype=np.float64)
             good = count > 0
             coadd[good] = np.nansum(stack[:, good], axis=0) / count[good]
+            # Average footprint across frames
+            footprint = np.mean(footprints, axis=0)
 
+    if return_footprint:
+        return coadd, footprint
     return coadd
 
 
