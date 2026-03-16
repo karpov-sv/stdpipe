@@ -228,7 +228,15 @@ def match(
     else:
         log('Using weighted fitting')
 
-    fit_color_term = use_color and force_color_term is None
+    if force_color_term is not None:
+        fit_color_term = False
+    elif isinstance(use_color, int) and use_color > 1:
+        # use_color=N sets the color term polynomial order
+        fit_color_term = use_color
+    elif use_color:
+        fit_color_term = 1
+    else:
+        fit_color_term = False
 
     if cat_color is not None:
         ccolor = np.ma.filled(cat_color[cidx], fill_value=np.nan)
