@@ -70,6 +70,7 @@ def get_objects_sep(
     image,
     header=None,
     mask=None,
+    mask_detect=None,
     err=None,
     thresh=4.0,
     aper=3.0,
@@ -114,7 +115,8 @@ def get_objects_sep(
 
     :param image: Input image as a NumPy array
     :param header: Image header, optional
-    :param mask: Image mask as a boolean array (True values will be masked), optional
+    :param mask: Image mask as a boolean array (True values will be masked), optional. Used for background estimation and photometry. Objects whose detection footprint overlaps this mask are flagged with 0x100 but not excluded from detection.
+    :param mask_detect: Optional detection mask as a boolean array (True = exclude from detection). If provided, it is combined (OR) with non-finite pixel mask and used for object detection/deblending. Use this to exclude entire regions (e.g. bad columns, satellite trails) from detection. If None, only non-finite pixels are masked during detection.
     :param err: Image noise map as a NumPy array, optional
     :param thresh: Detection threshold in sigmas above local background
     :param aper: Circular aperture radius in pixels (or in units of FWHM if fwhm parameter is provided/estimated), to be used for flux measurement
@@ -195,6 +197,17 @@ def get_objects_sep(
     mask_bg = np.zeros_like(mask)
     mask_segm = np.zeros_like(mask)
 
+    # Detection mask: non-finite pixels plus optional user-provided detection
+    # mask. The main user mask is not passed to sep.extract() so that bright
+    # objects with partially masked cores (e.g. saturated pixels) are detected
+    # and deblended as single objects rather than being fragmented into
+    # ring-shaped artifacts.  The user mask is still used for background
+    # estimation and photometry.  Use mask_detect to exclude entire regions
+    # (e.g. bad columns, satellite trails) from detection.
+    mask_det = ~np.isfinite(image)
+    if mask_detect is not None:
+        mask_det = mask_det | mask_detect
+
     log("Building background map")
 
     bg = sep.Background(image, mask=mask | mask_bg, bw=bg_size, bh=bg_size)
@@ -220,7 +233,7 @@ def get_objects_sep(
             err=err,
             thresh=thresh,
             minarea=minarea,
-            mask=mask | mask_bg,
+            mask=mask_det | mask_bg,
             filter_kernel=kernel,
             segmentation_map=True,
         )
@@ -238,7 +251,7 @@ def get_objects_sep(
         'err': err,
         'thresh': thresh,
         'minarea': minarea,
-        'mask': mask | mask_bg | mask_segm,
+        'mask': mask_det | mask_bg | mask_segm,
         'filter_kernel': kernel,
         'segmentation_map': True,
     }
@@ -252,6 +265,17 @@ def get_objects_sep(
     extract_kwargs.update(kwargs)
 
     obj0, segm = sep.extract(image1, **extract_kwargs)
+
+    # Flag objects whose footprints overlap the user mask.
+    # 0x100 = object has masked pixels within its detection footprint.
+    if mask.any():
+        # For each segmentation label, check if any of its pixels are masked
+        # Use fast vectorized approach: find unique labels that overlap mask
+        masked_labels = np.unique(segm[mask & (segm > 0)])
+        # seg_id for object i is i+1 (1-based)
+        obj_seg_ids = np.arange(1, len(obj0) + 1)
+        has_masked = np.isin(obj_seg_ids, masked_labels)
+        obj0['flag'][has_masked] |= 0x100
 
     # Handle FWHM parameter
     fwhm_value = None
@@ -461,6 +485,7 @@ def get_objects_sextractor(
     image,
     header=None,
     mask=None,
+    mask_detect=None,
     err=None,
     thresh=2.0,
     aper=3.0,
@@ -473,7 +498,7 @@ def get_objects_sextractor(
     bg_size=None,
     sort=True,
     reject_negative=True,
-    mask_to_nans=False,
+    mask_to_nans=True,
     checkimages=[],
     extra_params=[],
     extra={},
@@ -493,7 +518,8 @@ def get_objects_sextractor(
 
     :param image: Input image as a NumPy array
     :param header: Image header, optional
-    :param mask: Image mask as a boolean array (True values will be masked), optional
+    :param mask: Image mask as a boolean array (True values will be masked), optional. Used for SExtractor flagging (FLAG_IMAGE / IMAFLAGS_ISO). Objects whose footprint overlaps this mask get flag 0x100.
+    :param mask_detect: Optional detection mask as a boolean array (True = exclude from detection). If provided and mask_to_nans is True, these pixels (plus non-finite pixels) are set to NaN before running SExtractor, effectively excluding them from detection. Use this to exclude entire regions (e.g. bad columns, satellite trails) from detection while keeping the user mask only for flagging.
     :param err: Image noise map as a NumPy array, optional
     :param thresh: Detection threshold, in sigmas above local background, to be used for `DETECT_THRESH` parameter of SExtractor call
     :param aper: Circular aperture radius in pixels, to be used for flux measurement. May also be list - then flux will be measured for all apertures from that list.
@@ -506,7 +532,7 @@ def get_objects_sextractor(
     :param bg_size: Background grid size in pixels (`BACK_SIZE` SExtractor parameter)
     :param sort: Whether to sort the detections in decreasing brightness or not
     :param reject_negative: Whether to reject the detections with negative fluxes
-    :param mask_to_nans: Whether to replace masked image pixels with NaNs prior to running SExtractor on it
+    :param mask_to_nans: Whether to replace detection-masked pixels with NaNs prior to running SExtractor. When True (default), pixels in mask_detect (if provided) plus non-finite pixels are set to NaN, excluding them from detection while keeping the user mask only for flagging. When False, no pixels are NaN-ed (original behavior).
     :param checkimages: List of SExtractor checkimages to return along with detected objects. Any SExtractor checkimage type may be used here (e.g. `BACKGROUND`, `BACKGROUND_RMS`, `MINIBACKGROUND`,  `MINIBACK_RMS`, `-BACKGROUND`, `FILTERED`, `OBJECTS`, `-OBJECTS`, `SEGMENTATION`, `APERTURES`). Optional.
     :param extra_params: List of extra object parameters to return for the detection. See :code:`sex -dp` for the full list.
     :param extra: Dictionary of extra configuration parameters to be passed to SExtractor call, with keys as parameter names. See :code:`sex -dd` for the full list.
@@ -560,9 +586,18 @@ def get_objects_sextractor(
         # Ensure the mask is boolean array
         mask = mask.astype(bool)
 
-    if mask_to_nans and isinstance(image, np.floating):
-        image = image.copy()
-        image[mask] = np.nan
+    # Build detection mask: non-finite pixels plus optional user-provided
+    # detection mask.  When mask_to_nans is True, these pixels are set to NaN
+    # so that SExtractor ignores them during detection and deblending.  The
+    # user mask (FLAG_IMAGE) is kept separate for flagging only, so that
+    # bright objects with partially masked cores are not fragmented.
+    mask_det = ~np.isfinite(image)
+    if mask_detect is not None:
+        mask_det = mask_det | np.asarray(mask_detect, dtype=bool)
+
+    if mask_to_nans and mask_det.any():
+        image = image.copy() if np.issubdtype(image.dtype, np.floating) else image.astype(np.float64)
+        image[mask_det] = np.nan
 
     # Prepare
     if type(image) == str:
@@ -868,6 +903,7 @@ def get_objects_photutils(
     image,
     header=None,
     mask=None,
+    mask_detect=None,
     err=None,
     # Detection parameters
     thresh=2.0,
@@ -916,7 +952,12 @@ def get_objects_photutils(
     header : astropy.io.fits.Header, optional
         FITS header for WCS information
     mask : numpy.ndarray, optional
-        Boolean mask (True = masked pixel)
+        Boolean mask (True = masked pixel). Used for background estimation,
+        photometry, and flagging (0x100). Not used for detection itself.
+    mask_detect : numpy.ndarray, optional
+        Boolean mask for detection (True = exclude from detection). OR-ed with
+        non-finite pixel mask. If None, only non-finite pixels are excluded
+        from detection.
     err : numpy.ndarray, optional
         Error/uncertainty map. If None, uses background RMS
     thresh : float, optional
@@ -1049,8 +1090,10 @@ def get_objects_photutils(
         else lambda *args, **kwargs: None
     )
 
-    # Create coverage map / soft mask from NaNs
-    mask0 = ~np.isfinite(image)
+    # Create detection mask from NaNs and optional mask_detect
+    mask_det = ~np.isfinite(image)
+    if mask_detect is not None:
+        mask_det = mask_det | np.asarray(mask_detect, dtype=bool)
 
     if mask is None:
         mask = np.zeros(image.shape, dtype=bool)
@@ -1068,7 +1111,7 @@ def get_objects_photutils(
     else:
         smask = np.zeros(image.shape, dtype=bool)
 
-    total_mask = mask | mask0 | smask
+    total_mask = mask | mask_det | smask
 
     # Extract WCS from header if provided
     if wcs is None and header is not None:
@@ -1134,7 +1177,7 @@ def get_objects_photutils(
             threshold=threshold,
             npixels=npixels,
             connectivity=connectivity,
-            mask=mask0
+            mask=mask_det
         )
 
         if segm is None or segm.nlabels == 0:
@@ -1164,7 +1207,7 @@ def get_objects_photutils(
             image_bgsub,
             segm,
             error=err,
-            mask=mask0,
+            mask=mask_det,
             background=bkg_back if subtract_bg else None
         )
 
@@ -1203,7 +1246,7 @@ def get_objects_photutils(
 
         # Find sources
         try:
-            sources = finder(image_bgsub, mask=mask | mask0 )
+            sources = finder(image_bgsub, mask=mask_det)
         except Exception as e:
             log(f'Warning: Source detection failed: {e}')
             sources = None
@@ -1365,12 +1408,12 @@ def get_objects_photutils(
         except Exception as e:
             log(f'Warning: Flag detection failed for StarFinder: {e}')
 
-    # 0x100: Masked pixels in footprint (both methods)
+    # 0x100: User-masked pixels in footprint (both methods)
     try:
-        if np.any(total_mask):
+        if np.any(mask):
             if method == 'segmentation':
                 # Use segmentation map
-                labels = list(set(segm.data[total_mask])) # footprints with masked pixels
+                labels = list(set(segm.data[mask])) # footprints with masked pixels
                 obj['flags'][np.isin(obj['label'], labels)] |= 0x100
             else:
                 # Check source apertures for masked pixels
