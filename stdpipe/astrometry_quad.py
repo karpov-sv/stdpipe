@@ -1389,22 +1389,53 @@ def refine_wcs_quadhash(
         obj_std['flux'] = obj_filtered[obj_col_flux]
 
     # Configure refinement
+    # Compute pixel scale from input WCS for scale-aware defaults
+    try:
+        _pscales = wcs.proj_plane_pixel_scales()
+        if hasattr(_pscales[0], 'to_value'):
+            _pixel_scale_deg = float(np.mean([s.to_value(u.deg) for s in _pscales]))
+        else:
+            _pixel_scale_deg = float(np.mean(_pscales))
+        pixel_scale_arcsec = _pixel_scale_deg * 3600.0
+    except Exception:
+        pixel_scale_arcsec = 1.0  # fallback: assume 1 arcsec/pixel
+        _pixel_scale_deg = pixel_scale_arcsec / 3600.0
+
+    # Estimate FOV diagonal in degrees for scaling source counts
+    nx = wcs.pixel_shape[0] if wcs.pixel_shape else 2048
+    ny = wcs.pixel_shape[1] if wcs.pixel_shape else 2048
+    fov_diag_deg = np.hypot(nx, ny) * _pixel_scale_deg
+
+    # Scale-aware matching radii: ensure at least a few pixels even for coarse plates
+    sr_arcsec = sr * 3600
+    stage2_arcsec = max(sr_arcsec, 2.0 * pixel_scale_arcsec)
+    stage1_arcsec = max(sr_arcsec * 2, 3.0 * pixel_scale_arcsec)
+
+    # Scale n_det/n_ref with FOV: for larger fields use more sources
+    # Base: n_det=150, n_ref=600 for a ~0.5 deg field; scale with sqrt(area)
+    fov_scale = max(1.0, fov_diag_deg / 0.5)
+    scaled_n_det = min(int(n_det * np.sqrt(fov_scale)), len(obj_std))
+    scaled_n_ref = min(int(n_ref * np.sqrt(fov_scale)), len(cat_std))
+
     log("Starting quad-hash WCS refinement...")
     log(f"  Catalog: {len(cat_std)} stars")
     log(f"  Detections: {len(obj_std)} objects")
     log(f"  Initial WCS center: RA={wcs.wcs.crval[0]:.6f}, Dec={wcs.wcs.crval[1]:.6f}")
-    log(f"  Matching radius: {sr * 3600:.1f} arcsec")
+    log(f"  Pixel scale: {pixel_scale_arcsec:.2f} arcsec/pixel, FOV diagonal: {fov_diag_deg:.2f} deg")
+    log(f"  Matching radii: stage1={stage1_arcsec:.1f} arcsec ({stage1_arcsec/pixel_scale_arcsec:.1f} pix), "
+        f"stage2={stage2_arcsec:.1f} arcsec ({stage2_arcsec/pixel_scale_arcsec:.1f} pix)")
+    log(f"  Source counts: n_det={scaled_n_det}, n_ref={scaled_n_ref}")
     log(f"  SIP order: {order}")
 
     config = AstrometryConfig(
-        n_det=min(n_det, len(obj_std)),
-        n_ref=min(n_ref, len(cat_std)),
+        n_det=scaled_n_det,
+        n_ref=scaled_n_ref,
         neighbor_k=10,
         eps_desc=0.02,
         n_scale_bins=6,
         stage1_n_det=min(60, len(obj_std)),
-        stage1_radius_arcsec=max(20.0, sr * 3600 * 2),  # Stage 1: 2x looser
-        stage2_radius_arcsec=sr * 3600,  # Stage 2: use requested radius
+        stage1_radius_arcsec=stage1_arcsec,
+        stage2_radius_arcsec=stage2_arcsec,
         top_k_hypotheses=80,
         max_quads_tested=max_quads_tested,
         allow_reflection=allow_reflection,
@@ -1421,6 +1452,11 @@ def refine_wcs_quadhash(
         refine_n_det=refine_n_det,
         refine_n_ref=refine_n_ref,
         refine_match_radius_arcsec=refine_match_radius_arcsec,
+        # Disable auto_match_resolution: the wrapper already computes
+        # pixel-scale-aware radii above, so the density-based inflation
+        # (which can produce absurdly large radii for sparse wide-field
+        # images) is not needed here.
+        auto_match_resolution=False,
     )
 
     try:
