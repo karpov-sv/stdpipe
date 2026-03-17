@@ -15,6 +15,7 @@ Usage:
                                                 [--gain 1.0]
                                                 [--vignet-size 45]
                                                 [--psf-order 2]
+                                                [--damp-snthresh 30]
 
 If --catalog is not provided, the script uses Gaia DR3 G magnitudes
 (requires WCS in the FITS header and network access).
@@ -133,6 +134,10 @@ def main():
         "--psf-order", type=int, default=2,
         help="PSFEx polynomial order (default: 2)",
     )
+    parser.add_argument(
+        "--damp-snthresh", type=float, default=30.0,
+        help="S/N threshold for position damping (default: 30)",
+    )
     args = parser.parse_args()
 
     # ── load data ────────────────────────────────────────────────
@@ -211,6 +216,9 @@ def main():
         fit_positions=False, fit_radius=2 * fwhm)
     run("PSF ungr fitpos", psf=sep_psf, fwhm=fwhm, group_sources=False, fit_positions=True)
     run("PSF gr fitpos", psf=sep_psf, fwhm=fwhm, group_sources=True, fit_positions=True)
+    run(f"PSF gr fitpos r=2F sn={args.damp_snthresh:.0f}", psf=sep_psf, fwhm=fwhm,
+        group_sources=True, fit_positions=True, fit_radius=2 * fwhm,
+        damp_snthresh=args.damp_snthresh)
 
     # ── analysis ─────────────────────────────────────────────────
     mag_lo, mag_hi = args.mag_range

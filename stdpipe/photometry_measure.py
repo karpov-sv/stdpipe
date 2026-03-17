@@ -1121,6 +1121,7 @@ def measure_objects_sep(
     maxiter=20,
     fit_positions=True,
     fit_radius=0.0,
+    damp_snthresh=0.0,
     mask=None,
     bg=None,
     err=None,
@@ -1329,8 +1330,8 @@ def measure_objects_sep(
             sep_psf = _get_sep_psf(psf, fwhm, log)
 
             log(
-                'Using SEP PSF fitting (grouped=%s, fit_positions=%s, maxiter=%d, fit_radius=%.1f)'
-                % (group_sources, fit_positions, maxiter, fit_radius)
+                'Using SEP PSF fitting (grouped=%s, fit_positions=%s, maxiter=%d, fit_radius=%.1f, damp_snthresh=%.2f)'
+                % (group_sources, fit_positions, maxiter, fit_radius, damp_snthresh)
             )
 
             # Build keyword arguments for sep.psf_fit
@@ -1343,6 +1344,7 @@ def measure_objects_sep(
                 maxiter=maxiter,
                 fit_positions=fit_positions,
                 fit_radius=fit_radius,
+                damp_snthresh=damp_snthresh,
             )
 
             flux, fluxerr, xfit, yfit, flag, chi2, niter = sep.psf_fit(
