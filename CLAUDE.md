@@ -190,8 +190,10 @@ Key parameters for debugging wrappers:
 - Alternative backend using new SEP 1.4+ features
 - Sigma-clipped local background via `sep.stats_circann()` (more robust in crowded fields)
 - Grouped optimal extraction via `sep.sum_circle_optimal()`
+- PSF fitting photometry via `sep.psf_fit()` with PSFEx or Gaussian models
+- **Grouped flux-only fitting** (`group_sources=True, fit_positions=False`): NNLS deblending at fixed positions — fast, accurate for crowded fields with known positions
+- **Fitting radius control** (`fit_radius`): limits pixels used in PSF fitting to a circular region (e.g., 2-3× FWHM), reducing contamination from distant neighbors
 - C-based implementation (potentially faster)
-- Only Gaussian PSF supported (no PSFEx/ePSF)
 - No polynomial background gradient fitting
 - Excellent agreement with `measure_objects()` (<0.1% bias)
 - Best for: crowded fields, performance-critical applications, consistency with SEP detection
@@ -396,6 +398,16 @@ if _HAS_SEP_OPTIMAL:
         aper=1.5, fwhm=3.0,
         optimal=True,
         group_sources=True,  # Automatic grouping in SEP
+        sn=5, verbose=True
+    )
+
+    # PSF fitting with grouped deblending at fixed positions
+    result = measure_objects_sep(
+        obj, image,
+        psf=psfex_model, fwhm=3.0,
+        group_sources=True,
+        fit_positions=False,     # Fix positions, only fit fluxes (NNLS)
+        fit_radius=2.0 * 3.0,   # Limit fitting to 2× FWHM radius
         sn=5, verbose=True
     )
 ```

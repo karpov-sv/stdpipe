@@ -1120,6 +1120,7 @@ def measure_objects_sep(
     group_factor=2.0,
     maxiter=20,
     fit_positions=True,
+    fit_radius=0.0,
     mask=None,
     bg=None,
     err=None,
@@ -1167,6 +1168,9 @@ def measure_objects_sep(
                          Only used for PSF fitting when group_sources=True.
     :param maxiter: Maximum number of PSF fitting iterations (default 20).
     :param fit_positions: If True, fit source positions during PSF fitting (default True).
+    :param fit_radius: If > 0, only pixels within this radius (in pixels) of the source
+                       center participate in PSF fitting. 0 means use the full PSF stamp.
+                       Values of 2-3x FWHM reduce scatter in crowded fields.
     :param mask: Image mask as a boolean array (True values will be masked), optional
     :param bg: If provided, use this background instead of automatically computed one
     :param err: Image noise map as a NumPy array, optional
@@ -1325,8 +1329,8 @@ def measure_objects_sep(
             sep_psf = _get_sep_psf(psf, fwhm, log)
 
             log(
-                'Using SEP PSF fitting (grouped=%s, fit_positions=%s, maxiter=%d)'
-                % (group_sources, fit_positions, maxiter)
+                'Using SEP PSF fitting (grouped=%s, fit_positions=%s, maxiter=%d, fit_radius=%.1f)'
+                % (group_sources, fit_positions, maxiter, fit_radius)
             )
 
             # Build keyword arguments for sep.psf_fit
@@ -1338,9 +1342,10 @@ def measure_objects_sep(
                 group_factor=group_factor,
                 maxiter=maxiter,
                 fit_positions=fit_positions,
+                fit_radius=fit_radius,
             )
 
-            flux, fluxerr, xfit, yfit, flag = sep.psf_fit(
+            flux, fluxerr, xfit, yfit, flag, chi2, niter = sep.psf_fit(
                 image1,
                 x_vals[valid_pos],
                 y_vals[valid_pos],
@@ -1356,6 +1361,12 @@ def measure_objects_sep(
             obj['y_psf'] = np.nan
             obj['x_psf'][valid_pos] = xfit
             obj['y_psf'][valid_pos] = yfit
+
+            # Store PSF fit quality metrics
+            obj['chi2_psf'] = np.nan
+            obj['chi2_psf'][valid_pos] = chi2
+            obj['niter_psf'] = 0
+            obj['niter_psf'][valid_pos] = niter
 
             # Store PSF fit flags
             obj['flags_psf'] = 0

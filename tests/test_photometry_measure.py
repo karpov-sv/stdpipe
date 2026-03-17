@@ -2149,5 +2149,180 @@ class TestSEPPSFPhotometry:
         )
 
 
+    # ── grouped flux-only (fit_positions=False) ────────────────────
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_grouped_fixpos_output_contract(self, close_pair_image):
+        """Grouped fit_positions=False: xfit==x, yfit==y, chi2=NaN, niter=0."""
+        image, obj, fwhm, true_flux, bg, noise = close_pair_image
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        result = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+            group_sources=True, fit_positions=False,
+        )
+
+        # Positions must be unchanged
+        np.testing.assert_array_equal(result['x_psf'], obj['x'])
+        np.testing.assert_array_equal(result['y_psf'], obj['y'])
+
+        # chi2 should be NaN (no position fitting → no chi2)
+        assert np.all(np.isnan(result['chi2_psf']))
+
+        # niter should be 0
+        assert np.all(result['niter_psf'] == 0)
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_grouped_fixpos_deblends_close_pair(self, close_pair_image):
+        """Grouped fixpos should deblend close pairs better than ungrouped fixpos."""
+        image, obj, fwhm, true_flux, bg, noise = close_pair_image
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        result_g = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+            group_sources=True, fit_positions=False,
+        )
+        result_u = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+            group_sources=False, fit_positions=False,
+        )
+
+        bias_g = np.mean(np.abs(result_g['flux'] / true_flux - 1))
+        bias_u = np.mean(np.abs(result_u['flux'] / true_flux - 1))
+
+        assert bias_g <= bias_u + 0.01, (
+            f"Grouped fixpos bias {bias_g*100:.1f}% should be <= "
+            f"ungrouped {bias_u*100:.1f}%"
+        )
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_grouped_fixpos_isolated_matches_ungrouped(self, multi_star_image):
+        """For isolated stars, grouped fixpos and ungrouped fixpos should agree."""
+        image, obj, fwhm, true_fluxes, bg, noise = multi_star_image
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        result_g = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+            group_sources=True, fit_positions=False,
+        )
+        result_u = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+            group_sources=False, fit_positions=False,
+        )
+
+        np.testing.assert_allclose(
+            result_g['flux'], result_u['flux'], rtol=0.01,
+            err_msg="Grouped/ungrouped fixpos should agree for isolated stars",
+        )
+
+    # ── fit_radius ────────────────────────────────────────────────
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_fit_radius_basic(self, isolated_star_image):
+        """fit_radius parameter produces valid flux and does not crash."""
+        image, fwhm, true_flux, bg, noise = isolated_star_image
+        obj = Table({'x': [128.0], 'y': [128.0]})
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        result = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+            fit_radius=2.0 * fwhm,
+        )
+
+        assert np.isfinite(result['flux'][0])
+        assert abs(result['flux'][0] / true_flux - 1) < 0.10
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_fit_radius_zero_is_full_stamp(self, isolated_star_image):
+        """fit_radius=0 should give same result as no fit_radius (full stamp)."""
+        image, fwhm, true_flux, bg, noise = isolated_star_image
+        obj = Table({'x': [128.0], 'y': [128.0]})
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        result_default = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+        )
+        result_zero = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+            fit_radius=0.0,
+        )
+
+        np.testing.assert_allclose(
+            result_default['flux'], result_zero['flux'], rtol=1e-6,
+        )
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_fit_radius_state_not_leaked(self, isolated_star_image):
+        """fit_radius should not persist on the PSF object after the call."""
+        image, fwhm, true_flux, bg, noise = isolated_star_image
+        obj = Table({'x': [128.0], 'y': [128.0]})
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        assert psf_model.fit_radius == 0.0
+
+        photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+            fit_radius=5.0 * fwhm,
+        )
+
+        assert psf_model.fit_radius == 0.0, "fit_radius leaked onto PSF object"
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_fit_radius_overrides_psf_attribute(self, isolated_star_image):
+        """Explicit fit_radius=0 should override psf.fit_radius."""
+        image, fwhm, true_flux, bg, noise = isolated_star_image
+        obj = Table({'x': [128.0], 'y': [128.0]})
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        # Get reference result with full stamp
+        result_ref = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+        )
+
+        # Set a restrictive fit_radius on the PSF object
+        psf_model.fit_radius = 2.0
+
+        # Explicit fit_radius=0 should override the object's attribute
+        result_override = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+            fit_radius=0.0,
+        )
+
+        np.testing.assert_allclose(
+            result_ref['flux'], result_override['flux'], rtol=1e-6,
+        )
+
+        # Clean up
+        psf_model.fit_radius = 0.0
+
+    @_skip_no_sep_psf
+    @pytest.mark.unit
+    def test_fit_radius_with_grouped_fixpos(self, close_pair_image):
+        """fit_radius works with grouped fit_positions=False."""
+        image, obj, fwhm, true_flux, bg, noise = close_pair_image
+        psf_model = sep.PSF.from_gaussian(fwhm)
+
+        result = photometry_measure.measure_objects_sep(
+            obj, image, psf=psf_model, gain=1.0,
+            group_sources=True, fit_positions=False,
+            fit_radius=2.0 * fwhm,
+        )
+
+        # Should produce valid fluxes
+        assert np.all(np.isfinite(result['flux']))
+        assert np.all(result['flux'] > 0)
+
+        # Positions still unchanged
+        np.testing.assert_array_equal(result['x_psf'], obj['x'])
+        np.testing.assert_array_equal(result['y_psf'], obj['y'])
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
