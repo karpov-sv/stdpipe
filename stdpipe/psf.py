@@ -596,6 +596,20 @@ def create_psf_model(image, obj=None, fwhm=None, size=None, mask=None,
         if len(obj) == 0:
             raise ValueError("No stars detected for ePSF building")
 
+        # Determine FWHM and stamp size early so we can use them for edge filtering
+        if fwhm is None:
+            if 'fwhm' in obj.colnames:
+                fwhm = np.median(obj['fwhm'])
+                log('Using median FWHM: %.2f pixels' % fwhm)
+            else:
+                fwhm = 3.0
+                log('FWHM not available, using default: %.2f pixels' % fwhm)
+
+        if size is None:
+            size = max(25, int(np.ceil(8 * fwhm)))
+        if size % 2 == 0:
+            size += 1
+
         flux_median = np.median(obj['flux'])
         flux_std = np.std(obj['flux'])
 
