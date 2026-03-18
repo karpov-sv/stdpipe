@@ -169,7 +169,8 @@ def _get_psf_stamp_at_position(psf, x, y, stamp_size=None):
     return psf_stamp
 
 
-def _psf_centroid(image, x, y, psf, mask=None, box_size=None):
+def _psf_centroid(image, x, y, psf, mask=None, box_size=None,
+                  maxiter=16, tol=1e-4):
     """
     Compute PSF-weighted centroid at a given position.
 
@@ -178,126 +179,94 @@ def _psf_centroid(image, x, y, psf, mask=None, box_size=None):
     This provides better stability and accuracy than simple center-of-mass,
     especially for crowded fields and faint sources.
 
-    Algorithm:
-        x_new = x₀ + Σ[(x_i - x₀) × I_i × P_i] / Σ[I_i × P_i]
-        y_new = y₀ + Σ[(y_i - y₀) × I_i × P_i] / Σ[I_i × P_i]
-
-    where I_i is pixel intensity, P_i is PSF weight, (x₀, y₀) is current position.
-
-    The PSF model is automatically shifted by the sub-pixel offset (x - round(x),
-    y - round(y)) at each iteration, eliminating systematic bias. This is critical
-    for both centroiding accuracy (~0.2 pix → 0.01 pix) and is also used by optimal
-    extraction to avoid ~2.6% flux bias.
-
-    Performance:
-        - Isolated sources (no masking): ~0.01 pix accuracy (3.8× better than COM)
-        - Crowded fields (2-3 FWHM separation): 80-940× better than COM
-        - Noise-free limit: ~0.008 pix (limited by discrete pixelization)
-
-    IMPORTANT - Masking Limitation:
-        PSF weighting assumes a symmetric, complete PSF profile. Heavy random masking
-        (>20%) creates asymmetric pixel sampling, which biases the centroid. With 30%
-        random masking, PSF centroiding error increases ~30-40× (from 0.01 to 0.3 pix).
-
-        For images with heavy random masking, COM is more robust because it treats all
-        good pixels equally without assuming a specific profile. Use COM when:
-          - Random masking fraction > 20%
-          - OR when PSF centroiding shows large shifts/degradation
-
-        Structured masking (e.g., saturated stars, detector defects) affects both
-        methods similarly and is less problematic than random masking.
+    Iterates internally until convergence (position shift < tol) or maxiter
+    is reached. Due to the I×P weighting, each iteration only recovers half
+    the remaining offset, so ~10-16 iterations are needed for sub-0.01 pix
+    accuracy from a cold start.
 
     :param image: Background-subtracted image
     :param x, y: Initial position estimate (float)
     :param psf: PSF model (dict from PSFEx/ePSF, or Gaussian FWHM as float)
     :param mask: Optional mask (True = masked)
     :param box_size: Minimum cutout size in pixels (actual size will be max of this and PSF stamp size)
+    :param maxiter: Maximum number of internal iterations (default 16)
+    :param tol: Convergence tolerance in pixels (default 1e-4)
     :returns: (x_new, y_new) or (np.nan, np.nan) on failure
     """
-    # Get PSF stamp at current position
-    # For Gaussian PSF: automatically shifted by sub-pixel offset (always enabled)
-    # For position-dependent PSF (PSFEx): evaluates polynomial at (x,y)
+
+    # Determine box_size from PSF stamp size on the first call
     psf_stamp = _get_psf_stamp_at_position(psf, x, y)
     stamp_size = psf_stamp.shape[0]
 
-    # Use the larger of box_size and stamp_size to avoid cropping the PSF
     if box_size is None:
         box_size = stamp_size
     else:
         box_size = max(box_size, stamp_size)
-        # Ensure odd size
         if box_size % 2 == 0:
             box_size += 1
 
     half = box_size // 2
 
-    # Integer position for cutout
-    ix, iy = int(np.round(x)), int(np.round(y))
+    for iteration in range(maxiter):
+        # Integer position for cutout center
+        ix, iy = int(np.round(x)), int(np.round(y))
 
-    # Extract cutout
-    y0, y1 = iy - half, iy + half + 1
-    x0, x1 = ix - half, ix + half + 1
+        # Extract cutout
+        y0, y1 = iy - half, iy + half + 1
+        x0, x1 = ix - half, ix + half + 1
 
-    # Handle boundaries
-    if y0 < 0 or x0 < 0 or y1 > image.shape[0] or x1 > image.shape[1]:
-        return np.nan, np.nan
+        if y0 < 0 or x0 < 0 or y1 > image.shape[0] or x1 > image.shape[1]:
+            return np.nan, np.nan
 
-    data_cutout = image[y0:y1, x0:x1]
+        data_cutout = image[y0:y1, x0:x1]
 
-    # Apply mask if provided
-    if mask is not None:
-        mask_cutout = mask[y0:y1, x0:x1]
-        # Only use positive pixels and unmasked regions for centroiding
-        good = ~mask_cutout & np.isfinite(data_cutout) & (data_cutout > 0)
-    else:
-        good = np.isfinite(data_cutout) & (data_cutout > 0)
+        if mask is not None:
+            mask_cutout = mask[y0:y1, x0:x1]
+            good = ~mask_cutout & np.isfinite(data_cutout) & (data_cutout > 0)
+        else:
+            good = np.isfinite(data_cutout) & (data_cutout > 0)
 
-    if np.sum(good) < 3:  # Need at least 3 pixels for meaningful centroid
-        return np.nan, np.nan
+        if np.sum(good) < 3:
+            return np.nan, np.nan
 
-    # Embed PSF stamp in box-sized array if box is larger
-    if stamp_size != box_size:
-        # Since we ensured box_size >= stamp_size, just center the PSF in the box
-        psf_resized = np.zeros((box_size, box_size))
-        psf_half = stamp_size // 2
-        box_half = box_size // 2
+        # Get PSF stamp at current position (shifted by sub-pixel offset)
+        psf_stamp = _get_psf_stamp_at_position(psf, x, y)
 
-        y_start = box_half - psf_half
-        y_end = y_start + stamp_size
-        x_start = box_half - psf_half
-        x_end = x_start + stamp_size
-        psf_resized[y_start:y_end, x_start:x_end] = psf_stamp
-        psf_stamp = psf_resized
+        # Embed PSF stamp in box-sized array if needed
+        if psf_stamp.shape[0] != box_size:
+            psf_resized = np.zeros((box_size, box_size))
+            psf_half = psf_stamp.shape[0] // 2
+            box_half = box_size // 2
+            y_start = box_half - psf_half
+            x_start = box_half - psf_half
+            psf_resized[y_start:y_start + psf_stamp.shape[0],
+                        x_start:x_start + psf_stamp.shape[1]] = psf_stamp
+            psf_stamp = psf_resized
 
-    # Create coordinate grids
-    yy, xx = np.mgrid[0:box_size, 0:box_size]
+        # Coordinate grids in image coordinates
+        yy, xx = np.mgrid[y0:y1, x0:x1]
 
-    # Extract values for good pixels
-    I = data_cutout[good]
-    P = psf_stamp[good]
-    x_coords = xx[good]
-    y_coords = yy[good]
+        I = data_cutout[good]
+        P = psf_stamp[good]
 
-    # Relative offsets from cutout center
-    # Note: box center corresponds to integer position (ix, iy) in image
-    x_rel = x_coords - box_size // 2
-    y_rel = y_coords - box_size // 2
+        # Offsets from current floating-point position
+        x_off = xx[good].astype(float) - x
+        y_off = yy[good].astype(float) - y
 
-    # PSF-weighted centroid shift
-    sum_IP = np.sum(I * P)
-    if sum_IP <= 0:
-        return np.nan, np.nan
+        sum_IP = np.sum(I * P)
+        if sum_IP <= 0:
+            return np.nan, np.nan
 
-    dx = np.sum(x_rel * I * P) / sum_IP
-    dy = np.sum(y_rel * I * P) / sum_IP
+        dx = np.sum(x_off * I * P) / sum_IP
+        dy = np.sum(y_off * I * P) / sum_IP
 
-    # Convert back to image coordinates
-    # The offset dx, dy is relative to the integer position ix, iy
-    # (which is at the center of the extracted box)
-    x_new = ix + dx
-    y_new = iy + dy
+        x += dx
+        y += dy
 
-    return x_new, y_new
+        if dx * dx + dy * dy < tol * tol:
+            break
+
+    return x, y
 
 
 def _solve_weighted_leastsq(A, D, W):
@@ -1129,6 +1098,7 @@ def measure_objects_sep(
     bg_size=64,
     sn=None,
     centroid_iter=0,
+    centroid_psf=None,
     keep_negative=True,
     get_bg=False,
     clip_sigma=3.0,
@@ -1268,10 +1238,19 @@ def measure_objects_sep(
 
     # Centroiding with SEP windowed positions (built-in iteration)
     if centroid_iter:
-        sigma = fwhm / 2.355 if fwhm else 1.0
         maxstep = 0.2 * fwhm if fwhm else 0.6  # Prevent excessive steps between iterations
 
-        log('Using SEP windowed centroiding (maxstep=%.2f pix)' % maxstep)
+        # Build sep.PSF for PSF-weighted centroiding if requested
+        sep_centroid_psf = None
+        if centroid_psf is not None:
+            sep_centroid_psf = _get_sep_psf(centroid_psf, fwhm, log)
+            log('Using SEP PSF-weighted centroiding (maxstep=%.2f pix)' % maxstep)
+        elif psf is not None:
+            # Use the PSF model already provided for fitting
+            sep_centroid_psf = _get_sep_psf(psf, fwhm, log)
+            log('Using SEP PSF-weighted centroiding from psf model (maxstep=%.2f pix)' % maxstep)
+        else:
+            log('Using SEP Gaussian windowed centroiding (maxstep=%.2f pix)' % maxstep)
 
         # Keep original pixel positions
         obj['x_orig'] = np.array(obj['x'])
@@ -1280,18 +1259,29 @@ def measure_objects_sep(
         x_vals, y_vals, valid_pos = _extract_valid_positions(obj)
 
         if np.any(valid_pos):
-            # SEP's windowed position (iterates internally until convergence)
+            winpos_kwargs = dict(
+                mask=mask | mask0,
+                maxstep=maxstep,
+            )
+            if sep_centroid_psf is not None:
+                winpos_kwargs['psf'] = sep_centroid_psf
+            else:
+                sigma = fwhm / 2.355 if fwhm else 1.0
+                winpos_kwargs['sig'] = sigma
+
             xwin, ywin, flag = sep.winpos(
                 image1,
                 x_vals[valid_pos],
                 y_vals[valid_pos],
-                sigma,
-                mask=mask | mask0,
-                maxstep=maxstep
+                **winpos_kwargs,
             )
 
-            # Update positions where centroiding succeeded (flag == 0)
-            good_centroid = (flag == 0) & np.isfinite(xwin) & np.isfinite(ywin)
+            # Update positions where centroiding succeeded and shift is reasonable
+            total_shift = np.sqrt((xwin - x_vals[valid_pos])**2 +
+                                  (ywin - y_vals[valid_pos])**2)
+            max_total_shift = fwhm if fwhm else 3.0  # Reject shifts larger than 1 FWHM
+            good_centroid = ((flag == 0) & np.isfinite(xwin) & np.isfinite(ywin) &
+                             (total_shift < max_total_shift))
             update_indices = np.where(valid_pos)[0][good_centroid]
 
             obj['x'][update_indices] = xwin[good_centroid]
@@ -1300,7 +1290,9 @@ def measure_objects_sep(
             if verbose:
                 n_failed = np.sum(~good_centroid)
                 n_converged = np.sum(good_centroid)
-                log(f'  Centroiding: {n_converged} converged, {n_failed} failed')
+                median_shift = np.median(total_shift[good_centroid]) if np.any(good_centroid) else 0
+                log(f'  Centroiding: {n_converged} converged, {n_failed} failed/rejected, '
+                    f'median shift={median_shift:.3f} pix')
 
     if 'flags' not in obj.keys():
         obj['flags'] = 0
