@@ -182,16 +182,14 @@ def refine_astrometry(
         obj['ra'], obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
 
     if method == 'quadhash':
-        # Quad-hash pattern matching (default, 2-7× more accurate than SCAMP)
-        # Use order=2 for quadratic distortion if not specified
-        quad_order = order if order > 0 else 2
+        # Quad-hash pattern matching (default, hopefully more accurate than SCAMP)
 
         return astrometry.refine_wcs_quadhash(
             obj,
             cat,
             wcs=wcs,
             sr=sr,
-            order=quad_order,
+            order=order,
             cat_col_ra=cat_col_ra,
             cat_col_dec=cat_col_dec,
             cat_col_mag=cat_col_mag,
