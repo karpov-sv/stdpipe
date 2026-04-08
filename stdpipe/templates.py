@@ -1,4 +1,3 @@
-
 import numpy as np
 
 import os
@@ -69,11 +68,7 @@ def get_hips_image(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if wcs is None and header is not None:
         wcs = WCS(header)
@@ -204,9 +199,7 @@ def dilate_mask(mask, dilate=5):
 
     kernel = Tophat2DKernel(dilate).array
     # mask = binary_dilation(mask, kernel)
-    if (
-        dilate < 10 or True
-    ):  # it seems convolve is faster than convolve_fft even for 2k x 2k
+    if dilate < 10 or True:  # it seems convolve is faster than convolve_fft even for 2k x 2k
         mask = convolve(mask, kernel)
     else:
         mask = convolve_fft(mask, kernel)
@@ -234,7 +227,6 @@ def mask_template(
     verbose=False,
     _tmpdir=None,
 ):
-
     """Apply various masking heuristics (NaNs, saturated catalogue stars, etc) to the template image.
 
     If `mask_nans` is set, it masks all `NaN` pixels in the template
@@ -271,11 +263,7 @@ def mask_template(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if mask_nans:
         tmask = ~np.isfinite(tmpl)
@@ -394,15 +382,13 @@ def _filter_cells_by_footprint(cell_ra, cell_dec, cell_radius, wcs, width, heigh
     # Project cell centres to pixel coordinates (may be outside image)
     px, py = wcs.all_world2pix(cell_ra, cell_dec, 0)
 
-    keep = (
-        (px > -margin) & (px < width + margin)
-        & (py > -margin) & (py < height + margin)
-    )
+    keep = (px > -margin) & (px < width + margin) & (py > -margin) & (py < height + margin)
     return keep
 
 
-def find_skycells(ra, dec, sr, band='r', ext='image', survey='ps1',
-                  wcs=None, width=None, height=None):
+def find_skycells(
+    ra, dec, sr, band='r', ext='image', survey='ps1', wcs=None, width=None, height=None
+):
     """Find survey skycell URLs covering a sky region.
 
     Parameters
@@ -430,9 +416,7 @@ def find_skycells(ra, dec, sr, band='r', ext='image', survey='ps1',
 
         if __ps1_skycells is None:
             # Load skycells information and store to global variable
-            __ps1_skycells = Table.read(
-                utils.get_data_path('ps1skycells.txt'), format='ascii'
-            )
+            __ps1_skycells = Table.read(utils.get_data_path('ps1skycells.txt'), format='ascii')
 
         cell_radius = 0.3
 
@@ -446,8 +430,12 @@ def find_skycells(ra, dec, sr, band='r', ext='image', survey='ps1',
         # Refine against actual rectangular footprint when WCS is available
         if wcs is not None and width is not None and height is not None:
             keep = _filter_cells_by_footprint(
-                candidates['ra0'], candidates['dec0'],
-                cell_radius, wcs, width, height,
+                candidates['ra0'],
+                candidates['dec0'],
+                cell_radius,
+                wcs,
+                width,
+                height,
             )
             candidates = candidates[keep]
 
@@ -486,8 +474,12 @@ def find_skycells(ra, dec, sr, band='r', ext='image', survey='ps1',
         # Refine against actual rectangular footprint when WCS is available
         if wcs is not None and width is not None and height is not None:
             keep = _filter_cells_by_footprint(
-                candidates['ra'], candidates['dec'],
-                cell_radius, wcs, width, height,
+                candidates['ra'],
+                candidates['dec'],
+                cell_radius,
+                wcs,
+                width,
+                height,
             )
             candidates = candidates[keep]
 
@@ -496,8 +488,8 @@ def find_skycells(ra, dec, sr, band='r', ext='image', survey='ps1',
             url += 'dr10/south/' if (cell['survey'] == 'S') else 'dr9/north/'
             url += 'coadd/%s/%s/' % (cell['brickname'][:3], cell['brickname'])
             if ext == 'mask':
-                url += 'legacysurvey-%s-maskbits' % (
-                    cell['brickname']
+                url += (
+                    'legacysurvey-%s-maskbits' % (cell['brickname'])
                 )  # Legacy Survey uses single mask for all bands
             else:
                 url += 'legacysurvey-%s-image-%s' % (cell['brickname'], band)
@@ -562,11 +554,7 @@ def get_skycells(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     # Normalize _cachedir
     if _cachedir is not None:
@@ -586,8 +574,9 @@ def get_skycells(
 
     filenames = []
 
-    cells = find_skycells(ra0, dec0, sr0, band=band, ext=ext, survey=survey,
-                          wcs=wcs, width=width, height=height)
+    cells = find_skycells(
+        ra0, dec0, sr0, band=band, ext=ext, survey=survey, wcs=wcs, width=width, height=height
+    )
 
     for cell in cells:
         cellname = os.path.basename(cell)
@@ -653,11 +642,7 @@ def normalize_ps1_skycell(image, header, verbose=False):
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if 'RADESYS' not in header and 'PC001001' in header:
         # Normalize WCS in the header
@@ -677,7 +662,7 @@ def normalize_ps1_skycell(image, header, verbose=False):
 
             x = image * 0.4 * np.log(10)
             image = header['BOFFSET'] + header['BSOFTEN'] * (np.exp(x) - np.exp(-x))
-            image /= header['EXPTIME'] # For common photometric zero-point
+            image /= header['EXPTIME']  # For common photometric zero-point
 
             for _ in ['BSOFTEN', 'BOFFSET', 'BLANK']:
                 header.remove(_, ignore_missing=True)
@@ -702,9 +687,8 @@ def get_survey_image(
     _tmpdir=None,
     _workdir=None,
     verbose=False,
-    **kwargs
+    **kwargs,
 ):
-
     """Downloads the images of specified type (image or mask) from PanSTARRS or Legacy Survey
     and mosaics / re-projects them to requested WCS pixel grid.
 
@@ -734,11 +718,7 @@ def get_survey_image(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     # Resolve WCS and dimensions early so we can use them for cell filtering
     if wcs is None:
@@ -750,9 +730,7 @@ def get_survey_image(
     if height is None:
         height = header['NAXIS2']
 
-    ra0, dec0, sr0 = astrometry.get_frame_center(
-        wcs=wcs, width=width, height=height
-    )
+    ra0, dec0, sr0 = astrometry.get_frame_center(wcs=wcs, width=width, height=height)
 
     cellnames = get_skycells(
         ra0,
@@ -778,7 +756,7 @@ def get_survey_image(
             height=height,
             is_flags=(ext == 'mask'),
             verbose=verbose,
-            **kwargs
+            **kwargs,
         )
     elif reproject == 'swarp':
         coadd = reproject_swarp(
@@ -791,7 +769,7 @@ def get_survey_image(
             _tmpdir=_tmpdir,
             _workdir=_workdir,
             verbose=verbose,
-            **kwargs
+            **kwargs,
         )
     else:
         log("Unknown reproject method '%s', use 'lanczos' or 'swarp'" % reproject)
@@ -799,7 +777,7 @@ def get_survey_image(
 
     if ext == 'mask' and survey == 'ps1':
         coadd &= (
-            0xffff - 0x8000
+            0xFFFF - 0x8000
         )  # Remove undocumented PS1 'temporary marked' mask bit that is masking seemingly good pixels
 
     return coadd

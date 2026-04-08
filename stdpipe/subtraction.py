@@ -1,4 +1,3 @@
-
 import os, shutil, tempfile, shlex
 import numpy as np
 
@@ -10,8 +9,9 @@ from astropy.table import Table
 # Drop-in replacement for numpy.fft which is supposedly faster
 import pyfftw
 import pyfftw.interfaces.numpy_fft as fft
+
 pyfftw.interfaces.cache.enable()
-pyfftw.interfaces.cache.set_keepalive_time(1.)
+pyfftw.interfaces.cache.set_keepalive_time(1.0)
 
 from scipy import ndimage
 from scipy.optimize import least_squares
@@ -109,11 +109,7 @@ def run_hotpants(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     # Find the binary
     binname = None
@@ -158,11 +154,7 @@ def run_hotpants(
 
     _nan = 1e-30  #
 
-    workdir = (
-        _workdir
-        if _workdir is not None
-        else tempfile.mkdtemp(prefix='hotpants', dir=_tmpdir)
-    )
+    workdir = _workdir if _workdir is not None else tempfile.mkdtemp(prefix='hotpants', dir=_tmpdir)
 
     image = image.copy()
     image[~np.isfinite(image)] = np.nanmedian(image)  # _nan
@@ -231,7 +223,9 @@ def run_hotpants(
 
     if template_err is not None:
         if type(template_err) is bool and template_err == True:
-            template_err, _ = _build_err_map(template, template_mask, gain=template_gain, verbose_log=log)
+            template_err, _ = _build_err_map(
+                template, template_mask, gain=template_gain, verbose_log=log
+            )
 
         if hasattr(template_err, 'shape'):
             terrname = os.path.join(workdir, 'terr.fits')
@@ -241,7 +235,7 @@ def run_hotpants(
     if image_fwhm is not None and template_fwhm is not None:
         # Recommended logic for sigma_match
         if image_fwhm > template_fwhm:
-            sigma_match = np.sqrt(image_fwhm ** 2 - template_fwhm ** 2) / 2.35
+            sigma_match = np.sqrt(image_fwhm**2 - template_fwhm**2) / 2.35
             sigma_match = max(1.0, sigma_match)
             params['ng'] = [
                 3,
@@ -254,7 +248,7 @@ def run_hotpants(
             ]
 
         elif image_fwhm < template_fwhm:
-            sigma_match = np.sqrt(template_fwhm ** 2 - image_fwhm ** 2) / 2.35
+            sigma_match = np.sqrt(template_fwhm**2 - image_fwhm**2) / 2.35
             sigma_match = max(1.0, sigma_match)
             params['ng'] = [
                 3,
@@ -266,7 +260,6 @@ def run_hotpants(
                 2.0 * sigma_match,
             ]
             # TODO: switch to convolve-image mode?..
-
 
     if image_fwhm is not None:
         # Logic from https://arxiv.org/pdf/1608.01006.pdf suggests 2.5 and 6 here
@@ -411,7 +404,7 @@ def run_zogy(
     get_Fpsf=False,
     nthreads=0,
     verbose=False,
-    **kwargs
+    **kwargs,
 ):
     """Image subtraction using Zackay–Ofek–Gal-Yam (ZOGY) algorithm, as described in
     http://dx.doi.org/10.3847/0004-637X/830/1/27
@@ -489,11 +482,7 @@ def run_zogy(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if mask is None:
         mask = ~np.isfinite(image)
@@ -515,7 +504,9 @@ def run_zogy(
         SN = np.median(err)
 
     if template_err is None:
-        U_R_full, template_bg = _build_err_map(template.astype(np.double), template_mask, gain=template_gain, verbose_log=log)
+        U_R_full, template_bg = _build_err_map(
+            template.astype(np.double), template_mask, gain=template_gain, verbose_log=log
+        )
         SR = template_bg.globalrms
     else:
         template_bg = sep.Background(template.astype(np.double), template_mask)
@@ -536,22 +527,28 @@ def run_zogy(
     if image_psf is None:
         log("Estimating image PSF")
         # TODO: should we overwrite image_obj if it was set by the user?..
-        image_psf,image_obj = psf.run_psfex(
-            image, mask=mask, gain=image_gain,
-            aper=2.0*image_fwhm if image_fwhm else None,
-            verbose=verbose, get_obj=True,
-            **kwargs
+        image_psf, image_obj = psf.run_psfex(
+            image,
+            mask=mask,
+            gain=image_gain,
+            aper=2.0 * image_fwhm if image_fwhm else None,
+            verbose=verbose,
+            get_obj=True,
+            **kwargs,
         )
 
     # Estimate template PSF, if not specified
     if template_psf is None:
         log("Estimating template PSF")
         # TODO: should we overwrite image_obj if it was set by the user?..
-        template_psf,template_obj = psf.run_psfex(
-            template, mask=template_mask, gain=template_gain,
-            aper=2.0*template_fwhm if template_fwhm else None,
-            verbose=verbose, get_obj=True,
-            **kwargs
+        template_psf, template_obj = psf.run_psfex(
+            template,
+            mask=template_mask,
+            gain=template_gain,
+            aper=2.0 * template_fwhm if template_fwhm else None,
+            verbose=verbose,
+            get_obj=True,
+            **kwargs,
         )
 
     # "Good" regions for flux scale refinement
@@ -564,11 +561,9 @@ def run_zogy(
     # Guess initial relative flux scale
     if image_obj and template_obj:
         # Use half FWHM radius for matching
-        sr = 0.5*max(image_psf['fwhm'], template_psf['fwhm'])
-        iidx,tidx,_ = astrometry.planar_match(
-            image_obj['x'], image_obj['y'],
-            template_obj['x'], template_obj['y'],
-            sr
+        sr = 0.5 * max(image_psf['fwhm'], template_psf['fwhm'])
+        iidx, tidx, _ = astrometry.planar_match(
+            image_obj['x'], image_obj['y'], template_obj['x'], template_obj['y'], sr
         )
 
         if len(iidx):
@@ -583,27 +578,34 @@ def run_zogy(
                 X = np.ones_like(ZP).T
                 # Weighted robust regression
                 C = sm.RLM(ZP / dZP, (X.T / dZP).T).fit()
-                scale = 10**(-0.4*C.params[0])
+                scale = 10 ** (-0.4 * C.params[0])
                 log("Estimated initial template flux scale Fr = %.3g" % scale)
             else:
                 log("Not enough matched objects to guess template flux scale")
 
         if len(iidx) > 0 and (fit_scale or fit_shift) and np.sum(good_regions) == 0:
             # Use matched objects (they are all unflagged) to define good regions
-            size = int(6*sr) # 3*FWHM
+            size = int(6 * sr)  # 3*FWHM
             N = 0
             for i in range(len(iidx)):
                 x0 = int(image_obj['x'][iidx][i])
                 y0 = int(image_obj['y'][iidx][i])
 
                 # Exclude objects too close to the edges
-                if (x0 < size or x0 >= image.shape[1] - size
-                    or y0 < size or y0 >= image.shape[0] - size):
+                if (
+                    x0 < size
+                    or x0 >= image.shape[1] - size
+                    or y0 < size
+                    or y0 >= image.shape[0] - size
+                ):
                     continue
 
                 # Exclude sub-regions containing masked pixels
-                if np.sum((mask|template_mask)[y0 - size: y0 + size, x0 - size:x0 + size]) == 0:
-                    good_regions[y0 - size: y0 + size, x0 - size:x0 + size] = True
+                if (
+                    np.sum((mask | template_mask)[y0 - size : y0 + size, x0 - size : x0 + size])
+                    == 0
+                ):
+                    good_regions[y0 - size : y0 + size, x0 - size : x0 + size] = True
                     N += 1
 
             if N > 0:
@@ -627,45 +629,64 @@ def run_zogy(
     Fpsf_err_full = np.zeros_like(image, dtype=np.double)
 
     for i, x0, y0, N, R, U_N, U_R, good_reg in pipeline.split_image(
-            N_full, R_full, U_N_full, U_R_full, good_regions,
-            nx=nx, ny=ny, overlap=overlap,
-            get_index=True, get_origin=True,
-            verbose=True if nx > 1 and ny > 1 else False
+        N_full,
+        R_full,
+        U_N_full,
+        U_R_full,
+        good_regions,
+        nx=nx,
+        ny=ny,
+        overlap=overlap,
+        get_index=True,
+        get_origin=True,
+        verbose=True if nx > 1 and ny > 1 else False,
     ):
         # PSF stamps at the centers of sub-image
         P_N_small = psf.get_psf_stamp(
-            image_psf,
-            x=x0 + N.shape[1]/2, y=y0 + N.shape[0]/2,
-            dx=0, dy=0, normalize=True
+            image_psf, x=x0 + N.shape[1] / 2, y=y0 + N.shape[0] / 2, dx=0, dy=0, normalize=True
         )
         P_R_small = psf.get_psf_stamp(
-            template_psf,
-            x=x0 + N.shape[1]/2, y=y0 + N.shape[0]/2,
-            dx=0, dy=0, normalize=True
+            template_psf, x=x0 + N.shape[1] / 2, y=y0 + N.shape[0] / 2, dx=0, dy=0, normalize=True
         )
 
         if psf_clean:
             # Set to zero the wings with relative amplitude less than psf_clean factor
-            P_N_small[P_N_small < psf_clean*np.max(P_N_small)] = 0
+            P_N_small[P_N_small < psf_clean * np.max(P_N_small)] = 0
             P_N_small /= np.sum(P_N_small)
 
-            P_R_small[P_R_small < psf_clean*np.max(P_R_small)] = 0
+            P_R_small[P_R_small < psf_clean * np.max(P_R_small)] = 0
             P_R_small /= np.sum(P_R_small)
 
-        Fn = 1 # Fixed, so that the difference will be in science image flux scale
-        Fr = scale if scale else 1 # Will be optionally adjusted later
+        Fn = 1  # Fixed, so that the difference will be in science image flux scale
+        Fr = scale if scale else 1  # Will be optionally adjusted later
 
         # Place PSF at the center of image with same size as new / reference
         P_N = np.zeros_like(N)
         P_R = np.zeros_like(R)
-        idxN = tuple([slice(int(N.shape[0]/2) - int(P_N_small.shape[0]/2),
-                            int(N.shape[0]/2) + int(P_N_small.shape[0]/2) + 1),
-                      slice(int(N.shape[1]/2) - int(P_N_small.shape[1]/2),
-                            int(N.shape[1]/2) + int(P_N_small.shape[1]/2) + 1)])
-        idxR = tuple([slice(int(R.shape[0]/2) - int(P_R_small.shape[0]/2),
-                            int(R.shape[0]/2) + int(P_R_small.shape[0]/2) + 1),
-                      slice(int(R.shape[1]/2) - int(P_R_small.shape[1]/2),
-                            int(R.shape[1]/2) + int(P_R_small.shape[1]/2) + 1)])
+        idxN = tuple(
+            [
+                slice(
+                    int(N.shape[0] / 2) - int(P_N_small.shape[0] / 2),
+                    int(N.shape[0] / 2) + int(P_N_small.shape[0] / 2) + 1,
+                ),
+                slice(
+                    int(N.shape[1] / 2) - int(P_N_small.shape[1] / 2),
+                    int(N.shape[1] / 2) + int(P_N_small.shape[1] / 2) + 1,
+                ),
+            ]
+        )
+        idxR = tuple(
+            [
+                slice(
+                    int(R.shape[0] / 2) - int(P_R_small.shape[0] / 2),
+                    int(R.shape[0] / 2) + int(P_R_small.shape[0] / 2) + 1,
+                ),
+                slice(
+                    int(R.shape[1] / 2) - int(P_R_small.shape[1] / 2),
+                    int(R.shape[1] / 2) + int(P_R_small.shape[1] / 2) + 1,
+                ),
+            ]
+        )
         P_N[idxN] = P_N_small
         P_R[idxR] = P_R_small
 
@@ -686,7 +707,9 @@ def run_zogy(
                 Fn = 1
                 Fr = par[0]
 
-                D_hat_den = np.sqrt(SN**2 * Fr**2 * np.abs(P_R_hat**2) + SR**2 * Fn**2 * np.abs(P_N_hat**2))
+                D_hat_den = np.sqrt(
+                    SN**2 * Fr**2 * np.abs(P_R_hat**2) + SR**2 * Fn**2 * np.abs(P_N_hat**2)
+                )
                 D_hat_n = P_R_hat * N_hat / D_hat_den
                 D_hat_r = P_N_hat * R_hat / D_hat_den
 
@@ -701,13 +724,20 @@ def run_zogy(
             if np.sum(good_reg) > 10:
                 if fit_scale and fit_shift:
                     log('Fitting for flux scale difference and sub-pixel template shift')
-                    C = least_squares(fn, [scale, 0, 0], bounds=((0, -0.5, -0.5), (np.inf, 0.5, 0.5)), verbose=0)
+                    C = least_squares(
+                        fn, [scale, 0, 0], bounds=((0, -0.5, -0.5), (np.inf, 0.5, 0.5)), verbose=0
+                    )
                 elif fit_scale:
                     log('Fitting for flux scale difference')
                     C = least_squares(fn, [scale], bounds=(0, np.inf), verbose=0)
                 else:
                     log('Fitting for sub-pixel template shift')
-                    C = least_squares(fn, [scale, 0, 0], bounds=((scale*0.9999, -0.5, -0.5), (scale*1.0001, 0.5, 0.5)), verbose=0)
+                    C = least_squares(
+                        fn,
+                        [scale, 0, 0],
+                        bounds=((scale * 0.9999, -0.5, -0.5), (scale * 1.0001, 0.5, 0.5)),
+                        verbose=0,
+                    )
 
                 if C.success:
                     if fit_scale:
@@ -722,7 +752,7 @@ def run_zogy(
                 log('Not enough good pixels for fitting')
 
         # Fourier Transform of Difference Image (Equation 13)
-        D_hat_num = (Fr * P_R_hat * N_hat - Fn * P_N_hat * R_hat)
+        D_hat_num = Fr * P_R_hat * N_hat - Fn * P_N_hat * R_hat
         D_hat_den = np.sqrt(SN**2 * Fr**2 * np.abs(P_R_hat**2) + SR**2 * Fn**2 * np.abs(P_N_hat**2))
         D_hat = D_hat_num / D_hat_den
 
@@ -794,15 +824,15 @@ def run_zogy(
 
         # PSF photometry (Equations 41-43)
         F_S = np.sum(Fn**2 * Fr**2 * np.abs(P_N_hat**2) * np.abs(P_R_hat**2) / (D_hat_den**2))
-        F_S /= S.shape[1]*S.shape[1] # divide by the number of pixels due to FFT normalization
-        Fpsf = S / F_S # optimal PSF photometry, alpha in Equation 41
+        F_S /= S.shape[1] * S.shape[1]  # divide by the number of pixels due to FFT normalization
+        Fpsf = S / F_S  # optimal PSF photometry, alpha in Equation 41
         Fpsf_err = np.sqrt(V_S_N + V_S_R) / F_S
 
         # Stitch the piece back to the tapestry
-        D_full[y0:y0 + N.shape[0], x0:x0 + N.shape[1]] = D
-        S_corr_full[y0:y0 + N.shape[0], x0:x0 + N.shape[1]] = S_corr
-        Fpsf_full[y0:y0 + N.shape[0], x0:x0 + N.shape[1]] = Fpsf
-        Fpsf_err_full[y0:y0 + N.shape[0], x0:x0 + N.shape[1]] = Fpsf_err
+        D_full[y0 : y0 + N.shape[0], x0 : x0 + N.shape[1]] = D
+        S_corr_full[y0 : y0 + N.shape[0], x0 : x0 + N.shape[1]] = S_corr
+        Fpsf_full[y0 : y0 + N.shape[0], x0 : x0 + N.shape[1]] = Fpsf
+        Fpsf_err_full[y0 : y0 + N.shape[0], x0 : x0 + N.shape[1]] = Fpsf_err
 
     result = [D_full, S_corr_full]
 
@@ -836,12 +866,9 @@ def _build_err_map(image, mask, gain=None, verbose_log=None):
         source /= gain
     else:
         source[:] = 0
-    err = np.sqrt(err ** 2 + source)
+    err = np.sqrt(err**2 + source)
 
-    log(
-        'Noise model: background %.1f, rms %.2f ADU'
-        % (bg.globalback, bg.globalrms)
-    )
+    log('Noise model: background %.1f, rms %.2f ADU' % (bg.globalback, bg.globalrms))
 
     return err, bg
 
@@ -927,11 +954,7 @@ def run_sfft(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     # --- Masks ---
     if mask is None:
@@ -942,9 +965,7 @@ def run_sfft(
     if template_mask is None:
         template_mask = ~np.isfinite(template)
     else:
-        template_mask = np.asarray(template_mask, dtype=bool) | ~np.isfinite(
-            template
-        )
+        template_mask = np.asarray(template_mask, dtype=bool) | ~np.isfinite(template)
 
     combined_mask = mask | template_mask
 
@@ -957,9 +978,7 @@ def run_sfft(
         # SEP cannot handle NaN — replace with median for background estimation
         image_clean = image_f.copy()
         image_clean[~np.isfinite(image_clean)] = np.nanmedian(image_clean)
-        err, _ = _build_err_map(
-            image_clean, mask, gain=image_gain, verbose_log=log
-        )
+        err, _ = _build_err_map(image_clean, mask, gain=image_gain, verbose_log=log)
     elif err is not None:
         err = np.asarray(err, dtype=np.float64)
 
@@ -968,8 +987,10 @@ def run_sfft(
         template_clean = template_f.copy()
         template_clean[~np.isfinite(template_clean)] = np.nanmedian(template_clean)
         template_err, _ = _build_err_map(
-            template_clean, template_mask,
-            gain=template_gain, verbose_log=log,
+            template_clean,
+            template_mask,
+            gain=template_gain,
+            verbose_log=log,
         )
     elif template_err is not None:
         template_err = np.asarray(template_err, dtype=np.float64)
@@ -1002,23 +1023,19 @@ def run_sfft(
             y0 = int(row['y'])
 
             # Skip objects too close to edges
-            if (x0 < size or x0 >= nx_img - size
-                    or y0 < size or y0 >= ny_img - size):
+            if x0 < size or x0 >= nx_img - size or y0 < size or y0 >= ny_img - size:
                 continue
 
             # Skip regions containing masked pixels
-            region_mask = combined_mask[
-                y0 - size:y0 + size, x0 - size:x0 + size
-            ]
+            region_mask = combined_mask[y0 - size : y0 + size, x0 - size : x0 + size]
             if np.any(region_mask):
                 continue
 
-            good_regions[y0 - size:y0 + size, x0 - size:x0 + size] = True
+            good_regions[y0 - size : y0 + size, x0 - size : x0 + size] = True
             n_used += 1
 
         if n_used > 0:
-            log('Using %d object regions (%d px half-size) for kernel fitting'
-                % (n_used, size))
+            log('Using %d object regions (%d px half-size) for kernel fitting' % (n_used, size))
             fitting_mask = combined_mask | ~good_regions
         else:
             log('No usable object regions, fitting on whole image')
@@ -1062,9 +1079,7 @@ def run_sfft(
     noise = None
 
     if get_noise or get_scaled:
-        noise = _compute_diff_noise(
-            sfft_result, err, template_err, combined_mask, log
-        )
+        noise = _compute_diff_noise(sfft_result, err, template_err, combined_mask, log)
         if get_noise:
             result.append(noise)
 
@@ -1100,32 +1115,25 @@ def _compute_diff_noise(sfft_result, err, template_err, mask, log):
 
     # Science noise contribution
     if err is not None and hasattr(err, 'shape'):
-        var_sci = err ** 2
+        var_sci = err**2
     else:
         # Estimate from difference image residuals
-        rms = sfft_result.rms if np.isfinite(sfft_result.rms) else mad_std(
-            sfft_result.diff[~mask]
-        )
-        var_sci = np.full((ny, nx), rms ** 2, dtype=np.float64)
-        log(
-            'No science err provided, using constant RMS = %.2f for noise map'
-            % rms
-        )
+        rms = sfft_result.rms if np.isfinite(sfft_result.rms) else mad_std(sfft_result.diff[~mask])
+        var_sci = np.full((ny, nx), rms**2, dtype=np.float64)
+        log('No science err provided, using constant RMS = %.2f for noise map' % rms)
 
     # Template noise contribution (convolved through the kernel)
     if template_err is not None and hasattr(template_err, 'shape'):
         log('Computing convolved template noise contribution')
 
-        var_tmpl = template_err ** 2
+        var_tmpl = template_err**2
 
         # var_convolved = Σ_α a_α²(x,y) · var_tmpl_shifted(x,y)
         ky, kx = sfft_result.kernel_shape
         offsets = sfft_module._kernel_offsets(ky, kx)
         n_kpoly = sfft_module._n_poly(sfft_result.kernel_poly_order)
         x_norm, y_norm = sfft_module._norm_coords(ny, nx)
-        poly_k = sfft_module._poly_terms_2d(
-            x_norm, y_norm, sfft_result.kernel_poly_order
-        )
+        poly_k = sfft_module._poly_terms_2d(x_norm, y_norm, sfft_result.kernel_poly_order)
 
         # Compute a_α(x,y) maps = kernel_coeffs[α] @ poly_k
         kernel_coeffs = sfft_result.kernel_coeffs  # (n_kernel, n_kpoly)

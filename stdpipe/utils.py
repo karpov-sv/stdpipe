@@ -1,4 +1,3 @@
-
 import os
 import re
 import requests
@@ -42,11 +41,7 @@ def get_data_path(dataname):
 
 def download(url, filename=None, overwrite=False, verbose=False):
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if not overwrite and filename is not None and os.path.exists(filename):
         log(filename, 'already downloaded')
@@ -62,9 +57,7 @@ def download(url, filename=None, overwrite=False, verbose=False):
 
     if filename is None:
         # Some logic to guess filename from headers
-        tmp = re.findall(
-            "filename=(.+)", response.headers.get('Content-Disposition', '')
-        )
+        tmp = re.findall("filename=(.+)", response.headers.get('Content-Disposition', ''))
         if len(tmp):
             filename = tmp[1]
         else:
@@ -79,9 +72,7 @@ def download(url, filename=None, overwrite=False, verbose=False):
     length = 0
 
     if verbose:
-        progress = tqdm(
-            desc=desc, total=size, unit='iB', unit_scale=True, unit_divisor=1024
-        )
+        progress = tqdm(desc=desc, total=size, unit='iB', unit_scale=True, unit_divisor=1024)
     else:
         progress = None
 
@@ -103,9 +94,7 @@ def download(url, filename=None, overwrite=False, verbose=False):
         return True
 
 
-def get_obs_time(
-    header=None, filename=None, string=None, get_datetime=False, verbose=False
-):
+def get_obs_time(header=None, filename=None, string=None, get_datetime=False, verbose=False):
     """
     Extract date and time of observations from FITS headers of common formats, or from a string.
 
@@ -121,11 +110,7 @@ def get_obs_time(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     # Simple wrapper to display parsed value and convert it as necessary
     def convert_time(time):
@@ -145,7 +130,9 @@ def get_obs_time(
         else:
             if isinstance(time, str):
                 # Special case where some telescope used '-' for time separation instead of ISO ':'
-                m=re.fullmatch(r"(\d\d\d\d-\d\d-\d\dT\d\d)-(\d\d)-(\d\d(?:\.\d{1,6})?)", time.strip())
+                m = re.fullmatch(
+                    r"(\d\d\d\d-\d\d-\d\dT\d\d)-(\d\d)-(\d\d(?:\.\d{1,6})?)", time.strip()
+                )
                 if m:
                     time = ":".join(m.groups())
             time = Time(time)
@@ -268,9 +255,7 @@ def parse_det(string):
     Parse DATASEC-like keyword
     """
 
-    x0, x1, y0, y1 = [
-        int(_) - 1 for _ in sum([_.split(':') for _ in string[1:-1].split(',')], [])
-    ]
+    x0, x1, y0, y1 = [int(_) - 1 for _ in sum([_.split(':') for _ in string[1:-1].split(',')], [])]
 
     return x0, x1, y0, y1
 
@@ -283,11 +268,7 @@ def crop_overscans(image, header, subtract_bias=True, verbose=False):
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if header is not None:
         header = header.copy()

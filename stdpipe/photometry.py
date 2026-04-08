@@ -2,7 +2,6 @@
 Routines for object detection and photometry.
 """
 
-
 import os, shutil, tempfile, shlex
 import numpy as np
 
@@ -61,7 +60,7 @@ def make_kernel(r0=1.0, ext=1.0):
         np.floor(-ext * r0) : np.ceil(ext * r0 + 1),
     ]
     r = np.hypot(x, y)
-    image = np.exp(-r ** 2 / 2 / r0 ** 2)
+    image = np.exp(-(r**2) / 2 / r0**2)
 
     return image
 
@@ -140,11 +139,18 @@ def estimate_fwhm_from_objects(
     elif 'FWHM_IMAGE' in names:
         values = np.asarray(obj['FWHM_IMAGE'], dtype=float)
     elif 'a' in names and 'b' in names:
-        values = 2.0 * np.sqrt(np.log(2) * (np.asarray(obj['a'], dtype=float)**2
-                                             + np.asarray(obj['b'], dtype=float)**2))
+        values = 2.0 * np.sqrt(
+            np.log(2)
+            * (np.asarray(obj['a'], dtype=float) ** 2 + np.asarray(obj['b'], dtype=float) ** 2)
+        )
     elif 'A_IMAGE' in names and 'B_IMAGE' in names:
-        values = 2.0 * np.sqrt(np.log(2) * (np.asarray(obj['A_IMAGE'], dtype=float)**2
-                                             + np.asarray(obj['B_IMAGE'], dtype=float)**2))
+        values = 2.0 * np.sqrt(
+            np.log(2)
+            * (
+                np.asarray(obj['A_IMAGE'], dtype=float) ** 2
+                + np.asarray(obj['B_IMAGE'], dtype=float) ** 2
+            )
+        )
     else:
         return np.nan
 
@@ -181,8 +187,7 @@ def estimate_fwhm_from_objects(
         elif 'FLAGS' in names:
             good &= np.asarray(obj['FLAGS']) == 0
 
-    return estimate_fwhm(values, good=good, fwhm_range=fwhm_range,
-                         min_candidates=min_candidates)
+    return estimate_fwhm(values, good=good, fwhm_range=fwhm_range, min_candidates=min_candidates)
 
 
 def get_objects_sep(
@@ -216,7 +221,7 @@ def get_objects_sep(
     clip_sigma=3.0,
     clip_iters=5,
     verbose=True,
-    **kwargs
+    **kwargs,
 ):
     """Object detection and aperture/optimal photometry using `SEP <https://github.com/kbarbary/sep>`_ routines, with the signature as similar as possible to :func:`~stdpipe.photometry.get_objects_sextractor` function.
 
@@ -297,11 +302,7 @@ def get_objects_sep(
     """
 
     # Simple Wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if r0 > 0.0:
         kernel = make_kernel(r0)
@@ -409,7 +410,9 @@ def get_objects_sep(
         # Estimate FWHM from detected objects using robust mode estimator
         # (either explicitly requested or needed for optimal extraction)
         fwhm_value = estimate_fwhm_from_objects(
-            obj0, snr_min=None, use_flags=True,
+            obj0,
+            snr_min=None,
+            use_flags=True,
         )
 
         if not np.isfinite(fwhm_value):
@@ -419,7 +422,7 @@ def get_objects_sep(
                 fwhm_value = np.nanmedian(obj0['fwhm'][idx_fwhm])
             else:
                 fwhm_value = np.nanmedian(
-                    2.0 * np.sqrt(np.log(2) * (obj0['a'][idx_fwhm]**2 + obj0['b'][idx_fwhm]**2))
+                    2.0 * np.sqrt(np.log(2) * (obj0['a'][idx_fwhm] ** 2 + obj0['b'][idx_fwhm] ** 2))
                 )
             log("Robust FWHM estimation failed, falling back to median")
 
@@ -496,7 +499,9 @@ def get_objects_sep(
         )
     else:
         if optimal and not _HAS_SEP_OPTIMAL:
-            log("WARNING: Optimal extraction requested but SEP 1.4+ not available, falling back to aperture photometry")
+            log(
+                "WARNING: Optimal extraction requested but SEP 1.4+ not available, falling back to aperture photometry"
+            )
         flux, fluxerr, flag = sep.sum_circle(
             image1,
             xwin[idx],
@@ -523,7 +528,7 @@ def get_objects_sep(
         clip_iters=clip_iters,
     )
 
-    bgnorm = bgflux / np.pi / aper ** 2
+    bgnorm = bgflux / np.pi / aper**2
 
     # Fluxes to magnitudes
     mag, magerr = np.zeros_like(flux), np.zeros_like(flux)
@@ -540,7 +545,7 @@ def get_objects_sep(
         # Fall back to 2nd moments: FWHM = 2 * sqrt(ln(2) * (a^2 + b^2))
         # This is exact for Gaussian PSF, approximate for others
         # More robust than flux_radius (5-27x fewer outliers) but less accurate than SEP built-in
-        fwhm = 2.0 * np.sqrt(np.log(2) * (obj0['a'][idx]**2 + obj0['b'][idx]**2))
+        fwhm = 2.0 * np.sqrt(np.log(2) * (obj0['a'][idx] ** 2 + obj0['b'][idx] ** 2))
 
     flag |= obj0['flag'][idx] | flag_win[idx]
 
@@ -665,11 +670,7 @@ def get_objects_sextractor(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     # Find the binary
     binname = None
@@ -691,11 +692,7 @@ def get_objects_sextractor(
     # else:
     #     log("Using SExtractor binary at", binname)
 
-    workdir = (
-        _workdir
-        if _workdir is not None
-        else tempfile.mkdtemp(prefix='sex', dir=_tmpdir)
-    )
+    workdir = _workdir if _workdir is not None else tempfile.mkdtemp(prefix='sex', dir=_tmpdir)
     obj = None
 
     if mask is None:
@@ -715,7 +712,9 @@ def get_objects_sextractor(
         mask_det = mask_det | np.asarray(mask_detect, dtype=bool)
 
     if mask_to_nans and mask_det.any():
-        image = image.copy() if np.issubdtype(image.dtype, np.floating) else image.astype(np.float64)
+        image = (
+            image.copy() if np.issubdtype(image.dtype, np.floating) else image.astype(np.float64)
+        )
         image[mask_det] = np.nan
 
     # Prepare
@@ -738,7 +737,7 @@ def get_objects_sextractor(
         'DETECT_THRESH': thresh,
         'WEIGHT_TYPE': 'BACKGROUND',
         'MASK_TYPE': 'NONE',  # both 'CORRECT' and 'BLANK' seem to cause systematics?
-        'SATUR_LEVEL': np.nanmax(image[~mask]) + 1 # Saturation should be handled in external mask
+        'SATUR_LEVEL': np.nanmax(image[~mask]) + 1,  # Saturation should be handled in external mask
     }
 
     if bg_size is not None:
@@ -766,9 +765,7 @@ def get_objects_sextractor(
         opts['PHOT_APERTURES'] = ','.join([str(_ * 2) for _ in aper])
         size = '[%d]' % len(aper)
 
-    checknames = [
-        os.path.join(workdir, _.replace('-', 'M_') + '.fits') for _ in checkimages
-    ]
+    checknames = [os.path.join(workdir, _.replace('-', 'M_') + '.fits') for _ in checkimages]
     if checkimages:
         opts['CHECKIMAGE_TYPE'] = ','.join(checkimages)
         opts['CHECKIMAGE_NAME'] = ','.join(checknames)
@@ -834,13 +831,7 @@ def get_objects_sextractor(
     opts.update(extra)
 
     # Build the command line
-    cmd = (
-        binname
-        + ' '
-        + shlex.quote(imagename)
-        + ' '
-        + utils.format_astromatic_opts(opts)
-    )
+    cmd = binname + ' ' + shlex.quote(imagename) + ' ' + utils.format_astromatic_opts(opts)
     if not verbose:
         cmd += ' > /dev/null 2>/dev/null'
     log('Will run SExtractor like that:')
@@ -1054,7 +1045,7 @@ def get_objects_photutils(
     wcs=None,
     get_segmentation=False,
     verbose=False,
-    **kwargs
+    **kwargs,
 ):
     """
     Detect sources in image using photutils detection algorithms.
@@ -1203,11 +1194,7 @@ def get_objects_photutils(
         raise ValueError("Image must be 2D array")
 
     # Setup logging
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     # Create detection mask from NaNs and optional mask_detect
     mask_det = ~np.isfinite(image)
@@ -1250,7 +1237,7 @@ def get_objects_photutils(
             box_size=bg_size,
             mask=total_mask,
             bkg_estimator=photutils.background.ModeEstimatorBackground(),
-            exclude_percentile=10
+            exclude_percentile=10,
         )
     except Exception as e:
         log(f'Warning: Background estimation failed: {e}')
@@ -1258,7 +1245,7 @@ def get_objects_photutils(
         bkg = ConstantBackground(
             np.nanmedian(image[~total_mask]) if np.any(~total_mask) else 0.0,
             np.nanstd(image[~total_mask]) if np.any(~total_mask) else 1.0,
-            image.shape
+            image.shape,
         )
 
     # These things are not cached internally, so let's avoid re-computing them
@@ -1268,8 +1255,10 @@ def get_objects_photutils(
     # Optionally subtract background
     if subtract_bg:
         image_bgsub = image - bkg.background
-        log(f'Subtracting background: median {np.nanmedian(bkg_back):.2f}, '
-            f'rms {np.nanmedian(bkg_rms):.2f}')
+        log(
+            f'Subtracting background: median {np.nanmedian(bkg_back):.2f}, '
+            f'rms {np.nanmedian(bkg_rms):.2f}'
+        )
     else:
         image_bgsub = image.copy()
 
@@ -1296,7 +1285,7 @@ def get_objects_photutils(
             threshold=threshold,
             npixels=npixels,
             connectivity=connectivity,
-            mask=mask_det
+            mask=mask_det,
         )
 
         if segm is None or segm.nlabels == 0:
@@ -1310,11 +1299,7 @@ def get_objects_photutils(
             log(f'Deblending with nlevels {nlevels}, contrast {contrast}')
             try:
                 segm_deblend = photutils.segmentation.deblend_sources(
-                    image_bgsub,
-                    segm,
-                    npixels=npixels,
-                    nlevels=nlevels,
-                    contrast=contrast
+                    image_bgsub, segm, npixels=npixels, nlevels=nlevels, contrast=contrast
                 )
                 segm = segm_deblend
                 log(f'Deblended to {segm.nlabels} sources')
@@ -1327,7 +1312,7 @@ def get_objects_photutils(
             segm,
             error=err,
             mask=mask_det,
-            background=bkg_back if subtract_bg else None
+            background=bkg_back if subtract_bg else None,
         )
 
         # Convert to arrays (handle both Quantity and ndarray)
@@ -1349,7 +1334,7 @@ def get_objects_photutils(
                 sharphi=sharphi,
                 roundlo=roundlo,
                 roundhi=roundhi,
-                exclude_border=True
+                exclude_border=True,
             )
         else:  # method == 'iraf'
             log(f'Using IRAFStarFinder with fwhm={fwhm}, threshold={thresh} sigma')
@@ -1360,7 +1345,7 @@ def get_objects_photutils(
                 sharphi=sharphi,
                 roundlo=roundlo,
                 roundhi=roundhi,
-                exclude_border=True
+                exclude_border=True,
             )
 
         # Find sources
@@ -1380,7 +1365,7 @@ def get_objects_photutils(
         x = get_value(sources['xcentroid'])
         y = get_value(sources['ycentroid'])
         # StarFinder doesn't provide area, use approximate
-        area = np.full(len(sources), np.pi * (fwhm / 2)**2)
+        area = np.full(len(sources), np.pi * (fwhm / 2) ** 2)
 
     else:
         raise ValueError(f"Unknown method: {method}. Use 'segmentation', 'dao', or 'iraf'")
@@ -1396,26 +1381,18 @@ def get_objects_photutils(
     if bkgann is not None:
         log(f'Using background annulus: {bkgann}')
         bkg_apertures = photutils.aperture.CircularAnnulus(
-            positions,
-            r_in=bkgann[0],
-            r_out=bkgann[1]
+            positions, r_in=bkgann[0], r_out=bkgann[1]
         )
 
         # Measure background
         bkg_phot = photutils.aperture.aperture_photometry(
-            image_bgsub,
-            bkg_apertures,
-            error=err,
-            mask=mask
+            image_bgsub, bkg_apertures, error=err, mask=mask
         )
         bkg_mean = bkg_phot['aperture_sum'] / bkg_apertures.area
 
         # Apply background correction to aperture
         phot_table = photutils.aperture.aperture_photometry(
-            image_bgsub,
-            apertures,
-            error=err,
-            mask=mask
+            image_bgsub, apertures, error=err, mask=mask
         )
 
         # Handle both Quantity and ndarray
@@ -1428,10 +1405,7 @@ def get_objects_photutils(
     else:
         # Simple aperture photometry
         phot_table = photutils.aperture.aperture_photometry(
-            image_bgsub,
-            apertures,
-            error=err,
-            mask=mask
+            image_bgsub, apertures, error=err, mask=mask
         )
 
         # Handle both Quantity and ndarray
@@ -1481,8 +1455,12 @@ def get_objects_photutils(
             bbox_ymax = get_value(catalog.bbox_ymax)
 
             for i in range(len(obj)):
-                if (bbox_xmin[i] == 0 or bbox_xmax[i] >= image.shape[1] or
-                    bbox_ymin[i] == 0 or bbox_ymax[i] >= image.shape[0]):
+                if (
+                    bbox_xmin[i] == 0
+                    or bbox_xmax[i] >= image.shape[1]
+                    or bbox_ymin[i] == 0
+                    or bbox_ymax[i] >= image.shape[0]
+                ):
                     obj['flags'][i] |= 0x008
 
             # 0x004: Saturated sources (if saturation threshold provided)
@@ -1532,12 +1510,12 @@ def get_objects_photutils(
         if np.any(mask):
             if method == 'segmentation':
                 # Use segmentation map
-                labels = list(set(segm.data[mask])) # footprints with masked pixels
+                labels = list(set(segm.data[mask]))  # footprints with masked pixels
                 obj['flags'][np.isin(obj['label'], labels)] |= 0x100
             else:
                 # Check source apertures for masked pixels
                 positions = np.column_stack([obj['x'], obj['y']])
-                apertures = photutils.aperture.CircularAperture(positions, r=fwhm/2)
+                apertures = photutils.aperture.CircularAperture(positions, r=fwhm / 2)
                 mres = aperture_photometry(mask.astype(int), apertures, method='center')
                 obj['flags'][mres['aperture_sum'] > 0] |= 0x100
     except Exception as e:
@@ -1549,9 +1527,10 @@ def get_objects_photutils(
         obj['bg'] = bg_at_centroid
     else:
         obj['bg'] = [
-            bkg_back[_y,_x]
-            if _x >= 0 and _x < image.shape[1] and _y >= 0 and _y < image.shape[0] else np.nan
-            for _x,_y in zip(obj['x'].astype(int),obj['y'].astype(int))
+            bkg_back[_y, _x]
+            if _x >= 0 and _x < image.shape[1] and _y >= 0 and _y < image.shape[0]
+            else np.nan
+            for _x, _y in zip(obj['x'].astype(int), obj['y'].astype(int))
         ]
 
     # Add position errors (simple estimate based on S/N)

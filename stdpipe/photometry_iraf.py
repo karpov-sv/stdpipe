@@ -5,7 +5,6 @@ This module provides photometry functionality compatible with stdpipe.photometry
 but using IRAF/DAOPHOT tasks for aperture photometry measurements.
 """
 
-
 import os
 import tempfile
 import shutil
@@ -15,6 +14,7 @@ from astropy.io import fits
 from astropy.table import Table
 import photutils.background
 
+
 # Check if pyraf is available without importing it yet
 # (importing pyraf initializes IRAF which can cause issues with pytest stdin/stdout capturing)
 def _check_pyraf_available():
@@ -22,6 +22,7 @@ def _check_pyraf_available():
     try:
         # First check if pyraf package exists
         import importlib.util
+
         spec = importlib.util.find_spec("pyraf")
         if spec is None:
             return False
@@ -29,14 +30,17 @@ def _check_pyraf_available():
         # Now try to actually import iraf to verify it works
         # This is necessary because pyraf might be installed but broken
         from pyraf import iraf
+
         return True
     except (ImportError, ValueError, AttributeError):
         return False
+
 
 PYRAF_AVAILABLE = _check_pyraf_available()
 
 # Global variable to hold iraf module once imported
 _iraf = None
+
 
 def _get_iraf():
     """Lazy import of pyraf.iraf module."""
@@ -44,9 +48,12 @@ def _get_iraf():
     if _iraf is None:
         try:
             from pyraf import iraf
+
             _iraf = iraf
         except ImportError as e:
-            raise ImportError("PyRAF is not available. Please install PyRAF to use this module.") from e
+            raise ImportError(
+                "PyRAF is not available. Please install PyRAF to use this module."
+            ) from e
     return _iraf
 
 
@@ -69,11 +76,7 @@ def _select_psf_stars(obj, fwhm, n_stars=20, isolation_radius=None, max_stars=50
     :param verbose: Verbose output
     :returns: Array of indices of selected PSF stars
     """
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if len(obj) == 0:
         log("No objects available for PSF star selection")
@@ -137,7 +140,7 @@ def _select_psf_stars(obj, fwhm, n_stars=20, isolation_radius=None, max_stars=50
 
         # Check isolation - no other bright stars nearby
         x, y = x_all[idx], y_all[idx]
-        distances = np.sqrt((x_all - x)**2 + (y_all - y)**2)
+        distances = np.sqrt((x_all - x) ** 2 + (y_all - y) ** 2)
 
         # Count neighbors within isolation radius (excluding self)
         neighbors = np.sum((distances < isolation_radius) & (distances > 0) & candidates)
@@ -216,11 +219,7 @@ def measure_objects(
         raise ImportError("PyRAF is not available. Please install PyRAF to use this module.")
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if not len(obj):
         log('No objects to measure')
@@ -256,17 +255,15 @@ def measure_objects(
 
     if bg is None:
         log(
-            'Subtracting global background: median %.1f rms %.2f' % (
-                np.median(bg_est_bg), np.std(bg_est_bg)
-            )
+            'Subtracting global background: median %.1f rms %.2f'
+            % (np.median(bg_est_bg), np.std(bg_est_bg))
         )
         image1 = image1 - bg_est_bg
         bg_used = bg_est_bg
     else:
         log(
-            'Subtracting user-provided background: median %.1f rms %.2f' % (
-                np.median(bg), np.std(bg)
-            )
+            'Subtracting user-provided background: median %.1f rms %.2f'
+            % (np.median(bg), np.std(bg))
         )
         image1 = image1 - bg
         bg_used = bg
@@ -277,20 +274,15 @@ def measure_objects(
         if bg_est is not None:
             err = bg_est_rms
             log(
-                'Using global background noise map: median %.1f rms %.2f' % (
-                    np.median(err), np.std(err)
-                )
+                'Using global background noise map: median %.1f rms %.2f'
+                % (np.median(err), np.std(err))
             )
         else:
             # Estimate simple RMS if no background estimation was done
             err = np.ones_like(image1) * np.nanstd(image1)
             log('Using simple RMS estimate: %.2f' % np.nanstd(image1))
     else:
-        log(
-            'Using user-provided noise map: median %.1f rms %.2f' % (
-                np.median(err), np.std(err)
-            )
-        )
+        log('Using user-provided noise map: median %.1f rms %.2f' % (np.median(err), np.std(err)))
 
     # Scale apertures by FWHM if requested
     if fwhm is not None and fwhm > 0:
@@ -351,9 +343,8 @@ def measure_objects(
         # Set sky fitting parameters
         if bkgann_scaled is not None:
             log(
-                'Using local background annulus between %.1f and %.1f pixels' % (
-                    bkgann_scaled[0], bkgann_scaled[1]
-                )
+                'Using local background annulus between %.1f and %.1f pixels'
+                % (bkgann_scaled[0], bkgann_scaled[1])
             )
             iraf.fitskypars.annulus = bkgann_scaled[0]
             iraf.fitskypars.dannulus = bkgann_scaled[1] - bkgann_scaled[0]
@@ -374,7 +365,7 @@ def measure_objects(
             output=phot_file,
             interactive='no',
             verify='no',
-            verbose='no'
+            verbose='no',
         )
 
         # Parse DAOPHOT output
@@ -388,10 +379,7 @@ def measure_objects(
         # Read the output file using IRAF txdump
         txdump_file = os.path.join(workdir, 'txdump.txt')
         iraf.txdump(
-            textfiles=phot_file,
-            fields='FLUX,MERR,MAG,MSKY',
-            expr='yes',
-            Stdout=txdump_file
+            textfiles=phot_file, fields='FLUX,MERR,MAG,MSKY', expr='yes', Stdout=txdump_file
         )
 
         # Parse txdump output
@@ -418,11 +406,7 @@ def measure_objects(
 
         # Verify we got results for all objects
         if len(flux_list) != len(obj):
-            log(
-                'Warning: DAOPHOT returned %d results for %d objects' % (
-                    len(flux_list), len(obj)
-                )
-            )
+            log('Warning: DAOPHOT returned %d results for %d objects' % (len(flux_list), len(obj)))
             # Pad with NaNs if needed
             while len(flux_list) < len(obj):
                 flux_list.append(np.nan)
@@ -446,15 +430,15 @@ def measure_objects(
             x, y = int(row['x']), int(row['y'])
             # Check pixels in aperture
             y_grid, x_grid = np.ogrid[
-                max(0, y - int(aper_scaled) - 1):min(image.shape[0], y + int(aper_scaled) + 2),
-                max(0, x - int(aper_scaled) - 1):min(image.shape[1], x + int(aper_scaled) + 2)
+                max(0, y - int(aper_scaled) - 1) : min(image.shape[0], y + int(aper_scaled) + 2),
+                max(0, x - int(aper_scaled) - 1) : min(image.shape[1], x + int(aper_scaled) + 2),
             ]
-            r = np.sqrt((x_grid - x)**2 + (y_grid - y)**2)
+            r = np.sqrt((x_grid - x) ** 2 + (y_grid - y) ** 2)
             if np.any(mask[y_grid, x_grid][r <= aper_scaled]):
                 obj['flags'][i] |= 0x200
 
         # Flag objects with zero flux returned - these are truncated?..
-        obj['flags'][obj['flux']==0] &= 0x010 # SExtractor flag for truncated aperture
+        obj['flags'][obj['flux'] == 0] &= 0x010  # SExtractor flag for truncated aperture
 
         # Store local background if available
         if bkgann_scaled is not None:
@@ -549,11 +533,7 @@ def measure_objects_psf(
         raise ImportError("PyRAF is not available. Please install PyRAF to use this module.")
 
     # Simple wrapper around print for logging
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if not len(obj):
         log('No objects to measure')
@@ -593,17 +573,15 @@ def measure_objects_psf(
 
     if bg is None:
         log(
-            'Subtracting global background: median %.1f rms %.2f' % (
-                np.median(bg_est_bg), np.std(bg_est_bg)
-            )
+            'Subtracting global background: median %.1f rms %.2f'
+            % (np.median(bg_est_bg), np.std(bg_est_bg))
         )
         image1 = image1 - bg_est_bg
         bg_used = bg_est_bg
     else:
         log(
-            'Subtracting user-provided background: median %.1f rms %.2f' % (
-                np.median(bg), np.std(bg)
-            )
+            'Subtracting user-provided background: median %.1f rms %.2f'
+            % (np.median(bg), np.std(bg))
         )
         image1 = image1 - bg
         bg_used = bg
@@ -614,19 +592,14 @@ def measure_objects_psf(
         if bg_est is not None:
             err = bg_est_rms
             log(
-                'Using global background noise map: median %.1f rms %.2f' % (
-                    np.median(err), np.std(err)
-                )
+                'Using global background noise map: median %.1f rms %.2f'
+                % (np.median(err), np.std(err))
             )
         else:
             err = np.ones_like(image1) * np.nanstd(image1)
             log('Using simple RMS estimate: %.2f' % np.nanstd(image1))
     else:
-        log(
-            'Using user-provided noise map: median %.1f rms %.2f' % (
-                np.median(err), np.std(err)
-            )
-        )
+        log('Using user-provided noise map: median %.1f rms %.2f' % (np.median(err), np.std(err)))
 
     # Set default PSF and fitting radii
     if psfrad is None:
@@ -699,7 +672,7 @@ def measure_objects_psf(
             output=phot_file,
             interactive='no',
             verify='no',
-            verbose='no'
+            verbose='no',
         )
 
         # Step 2: Create PSF star list file using pselect
@@ -714,11 +687,7 @@ def measure_objects_psf(
         log(f'Selecting PSF stars with IDs: {", ".join(psf_star_ids)}')
 
         # Use pselect to extract PSF stars from phot output
-        iraf.pselect(
-            infiles=phot_file,
-            outfiles=pst_file,
-            expr=expr
-        )
+        iraf.pselect(infiles=phot_file, outfiles=pst_file, expr=expr)
 
         # Step 3: Build PSF model using psf task
         log(f'Building PSF model with function={psf_function}, varorder={psf_varorder}')
@@ -741,7 +710,7 @@ def measure_objects_psf(
             groupfile=grp_file,
             interactive='no',
             verify='no',
-            verbose='no'
+            verbose='no',
         )
 
         log('PSF model built successfully')
@@ -764,7 +733,7 @@ def measure_objects_psf(
             rejfile=reject_file,
             subimage=subimage_file,
             verify='no',
-            verbose='no'
+            verbose='no',
         )
 
         log('PSF fitting completed, parsing results')
@@ -776,7 +745,7 @@ def measure_objects_psf(
             textfiles=allstar_file,
             fields='ID,XCEN,YCEN,MAG,MERR,SHARPNESS,CHI,PIER',
             expr='yes',
-            Stdout=txdump_als_file
+            Stdout=txdump_als_file,
         )
 
         # Store results in object table
@@ -800,7 +769,9 @@ def measure_objects_psf(
             parts = line.strip().split()
             if len(parts) >= 8:
                 obj_id = int(parts[0])
-                x_fit = float(parts[1]) - 1 if parts[1] != 'INDEF' else np.nan  # Convert to 0-indexed
+                x_fit = (
+                    float(parts[1]) - 1 if parts[1] != 'INDEF' else np.nan
+                )  # Convert to 0-indexed
                 y_fit = float(parts[2]) - 1 if parts[2] != 'INDEF' else np.nan
                 mag = float(parts[3]) if parts[3] != 'INDEF' else np.nan
                 magerr = float(parts[4]) if parts[4] != 'INDEF' else np.nan
@@ -810,7 +781,7 @@ def measure_objects_psf(
 
                 # Convert mag to flux (using ZP=25.0)
                 if np.isfinite(mag):
-                    flux = 10**((25.0 - mag) / 2.5)
+                    flux = 10 ** ((25.0 - mag) / 2.5)
                     if np.isfinite(magerr) and magerr > 0:
                         fluxerr = flux * magerr * np.log(10) / 2.5
                     else:
@@ -819,15 +790,15 @@ def measure_objects_psf(
                     flux = np.nan
                     fluxerr = np.nan
 
-                obj['flux'][obj_id-1] = flux
-                obj['fluxerr'][obj_id-1] = fluxerr
-                obj['mag'][obj_id-1] = mag
-                obj['magerr'][obj_id-1] = magerr
-                obj['x_psf'][obj_id-1] = x_fit
-                obj['y_psf'][obj_id-1] = y_fit
-                obj['qfit_psf'][obj_id-1] = chi
-                obj['cfit_psf'][obj_id-1] = sharpness
-                obj['flags_psf'][obj_id-1] = pier
+                obj['flux'][obj_id - 1] = flux
+                obj['fluxerr'][obj_id - 1] = fluxerr
+                obj['mag'][obj_id - 1] = mag
+                obj['magerr'][obj_id - 1] = magerr
+                obj['x_psf'][obj_id - 1] = x_fit
+                obj['y_psf'][obj_id - 1] = y_fit
+                obj['qfit_psf'][obj_id - 1] = chi
+                obj['cfit_psf'][obj_id - 1] = sharpness
+                obj['flags_psf'][obj_id - 1] = pier
 
         # Initialize flags column if not present
         if 'flags' not in obj.colnames:

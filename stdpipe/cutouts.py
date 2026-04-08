@@ -2,7 +2,6 @@
 Module for cropping the images and creating image cutouts / postage stamps
 """
 
-
 import numpy as np
 import datetime
 
@@ -87,15 +86,7 @@ def crop_image(data, x1, y1, width, height, header=None):
 
 
 def get_cutout(
-    image,
-    candidate,
-    radius,
-    header=None,
-    wcs=None,
-    time=None,
-    filename=None,
-    name=None,
-    **kwargs
+    image, candidate, radius, header=None, wcs=None, time=None, filename=None, name=None, **kwargs
 ):
     """Create the cutout from one or more image planes based on the candidate object.
 
@@ -153,7 +144,7 @@ def get_cutout(
             cutout['wcs'] = wcs
 
     # Image planes
-    for pname,plane in kwargs.items():
+    for pname, plane in kwargs.items():
         if plane is not None and np.ndim(plane) == 2:
             cutout[pname] = crop_image_centered(plane, x0, y0, radius)
 
@@ -344,20 +335,14 @@ def adjust_cutout(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     mask = cutout['mask'] if 'mask' in cutout else ~np.isfinite(cutout['image'])
     imask = np.zeros_like(mask)
 
     # Rough estimation of backgrounds in the image and the template, using SExtractor-like mode estimation
     # bg = np.nanmedian(cutout['image'][~mask])
-    bg = 2.5 * np.nanmedian(cutout['image'][~mask]) - 1.5 * np.nanmean(
-        cutout['image'][~mask]
-    )
+    bg = 2.5 * np.nanmedian(cutout['image'][~mask]) - 1.5 * np.nanmean(cutout['image'][~mask])
     # tbg = np.nanmedian(cutout['convolved'][~mask])
     tbg = 2.5 * np.nanmedian(cutout['convolved'][~mask]) - 1.5 * np.nanmean(
         cutout['convolved'][~mask]

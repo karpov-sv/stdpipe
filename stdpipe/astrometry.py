@@ -1,4 +1,3 @@
-
 import os, tempfile, shutil, shlex, re, warnings
 import numpy as np
 
@@ -18,9 +17,7 @@ from . import utils
 from .astrometry_quad import refine_wcs_quadhash
 
 
-def get_frame_center(
-    filename=None, header=None, wcs=None, width=None, height=None, shape=None
-):
+def get_frame_center(filename=None, header=None, wcs=None, width=None, height=None, shape=None):
     """
     Returns image center RA, Dec, and radius in degrees.
     Accepts either filename, or FITS header, or WCS structure
@@ -138,7 +135,7 @@ def spherical_match(ra1, dec1, ra2, dec2, sr=1 / 3600):
     return idx1, idx2, dist
 
 
-def planar_match(x1, y1, x2, y2, sr = 1):
+def planar_match(x1, y1, x2, y2, sr=1):
     """Positional match on the plane for two lists of coordinates.
 
     :param ra1: First set of points X
@@ -197,7 +194,6 @@ def blind_match_objects(
     _exe=None,
     verbose=False,
 ):
-
     """Thin wrapper for blind plate solving using local Astrometry.Net and a list of detected objects.
 
     It requires `solve-field` binary from Astrometry.Net and some index files to be locally available.
@@ -225,11 +221,7 @@ def blind_match_objects(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     # Find the binary
     binname = None
@@ -276,9 +268,7 @@ def blind_match_objects(
         height = int(np.max(obj['y']))
 
     workdir = (
-        _workdir
-        if _workdir is not None
-        else tempfile.mkdtemp(prefix='astrometry', dir=_tmpdir)
+        _workdir if _workdir is not None else tempfile.mkdtemp(prefix='astrometry', dir=_tmpdir)
     )
 
     columns = [
@@ -353,7 +343,6 @@ def blind_match_objects(
         else:
             log('Error %s running Astrometry.Net' % res)
 
-
     if res == 0 and os.path.exists(wcsname):
         header = fits.getheader(wcsname)
         wcs = WCS(header)
@@ -391,9 +380,8 @@ def blind_match_astrometrynet(
     scale_lower=None,
     scale_upper=None,
     scale_units='arcsecperpix',
-    **kwargs
+    **kwargs,
 ):
-
     """Thin wrapper for remote plate solving using Astrometry.Net and a list of detected objects.
     Most of the parameters are passed directly to `astroquery.astrometrynet.AstrometryNet.solve_from_source_list` routine.
     API key may either be provided as an argument or specified in ~/.astropy/config/astroquery.cfg
@@ -449,7 +437,7 @@ def blind_match_astrometrynet(
             scale_units=scale_units,
             solve_timeout=solve_timeout,
             tweak_order=order,
-            **kwargs
+            **kwargs,
         )
     except:
         import traceback
@@ -490,11 +478,7 @@ def refine_wcs(
     '''
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if match:
         # Perform simple nearest-neighbor matching within given radius
@@ -727,10 +711,12 @@ def wcs_pv2sip(header, order=None, accuracy=1e-4):
     crval1 = header['CRVAL1']
     crval2 = header['CRVAL2']
 
-    cd = np.array([
-        [header['CD1_1'], header.get('CD1_2', 0)],
-        [header.get('CD2_1', 0), header['CD2_2']],
-    ])
+    cd = np.array(
+        [
+            [header['CD1_1'], header.get('CD1_2', 0)],
+            [header.get('CD2_1', 0), header['CD2_2']],
+        ]
+    )
     cd_inv = np.linalg.inv(cd)
 
     # Dense pixel grid
@@ -757,9 +743,7 @@ def wcs_pv2sip(header, order=None, accuracy=1e-4):
     dra = ra_r - ra0
     denom = sin_dec * sin_dec0 + cos_dec * cos_dec0 * np.cos(dra)
     xi = np.degrees(cos_dec * np.sin(dra) / denom)
-    eta = np.degrees(
-        (sin_dec * cos_dec0 - cos_dec * sin_dec0 * np.cos(dra)) / denom
-    )
+    eta = np.degrees((sin_dec * cos_dec0 - cos_dec * sin_dec0 * np.cos(dra)) / denom)
 
     # Pixel offsets from CRPIX (0-based)
     u = xf - (crpix1 - 1)
@@ -788,7 +772,7 @@ def wcs_pv2sip(header, order=None, accuracy=1e-4):
         coefficients are rescaled to raw-pixel convention afterwards.
         """
         un, vn = u / scale, v / scale
-        return np.column_stack([un ** p * vn ** q for p, q in pq])
+        return np.column_stack([un**p * vn**q for p, q in pq])
 
     def _fit_order(u, v, du, dv, sip_order, scale):
         """Fit SIP coefficients at a given order, return residual."""
@@ -824,9 +808,7 @@ def wcs_pv2sip(header, order=None, accuracy=1e-4):
         best_result = None
         best_order = 2
         for try_order in range(2, 7):
-            ca_t, cb_t, pq_t, max_res_t = _fit_order(
-                u, v, du, dv, try_order, scale
-            )
+            ca_t, cb_t, pq_t, max_res_t = _fit_order(u, v, du, dv, try_order, scale)
             if max_res_t < best_res:
                 best_res = max_res_t
                 best_result = (ca_t, cb_t, pq_t, max_res_t)
@@ -922,15 +904,19 @@ def _fit_tpv_coefficients(wcs_orig, header, order=5):
 
     # Build CD matrix
     if 'CD1_1' in header:
-        cd = np.array([
-            [header['CD1_1'], header.get('CD1_2', 0)],
-            [header.get('CD2_1', 0), header['CD2_2']],
-        ])
+        cd = np.array(
+            [
+                [header['CD1_1'], header.get('CD1_2', 0)],
+                [header.get('CD2_1', 0), header['CD2_2']],
+            ]
+        )
     else:
-        pc = np.array([
-            [header.get('PC1_1', 1), header.get('PC1_2', 0)],
-            [header.get('PC2_1', 0), header.get('PC2_2', 1)],
-        ])
+        pc = np.array(
+            [
+                [header.get('PC1_1', 1), header.get('PC1_2', 0)],
+                [header.get('PC2_1', 0), header.get('PC2_2', 1)],
+            ]
+        )
         cdelt = np.array([header.get('CDELT1', 1), header.get('CDELT2', 1)])
         cd = pc * cdelt[:, None]
 
@@ -954,9 +940,7 @@ def _fit_tpv_coefficients(wcs_orig, header, order=5):
 
     denom = sin_dec * sin_dec0 + cos_dec * cos_dec0 * np.cos(dra)
     xi = np.degrees(cos_dec * np.sin(dra) / denom)
-    eta = np.degrees(
-        (sin_dec * cos_dec0 - cos_dec * sin_dec0 * np.cos(dra)) / denom
-    )
+    eta = np.degrees((sin_dec * cos_dec0 - cos_dec * sin_dec0 * np.cos(dra)) / denom)
 
     # Build TPV polynomial design matrix
     # TPV basis for axis 1: terms in (u, v), axis 2: terms in (v, u)
@@ -987,7 +971,7 @@ def _fit_tpv_coefficients(wcs_orig, header, order=5):
             for j in range(total + 1):
                 i = total - j
                 # p^i * q^j
-                terms.append(p ** i * q ** j)
+                terms.append(p**i * q**j)
                 indices.append(pv_idx)
                 pv_idx += 1
 
@@ -1135,11 +1119,7 @@ def refine_wcs_scamp(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     # Find the binary
     binname = None
@@ -1161,11 +1141,7 @@ def refine_wcs_scamp(
     # else:
     #     log("Using SCAMP binary at", binname)
 
-    workdir = (
-        _workdir
-        if _workdir is not None
-        else tempfile.mkdtemp(prefix='scamp', dir=_tmpdir)
-    )
+    workdir = _workdir if _workdir is not None else tempfile.mkdtemp(prefix='scamp', dir=_tmpdir)
 
     if header is None:
         # Construct minimal FITS header covering our data points
@@ -1289,8 +1265,7 @@ def refine_wcs_scamp(
                 if hasattr(cat_mag_lim, '__len__') and len(cat_mag_lim) == 2:
                     # Two elements provided, treat them as lower and upper limits
                     t_cat = t_cat[
-                        (t_cat['MAG'] >= cat_mag_lim[0])
-                        & (t_cat['MAG'] <= cat_mag_lim[1])
+                        (t_cat['MAG'] >= cat_mag_lim[0]) & (t_cat['MAG'] <= cat_mag_lim[1])
                     ]
                 else:
                     # One element provided, treat it as upper limit
@@ -1306,9 +1281,7 @@ def refine_wcs_scamp(
         log('Using default settings for network catalogue')
 
     # Build the command line
-    command = (
-        binname + ' ' + shlex.quote(objname) + ' ' + utils.format_astromatic_opts(opts)
-    )
+    command = binname + ' ' + shlex.quote(objname) + ' ' + utils.format_astromatic_opts(opts)
     if not verbose:
         command += ' > /dev/null 2>/dev/null'
     log('Will run SCAMP like that:')
@@ -1353,9 +1326,7 @@ def refine_wcs_scamp(
             log('Reduced chi2 too large (%.1f), fitting likely failed' % reduced_chi2)
         else:
             with open(hdrname, 'r') as f:
-                h1 = fits.Header.fromstring(
-                    f.read().encode('ascii', 'ignore'), sep='\n'
-                )
+                h1 = fits.Header.fromstring(f.read().encode('ascii', 'ignore'), sep='\n')
 
                 # Sometimes SCAMP returns TAN type solution even despite PV keywords present
                 if h1['CTYPE1'] != 'RA---TPV' and 'PV1_0' in h1.keys():

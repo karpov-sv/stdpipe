@@ -26,7 +26,7 @@ def filter_sextractor_detections(
     return_classifier=False,
     random_state=0,
     verbose=True,
-    **kwargs
+    **kwargs,
 ):
     """
     Flag SExtractor detections likely to be artefacts using IsolationForest.
@@ -73,13 +73,13 @@ def filter_sextractor_detections(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     def get_features(obj):
         return [
             [obj['FLUX_RADIUS'], 'FLUX_RADIUS'],
             [obj['fwhm'], 'FWHM'],
-            [obj['FLUX_MAX'] / obj['FLUX_AUTO'], 'FLUX_MAX / FLUX_AUTO']
+            [obj['FLUX_MAX'] / obj['FLUX_AUTO'], 'FLUX_MAX / FLUX_AUTO'],
         ]
 
     features = get_features(obj)
@@ -87,20 +87,20 @@ def filter_sextractor_detections(
     if return_features:
         return features
 
-    log("Using isolation forest outlier detection over columns ({})".format(
-        ", ".join([_[1] for _ in features])
-    ))
+    log(
+        "Using isolation forest outlier detection over columns ({})".format(
+            ", ".join([_[1] for _ in features])
+        )
+    )
 
     # Exclude blends etc from the fit, as well as broken measurements
     # also exclude 0x800 that we will use for outliers
-    idx = (obj['flags'] & (0x7fff - 0x800)) == 0
+    idx = (obj['flags'] & (0x7FFF - 0x800)) == 0
     for f in features:
         idx &= np.isfinite(f[0]) & (f[0] > 0)
 
     if trend_cols:
-        log("Removing smooth trends in {} using approximate LOESS".format(
-            ", ".join(trend_cols)
-        ))
+        log("Removing smooth trends in {} using approximate LOESS".format(", ".join(trend_cols)))
 
         if trend_scales and len(trend_scales) != len(trend_cols):
             raise ValueError(f"trend_scales length is inconsistent with trend_cols length")
@@ -121,7 +121,7 @@ def filter_sextractor_detections(
         X = [np.array(_[0]) for _ in features]
 
     X = np.column_stack(X)
-    X[~np.isfinite(X)] = -100000 # Definitely outside of the good locus
+    X[~np.isfinite(X)] = -100000  # Definitely outside of the good locus
 
     clf = IsolationForest(random_state=random_state).fit(X[idx])
 
@@ -130,6 +130,7 @@ def filter_sextractor_detections(
     log(f"{np.sum(res > 0)} good, {np.sum(res < 0)} outliers")
 
     if return_classifier:
+
         def classifier(obj):
             features = get_features(obj)
 
@@ -137,13 +138,13 @@ def filter_sextractor_detections(
                 pos = np.column_stack([np.array(obj[_]) for _ in trend_cols])
                 X = []
 
-                for f,model in zip(features, trend_models):
+                for f, model in zip(features, trend_models):
                     X.append(np.array(f[0]) - model.predict(pos))
             else:
                 X = [np.array(_[0]) for _ in features]
 
             X = np.column_stack(X)
-            X[~np.isfinite(X)] = -100000 # Definitely outside of the good locus
+            X[~np.isfinite(X)] = -100000  # Definitely outside of the good locus
 
             return clf.predict(X) > 0
 
@@ -167,7 +168,7 @@ def filter_detections(
     add_score=False,
     flag_bogus=False,
     verbose=True,
-    **kwargs
+    **kwargs,
 ):
     """
     Filter detections using feature-based real-bogus classification.
@@ -241,7 +242,7 @@ def filter_detections(
     """
     from . import realbogus_features as rbf
 
-    log = (verbose if callable(verbose) else print) if verbose else lambda *args,**kwargs: None
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     # Call the full classify function
     result = rbf.classify(
@@ -259,7 +260,7 @@ def filter_detections(
         trend_cols=trend_cols,
         trend_scales=trend_scales,
         verbose=verbose,
-        **kwargs
+        **kwargs,
     )
 
     # Return boolean mask

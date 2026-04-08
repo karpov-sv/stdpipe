@@ -238,6 +238,9 @@ extend-exclude = [
     "dist",
 ]
 
+[tool.ruff.format]
+quote-style = "preserve"
+
 [tool.ruff.lint]
 select = [
     "E",    # pycodestyle errors

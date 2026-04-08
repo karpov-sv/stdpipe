@@ -11,7 +11,7 @@ def _tukey_bisquare(u: np.ndarray) -> np.ndarray:
     w = np.zeros_like(u, dtype=float)
     m = np.abs(u) < 1.0
     t = 1.0 - u[m] ** 2
-    w[m] = t ** 2
+    w[m] = t**2
     return w
 
 
@@ -35,8 +35,9 @@ class ApproxLoessRegressor:
 
     Typical use: model smooth trend y = f(x, y, mag) and subtract.
     """
+
     k: int = 300
-    scales: tuple[float, ...] | None = None # per-dimension scaling for distance metric
+    scales: tuple[float, ...] | None = None  # per-dimension scaling for distance metric
     kernel: str = "gaussian"  # currently only gaussian
     robust_iters: int = 2
     robust_c: float = 4.685  # Tukey tuning constant
@@ -67,7 +68,11 @@ class ApproxLoessRegressor:
 
         self.X_ = X
         self.y_ = y
-        self.base_w_ = np.ones_like(y) if sample_weight is None else np.asarray(sample_weight, float).reshape(-1)
+        self.base_w_ = (
+            np.ones_like(y)
+            if sample_weight is None
+            else np.asarray(sample_weight, float).reshape(-1)
+        )
         if self.base_w_.shape[0] != X.shape[0]:
             raise ValueError("sample_weight must have length N")
         if np.any(self.base_w_ < 0):
@@ -153,8 +158,8 @@ class ApproxLoessRegressor:
                 idxs_k = np.empty((m, k_base), int)
                 for i in range(m):
                     if dists[i, 0] == 0.0:
-                        dists_k[i] = dists[i, 1:k_base + 1]
-                        idxs_k[i] = idxs[i, 1:k_base + 1]
+                        dists_k[i] = dists[i, 1 : k_base + 1]
+                        idxs_k[i] = idxs[i, 1 : k_base + 1]
                     else:
                         dists_k[i] = dists[i, 0:k_base]
                         idxs_k[i] = idxs[i, 0:k_base]
@@ -196,11 +201,11 @@ class ApproxLoessRegressor:
             # Compute ATA and ATy with vectorized einsum
             # Apply weights by multiplying rows of A and y by sqrt(w)
             sw = np.sqrt(np.maximum(w, 0.0))
-            Aw = A * sw[:, :, None]              # (m, k, P)
-            yw = Yn * sw                          # (m, k)
+            Aw = A * sw[:, :, None]  # (m, k, P)
+            yw = Yn * sw  # (m, k)
 
             ATA = np.einsum("mkp,mkq->mpq", Aw, Aw)  # (m, P, P)
-            ATy = np.einsum("mkp,mk->mp", Aw, yw)    # (m, P)
+            ATy = np.einsum("mkp,mk->mp", Aw, yw)  # (m, P)
 
             # Ridge for numerical stability (especially in sparse regions)
             ATA[:, range(P), range(P)] += self.ridge

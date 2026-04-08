@@ -6,7 +6,6 @@ including catalog matching with spatial zero-point models, S/N modeling,
 and detection limit estimation.
 """
 
-
 import numpy as np
 import statsmodels.api as sm
 from scipy.optimize import minimize, least_squares, root_scalar
@@ -27,7 +26,7 @@ def make_series(mul=1.0, x=1.0, y=1.0, order=1, sum=False, zero=True):
         maxr = i + 1
 
         for j in range(maxr):
-            res.append(mul * x ** (i - j) * y ** j)
+            res.append(mul * x ** (i - j) * y**j)
     if sum:
         return np.sum(res, axis=0)
     else:
@@ -38,7 +37,7 @@ def get_intrinsic_scatter(y, yerr, min=0, max=None):
     def log_likelihood(theta, y, yerr):
         a, b, c = theta
         model = b
-        sigma2 = a * yerr ** 2 + c ** 2
+        sigma2 = a * yerr**2 + c**2
         return -0.5 * np.sum((y - model) ** 2 / sigma2 + np.log(sigma2))
 
     nll = lambda *args: -log_likelihood(*args)
@@ -67,7 +66,7 @@ def format_color_term(color_term, name=None, color_name=None, fmt='.2f'):
         color_term = [color_term]
 
     # Here we assume it is a list
-    for i,val in enumerate(color_term):
+    for i, val in enumerate(color_term):
         if color_name is not None:
             sign = '-' if val > 0 else '+'  # Reverse signs!!!
             sval = format(np.abs(val), fmt)
@@ -168,11 +167,7 @@ def match(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     oidx, cidx, dist = astrometry.spherical_match(obj_ra, obj_dec, cat_ra, cat_dec, sr)
 
@@ -188,9 +183,7 @@ def match(
 
     omag = np.ma.filled(obj_mag[oidx], fill_value=np.nan)
     omag_err = np.ma.filled(obj_magerr[oidx], fill_value=np.nan)
-    oflags = (
-        obj_flags[oidx] if obj_flags is not None else np.zeros_like(omag, dtype=bool)
-    )
+    oflags = obj_flags[oidx] if obj_flags is not None else np.zeros_like(omag, dtype=bool)
     cmag = np.ma.filled(cat_mag[cidx], fill_value=np.nan)
     cmag_err = (
         np.ma.filled(cat_magerr[cidx], fill_value=np.nan)
@@ -243,12 +236,12 @@ def match(
         if fit_color_term:
             pos_color = len(X)
             for _ in range(int(fit_color_term)):
-                X += make_series(ccolor**(_ + 1), x, y, order=0)
+                X += make_series(ccolor ** (_ + 1), x, y, order=0)
 
             log('Using color term of order', int(fit_color_term))
         elif force_color_term is not None:
-            for i,val in enumerate(np.atleast_1d(force_color_term)):
-                cmag -= val * ccolor**(i + 1)
+            for i, val in enumerate(np.atleast_1d(force_color_term)):
+                cmag -= val * ccolor ** (i + 1)
             log('Using fixed color term', format_color_term(force_color_term))
     else:
         ccolor = np.zeros_like(cmag)
@@ -300,9 +293,7 @@ def match(
         zero_model_err = np.sqrt(C.cov_params(X).diagonal())
 
         intrinsic_rms = (
-            get_intrinsic_scatter(
-                (zero - zero_model)[idx], total_err[idx], max=max_intrinsic_rms
-            )
+            get_intrinsic_scatter((zero - zero_model)[idx], total_err[idx], max=max_intrinsic_rms)
             if max_intrinsic_rms > 0
             else 0
         )
@@ -363,9 +354,7 @@ def match(
         X = make_series(1.0, x, y, order=spatial_order)
 
         if bg_order is not None and mag is not None:
-            X += make_series(
-                -2.5 / np.log(10) / 10 ** (-0.4 * mag), x, y, order=bg_order
-            )
+            X += make_series(-2.5 / np.log(10) / 10 ** (-0.4 * mag), x, y, order=bg_order)
 
         if nonlin and mag is not None:
             X += make_series(np.ma.filled(mag, np.nan), x, y, order=0)
@@ -376,7 +365,11 @@ def match(
             # It follows the implementation from https://github.com/statsmodels/statsmodels/blob/081fc6e85868308aa7489ae1b23f6e72f5662799/statsmodels/base/model.py#L1383
             # FIXME: crashes on large numbers of stars?..
             if len(x) < 5000:
-                err = np.sqrt(np.dot(X, np.dot(C.cov_params()[0:X.shape[1], 0:X.shape[1]], np.transpose(X))).diagonal())
+                err = np.sqrt(
+                    np.dot(
+                        X, np.dot(C.cov_params()[0 : X.shape[1], 0 : X.shape[1]], np.transpose(X))
+                    ).diagonal()
+                )
             else:
                 err = np.zeros_like(x)
             if add_intrinsic_rms:
@@ -388,7 +381,7 @@ def match(
 
     if cat_color is not None and (fit_color_term or force_color_term is not None):
         if fit_color_term:
-            color_term = list(C.params[pos_color:][:int(fit_color_term)])
+            color_term = list(C.params[pos_color:][: int(fit_color_term)])
             if len(color_term) == 1:
                 color_term = color_term[0]
 
@@ -453,7 +446,7 @@ def make_sn_model(mag, sn):
 
     # Initial params from two limiting cases, one on average and one on brightest point
     x = [
-        np.median(10 ** (-0.8 * mag) / sn ** 2),
+        np.median(10 ** (-0.8 * mag) / sn**2),
         10 ** (-0.4 * mag[aidx][-1]) / sn[aidx][-1] ** 2,
     ]
 
@@ -475,11 +468,7 @@ def get_detection_limit_sn(mag, mag_sn, sn=5, get_model=False, verbose=True):
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     mag = np.asarray(mag)
     mag_sn = np.asarray(mag_sn)

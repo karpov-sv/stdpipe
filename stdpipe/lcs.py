@@ -1,4 +1,3 @@
-
 import sys
 import numpy as np
 from astropy.stats import mad_std
@@ -30,6 +29,7 @@ class LCs:
       - `ids`: list of index arrays for member points in the container.
       - `kd`: KDTree built from centroid vectors for fast queries.
     """
+
     def __init__(self):
         # Storage for user-supplied data vectors
         self._params = {}
@@ -67,6 +67,7 @@ class LCs:
         >>> lcs = LCs()
         >>> lcs.add(ra=[1, 2], dec=[3, 4], flux=10.0)
         """
+
         def extend(col, val, length):
             if (
                 val is not None
@@ -134,11 +135,7 @@ class LCs:
             Maximum number of centroid refinement iterations (default 1).
         """
 
-        log = (
-            (verbose if callable(verbose) else print)
-            if verbose
-            else lambda *args, **kwargs: None
-        )
+        log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
         if min_length is None:
             min_length = 0
@@ -279,8 +276,6 @@ class LCs:
         self.lcs['ra'], self.lcs['dec'] = astrometry.xyztoradec(
             [self.lcs['x'], self.lcs['y'], self.lcs['z']]
         )
-        self.lcs['kd'] = cKDTree(
-            np.array([self.lcs['x'], self.lcs['y'], self.lcs['z']]).T
-        )
+        self.lcs['kd'] = cKDTree(np.array([self.lcs['x'], self.lcs['y'], self.lcs['z']]).T)
 
         log('%d spatial clusters isolated' % len(self.lcs['ra']))

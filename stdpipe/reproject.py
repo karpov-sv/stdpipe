@@ -53,11 +53,7 @@ def _lanczos_kernel(x, a):
     result[zero] = 1.0
     nonzero = mask & ~zero
     xn = x[nonzero]
-    result[nonzero] = (
-        np.sin(np.pi * xn)
-        * np.sin(np.pi * xn / a)
-        / (np.pi * xn * np.pi * xn / a)
-    )
+    result[nonzero] = np.sin(np.pi * xn) * np.sin(np.pi * xn / a) / (np.pi * xn * np.pi * xn / a)
     return result
 
 
@@ -136,9 +132,7 @@ def _reproject_single_flags(image, wcs_in, wcs_out, shape_out):
     dtype = image.dtype
 
     yy, xx = np.mgrid[0:ny_out, 0:nx_out]
-    pixel_in = _pixel_to_pixel(wcs_out, wcs_in,
-                               xx.ravel().astype(float),
-                               yy.ravel().astype(float))
+    pixel_in = _pixel_to_pixel(wcs_out, wcs_in, xx.ravel().astype(float), yy.ravel().astype(float))
     ix = np.round(np.asarray(pixel_in[0])).astype(int)
     iy = np.round(np.asarray(pixel_in[1])).astype(int)
 
@@ -156,8 +150,9 @@ def _reproject_single_flags(image, wcs_in, wcs_out, shape_out):
     return result.reshape(shape_out), footprint
 
 
-def _reproject_chunk(image, wcs_in, wcs_out, row_start, row_end, nx_out,
-                     order, oversamp, area_ratio, sub_offsets):
+def _reproject_chunk(
+    image, wcs_in, wcs_out, row_start, row_end, nx_out, order, oversamp, area_ratio, sub_offsets
+):
     """Reproject a horizontal chunk of rows.  Used by :func:`_reproject_single`.
 
     Returns
@@ -170,11 +165,10 @@ def _reproject_chunk(image, wcs_in, wcs_out, row_start, row_end, nx_out,
 
     if oversamp <= 1:
         yy, xx = np.mgrid[row_start:row_end, 0:nx_out]
-        pixel_in = _pixel_to_pixel(wcs_out, wcs_in,
-                                  xx.ravel().astype(float),
-                                  yy.ravel().astype(float))
-        coords = np.array([np.asarray(pixel_in[1]),
-                           np.asarray(pixel_in[0])])
+        pixel_in = _pixel_to_pixel(
+            wcs_out, wcs_in, xx.ravel().astype(float), yy.ravel().astype(float)
+        )
+        coords = np.array([np.asarray(pixel_in[1]), np.asarray(pixel_in[0])])
         values = _lanczos_map_coordinates(image, coords, a=order)
         result = values.reshape(ny_chunk, nx_out) * area_ratio
         footprint = np.isfinite(result).astype(np.float64)
@@ -191,10 +185,8 @@ def _reproject_chunk(image, wcs_in, wcs_out, row_start, row_end, nx_out,
             pixel_out_x = (xx + dx_off).ravel().astype(float)
             pixel_out_y = (yy + dy_off).ravel().astype(float)
 
-            pixel_in = _pixel_to_pixel(wcs_out, wcs_in,
-                                      pixel_out_x, pixel_out_y)
-            coords = np.array([np.asarray(pixel_in[1]),
-                               np.asarray(pixel_in[0])])
+            pixel_in = _pixel_to_pixel(wcs_out, wcs_in, pixel_out_x, pixel_out_y)
+            coords = np.array([np.asarray(pixel_in[1]), np.asarray(pixel_in[0])])
             values = _lanczos_map_coordinates(image, coords, a=order)
             vals_2d = values.reshape(chunk_shape)
 
@@ -209,8 +201,9 @@ def _reproject_chunk(image, wcs_in, wcs_out, row_start, row_end, nx_out,
     return row_start, result, footprint
 
 
-def _reproject_single(image, wcs_in, wcs_out, shape_out, order, conserve_flux,
-                      oversamp, parallel=False):
+def _reproject_single(
+    image, wcs_in, wcs_out, shape_out, order, conserve_flux, oversamp, parallel=False
+):
     """Reproject a single image with Lanczos interpolation.
 
     Parameters
@@ -237,7 +230,7 @@ def _reproject_single(image, wcs_in, wcs_out, shape_out, order, conserve_flux,
         oversamp = max(1, int(scale_ratio + 0.5))
 
     # Jacobian area ratio for flux conservation
-    area_ratio = scale_ratio ** 2 if conserve_flux else 1.0
+    area_ratio = scale_ratio**2 if conserve_flux else 1.0
 
     # Sub-pixel offsets for oversampling
     if oversamp > 1:
@@ -257,8 +250,8 @@ def _reproject_single(image, wcs_in, wcs_out, shape_out, order, conserve_flux,
     if n_workers <= 1:
         # Sequential path
         _, result, footprint = _reproject_chunk(
-            image, wcs_in, wcs_out, 0, ny_out,
-            nx_out, order, oversamp, area_ratio, sub_offsets)
+            image, wcs_in, wcs_out, 0, ny_out, nx_out, order, oversamp, area_ratio, sub_offsets
+        )
         return result, footprint
 
     # Threaded path — split by row chunks
@@ -274,16 +267,26 @@ def _reproject_single(image, wcs_in, wcs_out, shape_out, order, conserve_flux,
     footprint = np.zeros(shape_out, dtype=np.float64)
     with ThreadPoolExecutor(max_workers=len(row_ranges)) as pool:
         futures = [
-            pool.submit(_reproject_chunk, image, wcs_in, wcs_out,
-                        rs, re, nx_out, order, oversamp, area_ratio,
-                        sub_offsets)
+            pool.submit(
+                _reproject_chunk,
+                image,
+                wcs_in,
+                wcs_out,
+                rs,
+                re,
+                nx_out,
+                order,
+                oversamp,
+                area_ratio,
+                sub_offsets,
+            )
             for rs, re in row_ranges
         ]
         for f in futures:
             row_start, chunk, fp_chunk = f.result()
             nrows = chunk.shape[0]
-            result[row_start:row_start + nrows] = chunk
-            footprint[row_start:row_start + nrows] = fp_chunk
+            result[row_start : row_start + nrows] = chunk
+            footprint[row_start : row_start + nrows] = fp_chunk
 
     return result, footprint
 
@@ -374,16 +377,10 @@ def reproject_lanczos(
         input = []
 
     # Accept a single (image, header/WCS) tuple for reproject compatibility
-    if (isinstance(input, tuple)
-            and len(input) == 2
-            and isinstance(input[0], np.ndarray)):
+    if isinstance(input, tuple) and len(input) == 2 and isinstance(input[0], np.ndarray):
         input = [input]
 
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     # Resolve output geometry
     if header is not None:
@@ -447,9 +444,9 @@ def reproject_lanczos(
         if is_flags:
             result, fp = _reproject_single_flags(img, wcs_in, wcs_out, shape_out)
         else:
-            result, fp = _reproject_single(img, wcs_in, wcs_out, shape_out,
-                                           order, conserve_flux, oversamp,
-                                           parallel=parallel)
+            result, fp = _reproject_single(
+                img, wcs_in, wcs_out, shape_out, order, conserve_flux, oversamp, parallel=parallel
+            )
         results.append(result)
         footprints.append(fp)
 
@@ -528,11 +525,7 @@ def reproject_swarp(
         extra = {}
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     # Find the binary
     binname = None
@@ -596,11 +589,7 @@ def reproject_swarp(
             log("Can't re-project without target WCS")
             return None
 
-    workdir = (
-        _workdir
-        if _workdir is not None
-        else tempfile.mkdtemp(prefix='swarp', dir=_tmpdir)
-    )
+    workdir = _workdir if _workdir is not None else tempfile.mkdtemp(prefix='swarp', dir=_tmpdir)
 
     # Output coadd filename
     coaddname = os.path.join(workdir, 'coadd.fits')

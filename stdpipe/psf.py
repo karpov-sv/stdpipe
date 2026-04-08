@@ -2,7 +2,6 @@
 Module for working with point-spread function (PSF) models
 """
 
-
 import os, shutil, tempfile, shlex
 import numpy as np
 
@@ -82,11 +81,7 @@ def run_psfex(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     # Find the binary
     binname = None
@@ -108,11 +103,7 @@ def run_psfex(
     # else:
     #     log("Using PSFEx binary at", binname)
 
-    workdir = (
-        _workdir
-        if _workdir is not None
-        else tempfile.mkdtemp(prefix='psfex', dir=_tmpdir)
-    )
+    workdir = _workdir if _workdir is not None else tempfile.mkdtemp(prefix='psfex', dir=_tmpdir)
     psf = None
 
     # Estimate image FWHM if aperture radius is not set
@@ -156,10 +147,7 @@ def run_psfex(
         vignet_size = int(np.round(vignet_size))
     if vignet_size % 2 == 0:
         vignet_size += 1
-    log(
-        'Extracting PSF using vignette size %d x %d pixels'
-        % (vignet_size, vignet_size)
-    )
+    log('Extracting PSF using vignette size %d x %d pixels' % (vignet_size, vignet_size))
 
     # Run SExtractor on input image in current workdir so that the LDAC catalogue will be in out.cat there
     obj = photometry.get_objects_sextractor(
@@ -198,9 +186,7 @@ def run_psfex(
         'WRITE_XML': 'N',
     }
 
-    checknames = [
-        os.path.join(workdir, _.replace('-', 'M_') + '.fits') for _ in checkimages
-    ]
+    checknames = [os.path.join(workdir, _.replace('-', 'M_') + '.fits') for _ in checkimages]
     if checkimages:
         opts['CHECKIMAGE_TYPE'] = ','.join(checkimages)
         opts['CHECKIMAGE_NAME'] = ','.join(checknames)
@@ -211,9 +197,7 @@ def run_psfex(
         opts['PSF_SIZE'] = [psf_size, psf_size]
 
     # Build the command line
-    cmd = (
-        binname + ' ' + shlex.quote(catname) + ' ' + utils.format_astromatic_opts(opts)
-    )
+    cmd = binname + ' ' + shlex.quote(catname) + ' ' + utils.format_astromatic_opts(opts)
     if not verbose:
         cmd += ' > /dev/null 2>/dev/null'
     log('Will run PSFEx like that:')
@@ -237,14 +221,17 @@ def run_psfex(
         psf_extent = psf['width'] * psf['sampling']
         if psf_extent > vignet_size:
             import warnings
+
             warnings.warn(
                 "PSF model extent (%.0f x %.0f pixels = psf_size %d x sampling %.3f) "
                 "exceeds vignet size (%d pixels). This causes interpolation artifacts "
                 "in the PSF wings that bias flux measurements. "
                 "Either increase vignet_size to >= %.0f or decrease psf_size to <= %d."
                 % (
-                    psf_extent, psf_extent,
-                    psf['width'], psf['sampling'],
+                    psf_extent,
+                    psf_extent,
+                    psf['width'],
+                    psf['sampling'],
                     vignet_size,
                     psf_extent,
                     int(vignet_size / psf['sampling']),
@@ -292,11 +279,7 @@ def load_psf(filename, get_header=False, verbose=False):
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     log('Loading PSF model from %s' % filename)
 
@@ -383,7 +366,7 @@ def get_supersampled_psf_stamp(psf, x=0, y=0, normalize=True):
 
     for i2 in range(0, psf['degree'] + 1):
         for i1 in range(0, psf['degree'] + 1 - i2):
-            stamp += psf['data'][i] * dx ** i1 * dy ** i2
+            stamp += psf['data'][i] * dx**i1 * dy**i2
             i += 1
 
     if normalize:
@@ -447,15 +430,16 @@ def get_psf_stamp(psf, x=0, y=0, dx=None, dy=None, normalize=True):
         shift_y_os = dy / psf['sampling']
 
         if shift_x_os != 0 or shift_y_os != 0:
-            shifted = ndimage.shift(supersampled, [shift_y_os, shift_x_os],
-                                    order=3, mode='constant', cval=0)
+            shifted = ndimage.shift(
+                supersampled, [shift_y_os, shift_x_os], order=3, mode='constant', cval=0
+            )
         else:
             shifted = supersampled
 
         # Sum N×N blocks
         out_h = supersampled.shape[0] // N
         out_w = supersampled.shape[1] // N
-        stamp = shifted[:out_h * N, :out_w * N].reshape(out_h, N, out_w, N).sum(axis=(1, 3))
+        stamp = shifted[: out_h * N, : out_w * N].reshape(out_h, N, out_w, N).sum(axis=(1, 3))
     else:
         # Fallback for non-integer oversampling or oversampling=1
         ssx0 = (supersampled.shape[1] - 1) / 2.0
@@ -531,11 +515,21 @@ def place_psf_stamp(image, psf, x0, y0, flux=1, gain=None):
     image[y1[idx], x1[idx]] += stamp[y[idx], x[idx]]
 
 
-def create_psf_model(image, obj=None, fwhm=None, size=None, mask=None,
-                     oversampling=2, degree=0, regularization=1e-6,
-                     subtract_neighbors=True, subtract_background=False,
-                     isolation=5.0,
-                     get_raw=False, verbose=False):
+def create_psf_model(
+    image,
+    obj=None,
+    fwhm=None,
+    size=None,
+    mask=None,
+    oversampling=2,
+    degree=0,
+    regularization=1e-6,
+    subtract_neighbors=True,
+    subtract_background=False,
+    isolation=5.0,
+    get_raw=False,
+    verbose=False,
+):
     """
     Create an empirical PSF (ePSF) model from stars in the image.
 
@@ -574,22 +568,12 @@ def create_psf_model(image, obj=None, fwhm=None, size=None, mask=None,
 
     """
 
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     # Detect stars if not provided
     if obj is None:
         log('Detecting stars for ePSF building')
-        obj = photometry.get_objects_sep(
-            image,
-            mask=mask,
-            thresh=5.0,
-            aper=3.0,
-            verbose=verbose
-        )
+        obj = photometry.get_objects_sep(image, mask=mask, thresh=5.0, aper=3.0, verbose=verbose)
 
         # Select isolated, bright, non-saturated stars
         # Simple selection: median flux and not too crowded
@@ -614,7 +598,7 @@ def create_psf_model(image, obj=None, fwhm=None, size=None, mask=None,
         flux_std = np.std(obj['flux'])
 
         # Select stars with flux within reasonable range
-        idx = (obj['flux'] > flux_median) & (obj['flux'] < flux_median + 3*flux_std)
+        idx = (obj['flux'] > flux_median) & (obj['flux'] < flux_median + 3 * flux_std)
         # Remove edge objects
         edge = size
         idx &= (obj['x'] > edge) & (obj['x'] < image.shape[1] - edge)
@@ -647,6 +631,7 @@ def create_psf_model(image, obj=None, fwhm=None, size=None, mask=None,
     # ePSF quality (tested: reduces bias from +30% to -1% at 6 FWHM separation).
     if isolation and isolation > 0 and len(obj) > 1:
         from scipy.spatial import cKDTree
+
         min_dist = isolation * fwhm
         tree = cKDTree(np.c_[obj['x'], obj['y']])
         nn_dist = tree.query(np.c_[obj['x'], obj['y']], k=2)[0][:, 1]
@@ -654,16 +639,19 @@ def create_psf_model(image, obj=None, fwhm=None, size=None, mask=None,
         n_before = len(obj)
         if len(isolated) >= 10:
             obj = isolated
-            log('Isolation filter (>%.0f*FWHM = >%.1f px): %d / %d stars selected'
-                % (isolation, min_dist, len(obj), n_before))
+            log(
+                'Isolation filter (>%.0f*FWHM = >%.1f px): %d / %d stars selected'
+                % (isolation, min_dist, len(obj), n_before)
+            )
         else:
             # Not enough isolated stars; fall back to the most isolated ones
             n_fallback = max(10, n_before // 5)
             idx = np.argsort(-nn_dist)[:n_fallback]
             obj = obj[idx]
-            log('Isolation filter: only %d stars with >%.1f px separation; '
-                'using %d most isolated instead'
-                % (len(isolated), min_dist, len(obj)))
+            log(
+                'Isolation filter: only %d stars with >%.1f px separation; '
+                'using %d most isolated instead' % (len(isolated), min_dist, len(obj))
+            )
 
     if degree == 0:
         return _create_psf_model_constant(
@@ -671,13 +659,21 @@ def create_psf_model(image, obj=None, fwhm=None, size=None, mask=None,
         )
     else:
         return _create_psf_model_polynomial(
-            image, obj, fwhm, size, mask, oversampling, degree,
-            regularization, subtract_neighbors, subtract_background, log
+            image,
+            obj,
+            fwhm,
+            size,
+            mask,
+            oversampling,
+            degree,
+            regularization,
+            subtract_neighbors,
+            subtract_background,
+            log,
         )
 
 
-def _create_psf_model_constant(image, obj, fwhm, size, mask, oversampling,
-                                get_raw, verbose, log):
+def _create_psf_model_constant(image, obj, fwhm, size, mask, oversampling, get_raw, verbose, log):
     """Build position-invariant ePSF using photutils EPSFBuilder."""
 
     log('Extracting %dx%d cutouts around %d stars' % (size, size, len(obj)))
@@ -690,9 +686,7 @@ def _create_psf_model_constant(image, obj, fwhm, size, mask, oversampling,
     # Build ePSF
     log('Building ePSF model with oversampling=%d' % oversampling)
     epsf_builder = photutils.psf.EPSFBuilder(
-        oversampling=oversampling,
-        maxiters=10,
-        progress_bar=bool(verbose)
+        oversampling=oversampling, maxiters=10, progress_bar=bool(verbose)
     )
 
     epsf, fitted_stars = epsf_builder(stars)
@@ -729,9 +723,19 @@ def _create_psf_model_constant(image, obj, fwhm, size, mask, oversampling,
     return psf
 
 
-def _create_psf_model_polynomial(image, obj, fwhm, size, mask, oversampling,
-                                  degree, regularization, subtract_neighbors,
-                                  subtract_background, log):
+def _create_psf_model_polynomial(
+    image,
+    obj,
+    fwhm,
+    size,
+    mask,
+    oversampling,
+    degree,
+    regularization,
+    subtract_neighbors,
+    subtract_background,
+    log,
+):
     """Build position-dependent PSF by fitting per-pixel polynomials to star stamps.
 
     Follows the PSFEx algorithm: resamples star cutouts onto an oversampled
@@ -739,13 +743,11 @@ def _create_psf_model_polynomial(image, obj, fwhm, size, mask, oversampling,
     """
 
     ncoeffs = (degree + 1) * (degree + 2) // 2
-    log('Building position-dependent PSF model: degree=%d (%d coefficients)'
-        % (degree, ncoeffs))
+    log('Building position-dependent PSF model: degree=%d (%d coefficients)' % (degree, ncoeffs))
 
     if len(obj) < ncoeffs:
         raise ValueError(
-            "Need at least %d stars for degree=%d polynomial, got %d"
-            % (ncoeffs, degree, len(obj))
+            "Need at least %d stars for degree=%d polynomial, got %d" % (ncoeffs, degree, len(obj))
         )
 
     sampling = 1.0 / oversampling
@@ -818,7 +820,7 @@ def _create_psf_model_polynomial(image, obj, fwhm, size, mask, oversampling,
                 if abs(ndx) > half + 5 * sigma and abs(ndy) > half + 5 * sigma:
                     continue
                 # Subtract Gaussian approximation
-                r2 = (cx - star_x[j])**2 + (cy - star_y[j])**2
+                r2 = (cx - star_x[j]) ** 2 + (cy - star_y[j]) ** 2
                 amp = star_flux[j] / (2 * np.pi * sigma**2)
                 cutout -= amp * np.exp(-r2 / (2 * sigma**2))
 
@@ -831,15 +833,18 @@ def _create_psf_model_polynomial(image, obj, fwhm, size, mask, oversampling,
 
         # Subtract local background (median of edge pixels)
         if subtract_background:
-            edge_pixels = np.concatenate([
-                cutout[0, :], cutout[-1, :],
-                cutout[1:-1, 0], cutout[1:-1, -1]
-            ])
+            edge_pixels = np.concatenate(
+                [cutout[0, :], cutout[-1, :], cutout[1:-1, 0], cutout[1:-1, -1]]
+            )
             if mask is not None:
-                edge_mask = np.concatenate([
-                    mask_cutout[0, :], mask_cutout[-1, :],
-                    mask_cutout[1:-1, 0], mask_cutout[1:-1, -1]
-                ])
+                edge_mask = np.concatenate(
+                    [
+                        mask_cutout[0, :],
+                        mask_cutout[-1, :],
+                        mask_cutout[1:-1, 0],
+                        mask_cutout[1:-1, -1],
+                    ]
+                )
                 edge_pixels = edge_pixels[~edge_mask]
             if len(edge_pixels) > 0:
                 cutout -= np.median(edge_pixels)
@@ -849,8 +854,9 @@ def _create_psf_model_polynomial(image, obj, fwhm, size, mask, oversampling,
         cutout_x = cut_center + dx + ox_rel
         cutout_y = cut_center + dy + oy_rel
 
-        stamp = ndimage.map_coordinates(cutout, [cutout_y, cutout_x],
-                                        order=3, mode='constant', cval=0.0)
+        stamp = ndimage.map_coordinates(
+            cutout, [cutout_y, cutout_x], order=3, mode='constant', cval=0.0
+        )
 
         # Normalize to unit flux
         total = np.sum(stamp)
@@ -867,8 +873,7 @@ def _create_psf_model_polynomial(image, obj, fwhm, size, mask, oversampling,
 
     if nstars < ncoeffs:
         raise ValueError(
-            "Only %d valid stamps, need at least %d for degree=%d"
-            % (nstars, ncoeffs, degree)
+            "Only %d valid stamps, need at least %d for degree=%d" % (nstars, ncoeffs, degree)
         )
 
     # Build Vandermonde matrix [nstars x ncoeffs]
@@ -930,8 +935,10 @@ def _create_psf_model_polynomial(image, obj, fwhm, size, mask, oversampling,
                 break
 
             keep = new_keep
-            log('Sigma-clip iter %d: rejected %d stamps, %d remaining'
-                % (clip_iter + 1, n_rejected, keep.sum()))
+            log(
+                'Sigma-clip iter %d: rejected %d stamps, %d remaining'
+                % (clip_iter + 1, n_rejected, keep.sum())
+            )
 
     # Reshape to [ncoeffs, os_size, os_size]
     psf_data = coeffs.reshape(ncoeffs, os_size, os_size)
@@ -941,9 +948,11 @@ def _create_psf_model_polynomial(image, obj, fwhm, size, mask, oversampling,
         reconstructed = V[keep] @ coeffs
         residuals = pixels[keep] - reconstructed
         rms = np.sqrt(np.nanmean(residuals**2))
-    log('Polynomial PSF fit: %d x %d pixels, %d coefficients, '
+    log(
+        'Polynomial PSF fit: %d x %d pixels, %d coefficients, '
         '%d/%d stamps used, RMS residual %.2e (per pixel, normalized)'
-        % (os_size, os_size, ncoeffs, int(keep.sum()), nstars, rms))
+        % (os_size, os_size, ncoeffs, int(keep.sum()), nstars, rms)
+    )
 
     psf = {
         'width': os_size,

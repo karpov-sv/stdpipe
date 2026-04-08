@@ -6,7 +6,6 @@ photometry, which is more accurate for point sources especially in crowded
 fields or when PSF wings are significant.
 """
 
-
 import numpy as np
 from astropy.table import Table
 from astropy.nddata import NDData
@@ -62,7 +61,7 @@ def _scale_psf_image_for_photutils(psf_image, oversampling):
 
 def _build_circular_fit_mask(shape, x_positions, y_positions, radius):
     mask_fit = np.ones(shape, dtype=bool)
-    r2 = radius ** 2
+    r2 = radius**2
     for x, y in zip(x_positions, y_positions):
         if not np.isfinite(x) or not np.isfinite(y):
             continue
@@ -146,7 +145,7 @@ class GradientLocalBackground(photutils.background.LocalBackground):
         # Handle scalar vs array input
         x = np.atleast_1d(x)
         y = np.atleast_1d(y)
-        scalar_input = (len(x) == 1)
+        scalar_input = len(x) == 1
 
         if mask is None:
             mask = np.zeros_like(data, dtype=bool)
@@ -167,7 +166,7 @@ class GradientLocalBackground(photutils.background.LocalBackground):
             yy, xx = np.mgrid[y0:y1, x0:x1]
 
             # Distance from source (only compute for bounding box pixels)
-            dist = np.sqrt((xx - xi)**2 + (yy - yi)**2)
+            dist = np.sqrt((xx - xi) ** 2 + (yy - yi) ** 2)
 
             # Annulus mask
             annulus_mask = (dist >= self.inner_radius) & (dist <= self.outer_radius)
@@ -232,18 +231,17 @@ class GradientLocalBackground(photutils.background.LocalBackground):
                     # Quadratic: z = a + b*dx + c*dy + d*dx^2 + e*dy^2 + f*dx*dy
                     dx = x_good - xi
                     dy = y_good - yi
-                    A = np.column_stack([
-                        np.ones_like(x_good),
-                        dx, dy,
-                        dx**2, dy**2,
-                        dx * dy
-                    ])
+                    A = np.column_stack([np.ones_like(x_good), dx, dy, dx**2, dy**2, dx * dy])
 
                     try:
                         coeffs = np.linalg.lstsq(A, z_good, rcond=None)[0]
                         residuals = z_good - (
-                            coeffs[0] + coeffs[1] * dx + coeffs[2] * dy +
-                            coeffs[3] * dx**2 + coeffs[4] * dy**2 + coeffs[5] * dx * dy
+                            coeffs[0]
+                            + coeffs[1] * dx
+                            + coeffs[2] * dy
+                            + coeffs[3] * dx**2
+                            + coeffs[4] * dy**2
+                            + coeffs[5] * dx * dy
                         )
                     except np.linalg.LinAlgError:
                         bg_fit = np.mean(z_good)
@@ -265,13 +263,19 @@ class GradientLocalBackground(photutils.background.LocalBackground):
                 elif self.order == 1:
                     dx_all = x_annulus[good_mask] - xi
                     dy_all = y_annulus[good_mask] - yi
-                    all_residuals = z_annulus[good_mask] - (coeffs[0] + coeffs[1] * dx_all + coeffs[2] * dy_all)
+                    all_residuals = z_annulus[good_mask] - (
+                        coeffs[0] + coeffs[1] * dx_all + coeffs[2] * dy_all
+                    )
                 elif self.order == 2:
                     dx_all = x_annulus[good_mask] - xi
                     dy_all = y_annulus[good_mask] - yi
                     all_residuals = z_annulus[good_mask] - (
-                        coeffs[0] + coeffs[1] * dx_all + coeffs[2] * dy_all +
-                        coeffs[3] * dx_all**2 + coeffs[4] * dy_all**2 + coeffs[5] * dx_all * dy_all
+                        coeffs[0]
+                        + coeffs[1] * dx_all
+                        + coeffs[2] * dy_all
+                        + coeffs[3] * dx_all**2
+                        + coeffs[4] * dy_all**2
+                        + coeffs[5] * dx_all * dy_all
                     )
 
                 # Reject outliers beyond sigma threshold
@@ -317,12 +321,7 @@ class GradientLocalBackground(photutils.background.LocalBackground):
                 # Quadratic: z = a + b*dx + c*dy + d*dx^2 + e*dy^2 + f*dx*dy
                 dx = x_final - xi
                 dy = y_final - yi
-                A = np.column_stack([
-                    np.ones_like(x_final),
-                    dx, dy,
-                    dx**2, dy**2,
-                    dx * dy
-                ])
+                A = np.column_stack([np.ones_like(x_final), dx, dy, dx**2, dy**2, dx * dy])
 
                 try:
                     coeffs = np.linalg.lstsq(A, z_final, rcond=None)[0]
@@ -336,9 +335,11 @@ class GradientLocalBackground(photutils.background.LocalBackground):
         return bg_values[0] if scalar_input else bg_values
 
     def __repr__(self):
-        return (f"GradientLocalBackground(inner_radius={self.inner_radius}, "
-                f"outer_radius={self.outer_radius}, order={self.order}, "
-                f"sigma={self.sigma}, maxiters={self.maxiters})")
+        return (
+            f"GradientLocalBackground(inner_radius={self.inner_radius}, "
+            f"outer_radius={self.outer_radius}, order={self.order}, "
+            f"sigma={self.sigma}, maxiters={self.maxiters})"
+        )
 
 
 def measure_objects_psf(
@@ -409,11 +410,7 @@ def measure_objects_psf(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if not len(obj):
         log('No objects to measure')
@@ -423,9 +420,11 @@ def measure_objects_psf(
     obj = obj.copy()
 
     from .photometry_measure import (
-        _prepare_image_and_mask, _extract_valid_positions,
+        _prepare_image_and_mask,
+        _extract_valid_positions,
         _compute_magnitudes_and_filter,
     )
+
     image1, mask0, mask = _prepare_image_and_mask(image, mask)
 
     # Background estimation
@@ -539,7 +538,9 @@ def measure_objects_psf(
         log('Using provided photutils PSF model with FWHM')
         psf_model = psf
         if psf_size is None:
-            psf_size = _odd_int(psf.data.shape[0]) if hasattr(psf, 'data') else _odd_int(5 * psf.fwhm)
+            psf_size = (
+                _odd_int(psf.data.shape[0]) if hasattr(psf, 'data') else _odd_int(5 * psf.fwhm)
+            )
 
     else:
         # Assume it's a photutils PSF model
@@ -603,7 +604,10 @@ def measure_objects_psf(
 
     # Perform PSF photometry
     log('Performing PSF photometry on %d objects (%d valid)' % (len(obj), np.sum(valid_pos)))
-    log('Settings: %d iterations, recentroid=%s, grouped=%s, position_dependent=%s' % (maxiters, recentroid, group_sources, psf_is_position_dependent))
+    log(
+        'Settings: %d iterations, recentroid=%s, grouped=%s, position_dependent=%s'
+        % (maxiters, recentroid, group_sources, psf_is_position_dependent)
+    )
 
     # Handle position-dependent PSF separately
     if psf_is_position_dependent:
@@ -652,7 +656,9 @@ def measure_objects_psf(
                 # Set up local background estimator if requested
                 localbkg_estimator = None
                 if bkgann is not None and len(bkgann) == 2:
-                    localbkg_estimator = GradientLocalBackground(bkgann[0], bkgann[1], order=bkg_order)
+                    localbkg_estimator = GradientLocalBackground(
+                        bkgann[0], bkgann[1], order=bkg_order
+                    )
 
                 # Set up photometry for this object
                 phot_single = photutils.psf.PSFPhotometry(
@@ -664,7 +670,7 @@ def measure_objects_psf(
                     fitter_maxiters=maxiters,
                     xy_bounds=xy_bounds,
                     aperture_radius=fit_size / 2,
-                    localbkg_estimator=localbkg_estimator
+                    localbkg_estimator=localbkg_estimator,
                 )
 
                 # Measure this object
@@ -677,10 +683,7 @@ def measure_objects_psf(
                     init_single['flux'] = [1000.0]
 
                 result_single = phot_single(
-                    image1,
-                    mask=mask_for_fit,
-                    error=err,
-                    init_params=init_single
+                    image1, mask=mask_for_fit, error=err, init_params=init_single
                 )
 
                 # Extract results
@@ -712,20 +715,31 @@ def measure_objects_psf(
                     # Check for exact match with input when photutils claims it converged
                     # (bit 0 NOT set). This catches cases where photutils returns input
                     # unchanged but doesn't set bit 0.
-                    converged_but_unchanged = ((result_single['flags'][0] & 1) == 0 and
-                                             obj['flux'][i] == init_single['flux'][0] and
-                                             obj['x_psf'][i] == init_single['x'][0] and
-                                             obj['y_psf'][i] == init_single['y'][0])
+                    converged_but_unchanged = (
+                        (result_single['flags'][0] & 1) == 0
+                        and obj['flux'][i] == init_single['flux'][0]
+                        and obj['x_psf'][i] == init_single['x'][0]
+                        and obj['y_psf'][i] == init_single['y'][0]
+                    )
 
                     if bit0_set or converged_but_unchanged:
-                        log('Warning: PSF fit did not converge or returned unchanged parameters for object %d, setting flux to NaN' % i)
+                        log(
+                            'Warning: PSF fit did not converge or returned unchanged parameters for object %d, setting flux to NaN'
+                            % i
+                        )
                         obj['flux'][i] = np.nan
                         obj['fluxerr'][i] = np.nan
                         obj['flags'][i] |= 0x1000
 
                 # Flag if position moved significantly
                 if recentroid:
-                    if np.sqrt((obj['x_psf'][i] - obj['x'][i])**2 + (obj['y_psf'][i] - obj['y'][i])**2) > 1.0:
+                    if (
+                        np.sqrt(
+                            (obj['x_psf'][i] - obj['x'][i]) ** 2
+                            + (obj['y_psf'][i] - obj['y'][i]) ** 2
+                        )
+                        > 1.0
+                    ):
                         obj['flags'][i] |= 0x2000
 
             except Exception as e:
@@ -766,10 +780,15 @@ def measure_objects_psf(
 
                     order_names = {0: 'constant (mean)', 1: 'plane', 2: 'quadratic'}
                     order_name = order_names.get(bkg_order, f'order-{bkg_order}')
-                    log('Using local background annulus %.1f-%.1f pixels with %s fitting' % (inner_rad, outer_rad, order_name))
+                    log(
+                        'Using local background annulus %.1f-%.1f pixels with %s fitting'
+                        % (inner_rad, outer_rad, order_name)
+                    )
 
                     # Create gradient-aware local background estimator
-                    localbkg_estimator = GradientLocalBackground(inner_rad, outer_rad, order=bkg_order)
+                    localbkg_estimator = GradientLocalBackground(
+                        inner_rad, outer_rad, order=bkg_order
+                    )
 
                 # Set up photometry object
                 phot_obj = photutils.psf.PSFPhotometry(
@@ -781,15 +800,12 @@ def measure_objects_psf(
                     fitter_maxiters=maxiters,
                     xy_bounds=xy_bounds,
                     aperture_radius=fit_size / 2,
-                    localbkg_estimator=localbkg_estimator
+                    localbkg_estimator=localbkg_estimator,
                 )
 
                 # Do the photometry - photutils 2.x API
                 result = phot_obj(
-                    image1,
-                    mask=mask_for_fit,
-                    error=err,
-                    init_params=init_params_valid
+                    image1, mask=mask_for_fit, error=err, init_params=init_params_valid
                 )
 
                 # Map results back to full array
@@ -817,8 +833,13 @@ def measure_objects_psf(
 
                 # Flag objects where position moved significantly (>1 pixel)
                 if recentroid:
-                    moved_idx = valid_pos & (np.sqrt((obj['x_psf'] - init_params['x'])**2 +
-                                                      (obj['y_psf'] - init_params['y'])**2) > 1.0)
+                    moved_idx = valid_pos & (
+                        np.sqrt(
+                            (obj['x_psf'] - init_params['x']) ** 2
+                            + (obj['y_psf'] - init_params['y']) ** 2
+                        )
+                        > 1.0
+                    )
                     obj['flags'][moved_idx] |= 0x2000  # Large centroid shift
 
                 # Flag fits that didn't converge (photutils returns initial guess unchanged)
@@ -831,16 +852,22 @@ def measure_objects_psf(
                     # Also check for exact byte-level match between input and output when photutils
                     # claims the fit converged (bit 0 NOT set). This catches cases where photutils
                     # returns input unchanged but doesn't set bit 0.
-                    converged_but_unchanged = valid_pos & ((obj['flags_psf'] & 1) == 0) & \
-                                             (obj['flux'] == init_params['flux']) & \
-                                             (obj['x_psf'] == init_params['x']) & \
-                                             (obj['y_psf'] == init_params['y'])
+                    converged_but_unchanged = (
+                        valid_pos
+                        & ((obj['flags_psf'] & 1) == 0)
+                        & (obj['flux'] == init_params['flux'])
+                        & (obj['x_psf'] == init_params['x'])
+                        & (obj['y_psf'] == init_params['y'])
+                    )
 
                     # Combine both conditions
                     failed = unconverged | converged_but_unchanged
 
                     if np.sum(failed) > 0:
-                        log('Warning: %d PSF fits failed or returned unchanged parameters, setting flux to NaN' % np.sum(failed))
+                        log(
+                            'Warning: %d PSF fits failed or returned unchanged parameters, setting flux to NaN'
+                            % np.sum(failed)
+                        )
                         obj['flux'][failed] = np.nan
                         obj['fluxerr'][failed] = np.nan
                         obj['flags'][failed] |= 0x1000  # PSF fit failed

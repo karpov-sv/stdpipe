@@ -18,9 +18,18 @@ from scipy.ndimage import rotate, gaussian_filter
 
 
 def create_psf_model(
-    fwhm=3.0, psf_type='gaussian', beta=2.5, size=None, oversampling=2,
-    defocus=0.0, astigmatism_x=0.0, astigmatism_y=0.0,
-    coma_x=0.0, coma_y=0.0, wavelength=550e-9, pupil_diameter=1.0,
+    fwhm=3.0,
+    psf_type='gaussian',
+    beta=2.5,
+    size=None,
+    oversampling=2,
+    defocus=0.0,
+    astigmatism_x=0.0,
+    astigmatism_y=0.0,
+    coma_x=0.0,
+    coma_y=0.0,
+    wavelength=550e-9,
+    pupil_diameter=1.0,
 ):
     """
     Create an oversampled PSF model compatible with PSFEx format.
@@ -64,7 +73,7 @@ def create_psf_model(
     # - get_psf_stamp() output size: floor(width * sampling / 2) * 2 + 1 = size (constant)
     psf_data_size = size * oversampling
     psf_sampling = 1.0 / oversampling  # PSFEx convention: image pixels per data pixel
-    psf_width = float(psf_data_size)   # Data array dimension
+    psf_width = float(psf_data_size)  # Data array dimension
     psf_height = float(psf_data_size)
 
     # Center of the oversampled grid
@@ -110,14 +119,15 @@ def create_psf_model(
         psf_data = np.zeros((psf_data_size, psf_data_size))
         for dy in offsets:
             for dx in offsets:
-                r = np.sqrt(((x + dx - center) * psf_sampling) ** 2 + ((y + dy - center) * psf_sampling) ** 2)
+                r = np.sqrt(
+                    ((x + dx - center) * psf_sampling) ** 2
+                    + ((y + dy - center) * psf_sampling) ** 2
+                )
                 psf_data += 1.0 / (1 + (r / alpha) ** 2) ** beta
-        psf_data /= supersample ** 2
+        psf_data /= supersample**2
 
     else:
-        raise ValueError(
-            f"Unknown psf_type '{psf_type}'. Supported types: 'gaussian', 'moffat'"
-        )
+        raise ValueError(f"Unknown psf_type '{psf_type}'. Supported types: 'gaussian', 'moffat'")
 
     # Normalize
     psf_data /= np.sum(psf_data)
@@ -165,7 +175,7 @@ def create_psf_model(
 
         # Diffraction PSF via FFT
         E = np.fft.fftshift(np.fft.fft2(np.fft.fftshift(pupil)))
-        psf_diffraction = np.abs(E)**2
+        psf_diffraction = np.abs(E) ** 2
         psf_diffraction /= np.sum(psf_diffraction)
 
         # Convolve diffraction PSF with seeing PSF (already computed as psf_data)
@@ -271,9 +281,7 @@ def create_sersic_profile(
     return profile
 
 
-def place_galaxy(
-    image, x0, y0, flux, r_eff=5.0, n=1.0, ellipticity=0.0, position_angle=0.0
-):
+def place_galaxy(image, x0, y0, flux, r_eff=5.0, n=1.0, ellipticity=0.0, position_angle=0.0):
     """
     Place a galaxy with Sersic profile into an image.
 
@@ -530,7 +538,9 @@ def add_hot_pixels(
 
             image[y, x] += intensity
 
-            pixels.append({'x': x, 'y': y, 'intensity': intensity, 'type': 'hot_pixel', 'is_real': False})
+            pixels.append(
+                {'x': x, 'y': y, 'intensity': intensity, 'type': 'hot_pixel', 'is_real': False}
+            )
     else:
         # Clustered hot pixels — produce exactly n_pixels total
         cluster_size = max(1, cluster_size)
@@ -642,9 +652,7 @@ def add_bad_columns(
     return Table(columns)
 
 
-def create_satellite_trail(
-    length, width, intensity, angle=None, profile='linear', tumbling=False
-):
+def create_satellite_trail(length, width, intensity, angle=None, profile='linear', tumbling=False):
     """
     Create a satellite trail.
 
@@ -799,9 +807,7 @@ def add_satellite_trails(
     return Table(trails)
 
 
-def create_diffraction_spikes(
-    size, x0, y0, star_flux, n_spikes=4, spike_length=50, spike_width=2
-):
+def create_diffraction_spikes(size, x0, y0, star_flux, n_spikes=4, spike_length=50, spike_width=2):
     """
     Create diffraction spikes for a bright star.
 
@@ -839,7 +845,9 @@ def create_diffraction_spikes(
 
             # Draw spike with finite width
             # for dw in np.linspace(-spike_width / 2, spike_width / 2, int(spike_width) + 1):
-            for dw in np.linspace(-np.floor(spike_width / 2), np.floor(spike_width / 2), int(2 * spike_width + 1)):
+            for dw in np.linspace(
+                -np.floor(spike_width / 2), np.floor(spike_width / 2), int(2 * spike_width + 1)
+            ):
                 xp = x + dw * np.sin(theta)
                 yp = y - dw * np.cos(theta)
 
@@ -1360,10 +1368,10 @@ def simulate_image(
 
                 # Place companions
                 from . import psf as psf_module
+
                 for companion in cat_stars_with_companions[n_before:]:
                     psf_module.place_psf_stamp(
-                        image, psf_model, companion['x'], companion['y'],
-                        flux=companion['flux']
+                        image, psf_model, companion['x'], companion['y'], flux=companion['flux']
                     )
 
             cat_stars = cat_stars_with_companions
@@ -1454,7 +1462,11 @@ def simulate_image(
     image += noise_map
 
     # Prepare output
-    result = {'image': image, 'background': np.ones((height, width)) * background, 'noise': noise_map}
+    result = {
+        'image': image,
+        'background': np.ones((height, width)) * background,
+        'noise': noise_map,
+    }
 
     # Combine catalogs
     if return_catalog and len(catalogs) > 0:
@@ -1588,7 +1600,9 @@ def generate_realbogus_training_data(
     for img_idx in range(n_images):
         # Randomize parameters for diversity
         fwhm = np.random.uniform(*fwhm_range)
-        background = 10 ** np.random.uniform(np.log10(background_range[0]), np.log10(background_range[1]))
+        background = 10 ** np.random.uniform(
+            np.log10(background_range[0]), np.log10(background_range[1])
+        )
         n_stars = np.random.randint(*n_stars_range)
         n_galaxies = np.random.randint(*n_galaxies_range)
         n_cosmic_rays = np.random.randint(*n_cosmic_rays_range)
@@ -1610,24 +1624,21 @@ def generate_realbogus_training_data(
         min_sn = detection_threshold
         max_sn = 1000.0
 
-        star_flux_range = (
-            min_sn * noise_aperture,
-            max_sn * noise_aperture
-        )
-        galaxy_flux_range = (
-            min_sn * noise_aperture,
-            max_sn * noise_aperture
-        )
+        star_flux_range = (min_sn * noise_aperture, max_sn * noise_aperture)
+        galaxy_flux_range = (min_sn * noise_aperture, max_sn * noise_aperture)
 
         # Optionally use aberrated PSF for this image to add diversity
         psf_type_str = 'gaussian'
-        has_aberration_ranges = (defocus_range[1] > 0 or astigmatism_range[1] > 0
-                                 or coma_range[1] > 0)
+        has_aberration_ranges = (
+            defocus_range[1] > 0 or astigmatism_range[1] > 0 or coma_range[1] > 0
+        )
         if aberration_fraction > 0 and np.random.random() < aberration_fraction:
             if has_aberration_ranges:
                 # Use Fourier optics aberrations with random Zernike coefficients
                 defocus = np.random.uniform(*defocus_range) if defocus_range[1] > 0 else 0.0
-                astig_mag = np.random.uniform(*astigmatism_range) if astigmatism_range[1] > 0 else 0.0
+                astig_mag = (
+                    np.random.uniform(*astigmatism_range) if astigmatism_range[1] > 0 else 0.0
+                )
                 coma_mag = np.random.uniform(*coma_range) if coma_range[1] > 0 else 0.0
 
                 # Random orientation for directional aberrations
@@ -1646,7 +1657,9 @@ def generate_realbogus_training_data(
                     coma_x=coma_x,
                     coma_y=coma_y,
                 )
-                psf_type_str = f'aberrated(def={defocus:.1f},ast={astig_mag:.1f},coma={coma_mag:.1f})'
+                psf_type_str = (
+                    f'aberrated(def={defocus:.1f},ast={astig_mag:.1f},coma={coma_mag:.1f})'
+                )
             else:
                 # Fall back to Moffat PSF as simpler proxy for non-ideal optics
                 beta = np.random.uniform(1.5, 4.5)
@@ -1656,9 +1669,11 @@ def generate_realbogus_training_data(
             # Use standard Gaussian PSF
             star_psf = 'gaussian'
 
-        log(f"Image {img_idx+1}/{n_images}: FWHM={fwhm:.2f}, BG={background:.1f}, "
+        log(
+            f"Image {img_idx + 1}/{n_images}: FWHM={fwhm:.2f}, BG={background:.1f}, "
             f"stars={n_stars}, gal={n_galaxies}, CR={n_cosmic_rays}, hot={n_hot_pixels}, "
-            f"flux_range={star_flux_range[0]:.0f}-{star_flux_range[1]:.0f}, PSF={psf_type_str}")
+            f"flux_range={star_flux_range[0]:.0f}-{star_flux_range[1]:.0f}, PSF={psf_type_str}"
+        )
 
         # Simulate image with companions (cleaner, unified approach)
         sim = simulate_image(
@@ -1697,11 +1712,11 @@ def generate_realbogus_training_data(
                 verbose=False,
             )
         except Exception as e:
-            log(f"Detection failed for image {img_idx+1}: {e}")
+            log(f"Detection failed for image {img_idx + 1}: {e}")
             continue
 
         if len(detected) == 0:
-            log(f"No detections in image {img_idx+1}, skipping")
+            log(f"No detections in image {img_idx + 1}, skipping")
             continue
 
         # Match detections to truth catalog
@@ -1711,7 +1726,7 @@ def generate_realbogus_training_data(
         # Build filter for real sources based on real_source_types
         real_filter = np.zeros(len(truth_catalog), dtype=bool)
         for source_type in real_source_types:
-            real_filter |= (truth_catalog['type'] == source_type)
+            real_filter |= truth_catalog['type'] == source_type
 
         truth_real = truth_catalog[real_filter]
 
@@ -1749,7 +1764,7 @@ def generate_realbogus_training_data(
                 verbose=False,
             )
         except Exception as e:
-            log(f"Cutout extraction failed for image {img_idx+1}: {e}")
+            log(f"Cutout extraction failed for image {img_idx + 1}: {e}")
             continue
 
         # Get labels for valid cutouts
@@ -1825,9 +1840,9 @@ def _augment_training_data(X, y, augment_factor=8, verbose=False):
 
     # Flip augmentation
     if augment_factor >= 8:
-        X_list.append(np.flip(X, axis=2))       # Horizontal flip
+        X_list.append(np.flip(X, axis=2))  # Horizontal flip
         y_list.append(y)
-        X_list.append(np.flip(X, axis=1))       # Vertical flip
+        X_list.append(np.flip(X, axis=1))  # Vertical flip
         y_list.append(y)
         X_list.append(np.flip(np.flip(X, axis=1), axis=2))  # Both flips
         y_list.append(y)
@@ -1835,6 +1850,8 @@ def _augment_training_data(X, y, augment_factor=8, verbose=False):
     X_aug = np.concatenate(X_list, axis=0)
     y_aug = np.concatenate(y_list, axis=0)
 
-    log(f"Augmentation: {n_samples} → {len(X_aug)} samples ({len(X_aug)/n_samples:.1f}× increase)")
+    log(
+        f"Augmentation: {n_samples} → {len(X_aug)} samples ({len(X_aug) / n_samples:.1f}× increase)"
+    )
 
     return X_aug, y_aug

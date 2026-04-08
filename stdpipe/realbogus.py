@@ -42,13 +42,14 @@ try:
     import tensorflow as tf
     from tensorflow import keras
     from tensorflow.keras import layers, models
+
     HAS_TENSORFLOW = True
 except ImportError:
     HAS_TENSORFLOW = False
     warnings.warn(
         "TensorFlow not found. Real-bogus classifier will not be available. "
         "Install with: pip install stdpipe[ml]",
-        ImportWarning
+        ImportWarning,
     )
 
 
@@ -69,10 +70,7 @@ def _check_tensorflow():
 
 
 def create_realbogus_model(
-    input_shape=(31, 31, 2),
-    filters=(32, 64, 128),
-    dense_units=64,
-    dropout_rate=0.5
+    input_shape=(31, 31, 2), filters=(32, 64, 128), dense_units=64, dropout_rate=0.5
 ):
     """
     Create CNN architecture for real-bogus classification.
@@ -118,13 +116,10 @@ def create_realbogus_model(
     x = image_input
     for i, n_filters in enumerate(filters):
         x = layers.Conv2D(
-            n_filters, (3, 3),
-            activation='relu',
-            padding='same',
-            name=f'conv{i+1}'
+            n_filters, (3, 3), activation='relu', padding='same', name=f'conv{i + 1}'
         )(x)
-        x = layers.BatchNormalization(name=f'bn{i+1}')(x)
-        x = layers.MaxPooling2D((2, 2), name=f'pool{i+1}')(x)
+        x = layers.BatchNormalization(name=f'bn{i + 1}')(x)
+        x = layers.MaxPooling2D((2, 2), name=f'pool{i + 1}')(x)
 
     # Global pooling to handle variable input sizes
     x = layers.GlobalAveragePooling2D(name='global_pool')(x)
@@ -142,7 +137,7 @@ def create_realbogus_model(
     model.compile(
         optimizer=keras.optimizers.Adam(learning_rate=0.001),
         loss='binary_crossentropy',
-        metrics=['accuracy', keras.metrics.AUC(name='auc')]
+        metrics=['accuracy', keras.metrics.AUC(name='auc')],
     )
 
     return model
@@ -180,8 +175,7 @@ def _downscale_cutout(cutout, scale_factor, mode='mean'):
 
     # Reshape and aggregate
     reshaped = cutout_trimmed.reshape(
-        new_h // scale_factor, scale_factor,
-        new_w // scale_factor, scale_factor
+        new_h // scale_factor, scale_factor, new_w // scale_factor, scale_factor
     )
 
     if mode == 'median':
@@ -202,16 +196,20 @@ def _infer_cutout_radius_from_model(model, default_radius=15, log=None):
         shape = shape[0] if shape else None
 
     if shape is None or len(shape) < 4:
-        log(f"Model input shape unavailable; using default cutout size {2 * default_radius + 1} "
-            f"(radius {default_radius})")
+        log(
+            f"Model input shape unavailable; using default cutout size {2 * default_radius + 1} "
+            f"(radius {default_radius})"
+        )
         return default_radius
 
     height, width = shape[1], shape[2]
     channels = shape[3]
 
     if height is None or width is None:
-        log(f"Model input shape is dynamic; using default cutout size {2 * default_radius + 1} "
-            f"(radius {default_radius})")
+        log(
+            f"Model input shape is dynamic; using default cutout size {2 * default_radius + 1} "
+            f"(radius {default_radius})"
+        )
         return default_radius
 
     if height != width:
@@ -219,9 +217,7 @@ def _infer_cutout_radius_from_model(model, default_radius=15, log=None):
             f"Model input shape must be square for cutout extraction (got {height}x{width})."
         )
     if height % 2 == 0:
-        raise ValueError(
-            f"Model input size must be odd for symmetric cutouts (got {height})."
-        )
+        raise ValueError(f"Model input size must be odd for symmetric cutouts (got {height}).")
 
     radius = int((height - 1) // 2)
     log(f"Using cutout size {height}x{width} (radius {radius}) from model input shape")
@@ -285,11 +281,11 @@ def _pad_to_size(cutout, target_size, mode='edge'):
     # Crop dimensions that exceed target
     if h > target_size:
         start_h = (h - target_size) // 2
-        cutout = cutout[start_h:start_h+target_size, :]
+        cutout = cutout[start_h : start_h + target_size, :]
         h = target_size
     if w > target_size:
         start_w = (w - target_size) // 2
-        cutout = cutout[:, start_w:start_w+target_size]
+        cutout = cutout[:, start_w : start_w + target_size]
         w = target_size
 
     # Pad dimensions that are smaller than target
@@ -297,9 +293,7 @@ def _pad_to_size(cutout, target_size, mode='edge'):
     pad_w = target_size - w
     if pad_h > 0 or pad_w > 0:
         cutout = np.pad(
-            cutout,
-            ((pad_h // 2, pad_h - pad_h // 2), (pad_w // 2, pad_w - pad_w // 2)),
-            mode=mode
+            cutout, ((pad_h // 2, pad_h - pad_h // 2), (pad_w // 2, pad_w - pad_w // 2)), mode=mode
         )
 
     return cutout
@@ -383,10 +377,9 @@ def preprocess_cutout(
     # Handle background
     if cutout_bg is None:
         # Estimate from edges
-        edge_pixels = np.concatenate([
-            cutout_sci[0, :], cutout_sci[-1, :],
-            cutout_sci[:, 0], cutout_sci[:, -1]
-        ])
+        edge_pixels = np.concatenate(
+            [cutout_sci[0, :], cutout_sci[-1, :], cutout_sci[:, 0], cutout_sci[:, -1]]
+        )
         cutout_bg = np.median(edge_pixels)
 
     if np.isscalar(cutout_bg):
@@ -396,6 +389,7 @@ def preprocess_cutout(
     # so compute before any scaling to avoid unnecessary array operations)
     if cutout_err is None:
         from astropy.stats import mad_std
+
         sigma = float(mad_std(cutout_sci))
     elif np.isscalar(cutout_err):
         sigma = float(cutout_err)
@@ -464,7 +458,7 @@ def extract_cutouts(
     fwhm=None,
     target_fwhm=TARGET_FWHM,
     asinh_softening=None,
-    verbose=False
+    verbose=False,
 ):
     """
     Extract and preprocess cutouts for all objects.
@@ -678,7 +672,7 @@ def classify_realbogus(
     add_score=True,
     flag_bogus=True,
     batch_size=128,
-    verbose=False
+    verbose=False,
 ):
     """
     Classify detected objects as real or bogus using CNN.
@@ -757,16 +751,12 @@ def classify_realbogus(
         radius=cutout_radius,
         fwhm=fwhm,
         asinh_softening=asinh_softening,
-        verbose=verbose
+        verbose=verbose,
     )
 
     # Batch inference
     log(f"Running inference on {len(cutouts)} cutouts (batch_size={batch_size})")
-    predictions = model.predict(
-        cutouts,
-        batch_size=batch_size,
-        verbose=1 if verbose else 0
-    )
+    predictions = model.predict(cutouts, batch_size=batch_size, verbose=1 if verbose else 0)
 
     # Flatten predictions
     scores = predictions.flatten()
@@ -795,8 +785,10 @@ def classify_realbogus(
 
         # Filter
         obj_filtered = obj[~is_bogus]
-        log(f"Filtered: {len(obj_filtered)}/{len(obj)} objects retained "
-            f"({100*len(obj_filtered)/len(obj):.1f}%)")
+        log(
+            f"Filtered: {len(obj_filtered)}/{len(obj)} objects retained "
+            f"({100 * len(obj_filtered) / len(obj):.1f}%)"
+        )
 
         return obj_filtered
     else:
@@ -816,7 +808,7 @@ def train_realbogus_classifier(
     batch_size=64,
     class_weight='balanced',
     callbacks=None,
-    verbose=True
+    verbose=True,
 ):
     """
     Train real-bogus classifier on simulated or real data.
@@ -930,38 +922,31 @@ def train_realbogus_classifier(
             log("Warning: Only one class present in training data; disabling class weighting")
             class_weight = None
         else:
-            class_weight = {
-                0: len(y) / (2 * n_bogus),
-                1: len(y) / (2 * n_real)
-            }
+            class_weight = {0: len(y) / (2 * n_bogus), 1: len(y) / (2 * n_real)}
             log(f"Class weights: {class_weight}")
 
     # Default callbacks
     if callbacks is None:
         callbacks = [
             keras.callbacks.EarlyStopping(
-                monitor='val_loss',
-                patience=10,
-                restore_best_weights=True
+                monitor='val_loss', patience=10, restore_best_weights=True
             ),
             keras.callbacks.ReduceLROnPlateau(
-                monitor='val_loss',
-                factor=0.5,
-                patience=5,
-                min_lr=1e-6
-            )
+                monitor='val_loss', factor=0.5, patience=5, min_lr=1e-6
+            ),
         ]
 
     # Train model (pure image-based, no FWHM auxiliary input)
     log("Starting training...")
     history = model.fit(
-        X, y,
+        X,
+        y,
         validation_split=validation_split,
         epochs=epochs,
         batch_size=batch_size,
         class_weight=class_weight,
         callbacks=callbacks,
-        verbose=1 if verbose else 0
+        verbose=1 if verbose else 0,
     )
 
     log("Training complete")

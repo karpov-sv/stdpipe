@@ -1,4 +1,3 @@
-
 import psycopg2, psycopg2.extras
 
 import numpy as np
@@ -48,11 +47,7 @@ class DB:
         self.readonly = readonly
 
     def query(self, string="", data=(), table=True, simplify=True, verbose=False):
-        log = (
-            (verbose if callable(verbose) else print)
-            if verbose
-            else lambda *args, **kwargs: None
-        )
+        log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
         if self.conn.closed:
             log("DB connection is closed, re-connecting")

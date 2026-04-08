@@ -438,9 +438,7 @@ def _get_cutout_feature_specs(include_snr=False):
         ("bg_consistency", lambda c, g, _e, _f: _compute_background_consistency(c, g)),
     ]
     if include_snr:
-        specs.append(
-            ("cutout_snr", lambda c, _g, e, _f: _compute_cutout_snr(c, e))
-        )
+        specs.append(("cutout_snr", lambda c, _g, e, _f: _compute_cutout_snr(c, e)))
     return specs
 
 

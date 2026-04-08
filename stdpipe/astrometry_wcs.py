@@ -32,7 +32,7 @@ def _pack_params(w: WCS, pv_deg: int) -> np.ndarray:
 
     pv = np.zeros(pv_deg + 1, dtype=float)
     # astropy stores PV in w.wcs.get_pv() / w.wcs.set_pv(); get_pv returns list of (i, m, value)
-    for (i, m, val) in w.wcs.get_pv():
+    for i, m, val in w.wcs.get_pv():
         if i == 2 and 0 <= m <= pv_deg:
             pv[m] = float(val)
     p += pv.tolist()
@@ -45,7 +45,7 @@ def _unpack_params_to_wcs(base: WCS, p: np.ndarray, pv_deg: int) -> WCS:
     w.wcs.crval = [p[2], p[3]]
     w.wcs.cd = np.array([[p[4], p[5]], [p[6], p[7]]], dtype=float)
 
-    pv_vals = p[8: 8 + (pv_deg + 1)]
+    pv_vals = p[8 : 8 + (pv_deg + 1)]
     # Preserve any PV keywords for other axes (e.g. PV1_*)
     pv_list = [(i, m, val) for (i, m, val) in base.wcs.get_pv() if i != 2]
     pv_list += [(2, m, float(pv_vals[m])) for m in range(pv_deg + 1)]
@@ -109,9 +109,7 @@ def fit_zpn_wcs_from_points(
 
     # Choose a stable center for residuals (near the middle of your matched set)
     center = SkyCoord(
-        ra=np.median(sky.ra).to(u.deg),
-        dec=np.median(sky.dec).to(u.deg),
-        frame=sky.frame
+        ra=np.median(sky.ra).to(u.deg), dec=np.median(sky.dec).to(u.deg), frame=sky.frame
     )
 
     def _estimate_theta_max_deg(w: WCS) -> float | None:
@@ -146,8 +144,11 @@ def fit_zpn_wcs_from_points(
             )
             ra_c, dec_c = w.all_pix2world(crpix[0], crpix[1], 0)
             ra_k, dec_k = w.all_pix2world(corners[:, 0], corners[:, 1], 0)
-            if np.isfinite(ra_c) and np.isfinite(dec_c) and np.all(np.isfinite(ra_k)) and np.all(
-                np.isfinite(dec_k)
+            if (
+                np.isfinite(ra_c)
+                and np.isfinite(dec_c)
+                and np.all(np.isfinite(ra_k))
+                and np.all(np.isfinite(dec_k))
             ):
                 center = SkyCoord(ra_c * u.deg, dec_c * u.deg, frame="icrs")
                 sky_k = SkyCoord(ra_k * u.deg, dec_k * u.deg, frame="icrs")
@@ -393,7 +394,8 @@ def _fit_zpn_sip(
             w.wcs.ctype = [c + '-SIP' for c in w.wcs.ctype]
 
         w.sip = Sip(
-            a_vals, b_vals,
+            a_vals,
+            b_vals,
             np.zeros((sip_degree + 1, sip_degree + 1)),
             np.zeros((sip_degree + 1, sip_degree + 1)),
             crpix,
@@ -402,7 +404,10 @@ def _fit_zpn_sip(
         # Re-fit PV with SIP now applied (last iteration skip PV refit)
         if iteration < n_iter - 1:
             w, _ = fit_zpn_wcs_from_points(
-                xy, sky, w, pv_deg=pv_deg,
+                xy,
+                sky,
+                w,
+                pv_deg=pv_deg,
                 robust_loss=robust_loss,
                 f_scale_arcsec=f_scale_arcsec,
                 max_nfev=max_nfev,
@@ -521,12 +526,15 @@ def tan_wcs_to_zpn(
         crpix = np.array(w.wcs.crpix, dtype=float)
 
         # Corners in pixel coordinates (origin=0 convention for astropy WCS)
-        corners = np.array([
-            [0.0, 0.0],
-            [nx - 1.0, 0.0],
-            [0.0, ny - 1.0],
-            [nx - 1.0, ny - 1.0],
-        ], dtype=float)
+        corners = np.array(
+            [
+                [0.0, 0.0],
+                [nx - 1.0, 0.0],
+                [0.0, ny - 1.0],
+                [nx - 1.0, ny - 1.0],
+            ],
+            dtype=float,
+        )
 
         # Sky positions of corners and center under TAN WCS
         ra_c, dec_c = w_tan.all_pix2world(crpix[0], crpix[1], 0)
@@ -552,7 +560,7 @@ def tan_wcs_to_zpn(
 
     # Mild weighting: emphasize central region (helps stability)
     # (You can tune this; it’s just for initialization.)
-    wgt = 1.0 / (1.0 + (theta / (0.6 * theta_max_deg))**2)
+    wgt = 1.0 / (1.0 + (theta / (0.6 * theta_max_deg)) ** 2)
     Aw = A * wgt[:, None]
     bw = r_tan_deg * wgt
 
@@ -625,9 +633,7 @@ def _fit_tan_sip_robust(
     # Build WCS template
     if isinstance(projection, str) or projection is None:
         proj_code = projection if isinstance(projection, str) else "TAN"
-        wcs = celestial_frame_to_wcs(
-            frame=world_coords.frame, projection=proj_code
-        )
+        wcs = celestial_frame_to_wcs(frame=world_coords.frame, projection=proj_code)
     else:
         wcs = projection.deepcopy()
         wcs.sip = None
@@ -718,7 +724,10 @@ def _fit_tan_sip_robust(
     )
 
     fit = least_squares(
-        _sip_fit, p0_sip, args=sip_args, bounds=sip_bounds,
+        _sip_fit,
+        p0_sip,
+        args=sip_args,
+        bounds=sip_bounds,
     )
 
     # Pass 2: robust re-fit starting from L2 solution
@@ -832,7 +841,9 @@ def fit_wcs_from_points(
         # Then fit SIP corrections for non-radial distortions
         if sip_degree is not None and int(sip_degree) > 0:
             wcs_best = _fit_zpn_sip(
-                wcs_best, xy_arr, world_coords,
+                wcs_best,
+                xy_arr,
+                world_coords,
                 sip_degree=int(sip_degree),
                 pv_deg=zpn_deg,
             )
@@ -851,14 +862,16 @@ def fit_wcs_from_points(
 
     if effective_sip is not None and effective_sip > 0:
         return _fit_tan_sip_robust(
-            xy, world_coords,
+            xy,
+            world_coords,
             proj_point=proj_point,
             projection=projection,
             sip_degree=int(effective_sip),
         )
 
     return _astropy_fit(
-        xy, world_coords,
+        xy,
+        world_coords,
         proj_point=proj_point,
         projection=projection,
     )

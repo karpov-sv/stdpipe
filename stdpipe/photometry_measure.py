@@ -5,7 +5,6 @@ This module contains functions for performing aperture photometry
 on detected objects.
 """
 
-
 import numpy as np
 import photutils
 import photutils.background
@@ -19,6 +18,7 @@ from photutils.utils import calc_total_error
 # Check if new SEP features are available (version 1.4+)
 try:
     import sep
+
     _HAS_SEP_OPTIMAL = hasattr(sep, 'sum_circle_optimal') and hasattr(sep, 'stats_circann')
 except ImportError:
     _HAS_SEP_OPTIMAL = False
@@ -122,6 +122,7 @@ def _get_psf_stamp_at_position(psf, x, y, stamp_size=None):
     if isinstance(psf, dict):
         # PSFEx or ePSF model - lazy import to avoid circular dependency
         from stdpipe import psf as psf_module
+
         psf_stamp = psf_module.get_psf_stamp(psf, x=x, y=y, normalize=True)
     else:
         # Gaussian PSF - create stamp from FWHM with sub-pixel shift
@@ -169,8 +170,7 @@ def _get_psf_stamp_at_position(psf, x, y, stamp_size=None):
     return psf_stamp
 
 
-def _psf_centroid(image, x, y, psf, mask=None, box_size=None,
-                  maxiter=16, tol=1e-4):
+def _psf_centroid(image, x, y, psf, mask=None, box_size=None, maxiter=16, tol=1e-4):
     """
     Compute PSF-weighted centroid at a given position.
 
@@ -239,8 +239,9 @@ def _psf_centroid(image, x, y, psf, mask=None, box_size=None,
             box_half = box_size // 2
             y_start = box_half - psf_half
             x_start = box_half - psf_half
-            psf_resized[y_start:y_start + psf_stamp.shape[0],
-                        x_start:x_start + psf_stamp.shape[1]] = psf_stamp
+            psf_resized[
+                y_start : y_start + psf_stamp.shape[0], x_start : x_start + psf_stamp.shape[1]
+            ] = psf_stamp
             psf_stamp = psf_resized
 
         # Coordinate grids in image coordinates
@@ -351,7 +352,9 @@ def _grouped_optimal_extraction(image, err, positions, psf, bg_local=None, mask=
         results = []
         for i, (x, y) in enumerate(positions):
             bg = bg_local[i] if isinstance(bg_local, (list, np.ndarray)) else bg_local
-            results.append(_optimal_extraction(image, err, x, y, psf, bg_local=bg, mask=mask, radius=radius))
+            results.append(
+                _optimal_extraction(image, err, x, y, psf, bg_local=bg, mask=mask, radius=radius)
+            )
         return results
 
     # Extract common cutout
@@ -368,14 +371,14 @@ def _grouped_optimal_extraction(image, err, positions, psf, bg_local=None, mask=
 
     # Apply radius cutoff around each source if specified
     if radius is not None:
-        yy, xx = np.mgrid[0:cutout_shape[0], 0:cutout_shape[1]]
+        yy, xx = np.mgrid[0 : cutout_shape[0], 0 : cutout_shape[1]]
         radius_mask = np.zeros(cutout_shape, dtype=bool)
         for x, y in positions:
             # Position relative to cutout
             rel_x = x - x0
             rel_y = y - y0
-            dist = np.sqrt((xx - rel_x)**2 + (yy - rel_y)**2)
-            radius_mask |= (dist <= radius)
+            dist = np.sqrt((xx - rel_x) ** 2 + (yy - rel_y) ** 2)
+            radius_mask |= dist <= radius
         good &= radius_mask
 
     n_pix = int(np.sum(good))
@@ -394,7 +397,7 @@ def _grouped_optimal_extraction(image, err, positions, psf, bg_local=None, mask=
 
     # Build design matrix with K PSF columns (+ optional background term)
     # Only fit background if bg_local was provided (i.e., we subtracted source-specific backgrounds)
-    fit_background = (bg_local is not None and bg_offset != 0)
+    fit_background = bg_local is not None and bg_offset != 0
     n_params = K + 1 if fit_background else K
     A = np.zeros((n_pix, n_params))
     psf_norms = np.zeros(K)
@@ -445,7 +448,7 @@ def _grouped_optimal_extraction(image, err, positions, psf, bg_local=None, mask=
 
     # Data and weights
     D = data_cutout[good]
-    V = err_cutout[good]**2
+    V = err_cutout[good] ** 2
 
     # Use simplified weighting (Naylor 1998) to match single-source behavior:
     # Instead of full variance weighting W=1/V, use W=1 (unweighted least squares)
@@ -468,7 +471,9 @@ def _grouped_optimal_extraction(image, err, positions, psf, bg_local=None, mask=
         results = []
         for i, (x, y) in enumerate(positions):
             bg = bg_local[i] if isinstance(bg_local, (list, np.ndarray)) else bg_local
-            results.append(_optimal_extraction(image, err, x, y, psf, bg_local=bg, mask=mask, radius=radius))
+            results.append(
+                _optimal_extraction(image, err, x, y, psf, bg_local=bg, mask=mask, radius=radius)
+            )
         return results
 
     # Extract fluxes and errors
@@ -548,8 +553,8 @@ def _optimal_extraction(image, err, x, y, psf, bg_local=None, mask=None, radius=
     # Apply radius cutoff if specified
     if radius is not None:
         yy, xx = np.mgrid[0:stamp_size, 0:stamp_size]
-        dist = np.sqrt((xx - half)**2 + (yy - half)**2)
-        good &= (dist <= radius)
+        dist = np.sqrt((xx - half) ** 2 + (yy - half) ** 2)
+        good &= dist <= radius
 
     if np.sum(good) == 0:
         return np.nan, np.nan, 0, np.nan, np.nan
@@ -654,11 +659,7 @@ def measure_objects(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if not len(obj):
         log('No objects to measure')
@@ -681,16 +682,14 @@ def measure_objects(
 
     if bg is None:
         log(
-            'Subtracting global background: median %.1f rms %.2f' % (
-                np.median(bg_est_bg), np.std(bg_est_bg)
-            )
+            'Subtracting global background: median %.1f rms %.2f'
+            % (np.median(bg_est_bg), np.std(bg_est_bg))
         )
         image1 -= bg_est_bg
     else:
         log(
-            'Subtracting user-provided background: median %.1f rms %.2f' % (
-                np.median(bg), np.std(bg)
-            )
+            'Subtracting user-provided background: median %.1f rms %.2f'
+            % (np.median(bg), np.std(bg))
         )
         image1 -= bg
 
@@ -698,7 +697,8 @@ def measure_objects(
 
     if err is None:
         log(
-            'Using global background noise map: median %.1f rms %.2f + gain %.1f' % (
+            'Using global background noise map: median %.1f rms %.2f + gain %.1f'
+            % (
                 np.median(bg_est_rms),
                 np.std(bg_est_rms),
                 gain if gain else np.inf,
@@ -708,11 +708,7 @@ def measure_objects(
         if gain:
             err = calc_total_error(image1, err, gain)
     else:
-        log(
-            'Using user-provided noise map: median %.1f rms %.2f' % (
-                np.median(err), np.std(err)
-            )
-        )
+        log('Using user-provided noise map: median %.1f rms %.2f' % (np.median(err), np.std(err)))
 
     if fwhm is not None and fwhm > 0:
         log('Scaling aperture radii with FWHM %.1f pix' % fwhm)
@@ -733,13 +729,22 @@ def measure_objects(
             # Prepare PSF for centroiding
             if psf is not None:
                 psf_for_centroid = psf
-                log('Using PSF-weighted centroiding with %d iterations within %dx%d box' % (centroid_iter, box_size, box_size))
+                log(
+                    'Using PSF-weighted centroiding with %d iterations within %dx%d box'
+                    % (centroid_iter, box_size, box_size)
+                )
             else:
                 # Use original fwhm (before aper scaling) for PSF
                 psf_for_centroid = fwhm
-                log('Using PSF-weighted centroiding (Gaussian FWHM=%.1f) with %d iterations within %dx%d box' % (fwhm, centroid_iter, box_size, box_size))
+                log(
+                    'Using PSF-weighted centroiding (Gaussian FWHM=%.1f) with %d iterations within %dx%d box'
+                    % (fwhm, centroid_iter, box_size, box_size)
+                )
         else:
-            log('Using COM centroiding with %d iterations within %dx%d box' % (centroid_iter, box_size, box_size))
+            log(
+                'Using COM centroiding with %d iterations within %dx%d box'
+                % (centroid_iter, box_size, box_size)
+            )
 
         # Keep original pixel positions
         obj['x_orig'] = np.array(obj['x'])
@@ -769,8 +774,7 @@ def measure_objects(
                 if use_psf_centroid:
                     # PSF-weighted centroiding
                     x_new, y_new = _psf_centroid(
-                        image1, x, y, psf_for_centroid,
-                        mask=centroid_mask, box_size=box_size
+                        image1, x, y, psf_for_centroid, mask=centroid_mask, box_size=box_size
                     )
                 else:
                     # Standard COM centroiding
@@ -806,7 +810,7 @@ def measure_objects(
 
                 # Check convergence
                 if np.isfinite(x_new) and np.isfinite(y_new):
-                    shift = np.sqrt((x_new - x)**2 + (y_new - y)**2)
+                    shift = np.sqrt((x_new - x) ** 2 + (y_new - y) ** 2)
                     x, y = x_new, y_new
                     if shift < 0.01:  # Converged (0.01 pixel threshold)
                         break
@@ -833,9 +837,8 @@ def measure_objects(
         order_names = {0: 'constant (mean)', 1: 'plane', 2: 'quadratic'}
         order_name = order_names.get(bkg_order, f'order {bkg_order}')
         log(
-            'Using local background annulus between %.1f and %.1f pixels with %s fitting' % (
-                bkgann[0], bkgann[1], order_name
-            )
+            'Using local background annulus between %.1f and %.1f pixels with %s fitting'
+            % (bkgann[0], bkgann[1], order_name)
         )
 
         x_vals, y_vals, valid_pos = _extract_valid_positions(obj)
@@ -848,7 +851,8 @@ def measure_objects(
             if bkg_order == 0:
                 # Use photutils LocalBackground for order=0 (performance)
                 lbg = photutils.background.LocalBackground(
-                    bkgann[0], bkgann[1],
+                    bkgann[0],
+                    bkgann[1],
                     bkg_estimator=photutils.background.ModeEstimatorBackground(),
                 )
                 obj['bg_local'][valid_pos] = lbg(
@@ -948,7 +952,7 @@ def measure_objects(
                 if gid < 0:
                     continue  # Skip invalid positions group
 
-                group_mask = (group_ids == gid)
+                group_mask = group_ids == gid
                 group_indices = np.where(group_mask)[0]
                 group_size = len(group_indices)
 
@@ -956,22 +960,29 @@ def measure_objects(
                 obj['group_size'][group_mask] = group_size
 
                 # Get positions and backgrounds for this group
-                positions = [(obj['x'][i], obj['y'][i]) for i in group_indices
-                             if np.isfinite(obj['x'][i]) and np.isfinite(obj['y'][i])]
-                bg_locals = [obj['bg_local'][i] for i in group_indices
-                             if np.isfinite(obj['x'][i]) and np.isfinite(obj['y'][i])]
+                positions = [
+                    (obj['x'][i], obj['y'][i])
+                    for i in group_indices
+                    if np.isfinite(obj['x'][i]) and np.isfinite(obj['y'][i])
+                ]
+                bg_locals = [
+                    obj['bg_local'][i]
+                    for i in group_indices
+                    if np.isfinite(obj['x'][i]) and np.isfinite(obj['y'][i])
+                ]
 
                 if len(positions) == 0:
                     continue
 
                 # Perform grouped extraction
                 results = _grouped_optimal_extraction(
-                    image1, err,
+                    image1,
+                    err,
                     positions,
                     psf_for_extraction,
                     bg_local=bg_locals,
                     mask=mask | mask0,
-                    radius=aper
+                    radius=aper,
                 )
 
                 # Store results
@@ -986,26 +997,37 @@ def measure_objects(
                         obj['chi2_optimal'][i] = res[4]
                         valid_idx += 1
 
-            log('Processed %d groups (%d isolated, %d grouped)' % (
-                len(unique_groups),
-                np.sum(obj['group_size'] == 1),
-                np.sum(obj['group_size'] > 1)
-            ))
+            log(
+                'Processed %d groups (%d isolated, %d grouped)'
+                % (
+                    len(unique_groups),
+                    np.sum(obj['group_size'] == 1),
+                    np.sum(obj['group_size'] > 1),
+                )
+            )
 
         else:
             # Standard single-source optimal extraction
             for i, o in enumerate(obj):
                 if np.isfinite(o['x']) and np.isfinite(o['y']):
                     res = _optimal_extraction(
-                        image1, err,
-                        o['x'], o['y'],
+                        image1,
+                        err,
+                        o['x'],
+                        o['y'],
                         psf_for_extraction,
                         bg_local=o['bg_local'],
-                        mask=mask | mask0, # Do not count the flux from 'soft-masked' pixels
-                        radius=aper  # Use aperture radius as clipping radius
+                        mask=mask | mask0,  # Do not count the flux from 'soft-masked' pixels
+                        radius=aper,  # Use aperture radius as clipping radius
                     )
 
-                    o['flux'], o['fluxerr'], o['npix_optimal'], o['norm_optimal'], o['chi2_optimal'] = res
+                    (
+                        o['flux'],
+                        o['fluxerr'],
+                        o['npix_optimal'],
+                        o['norm_optimal'],
+                        o['chi2_optimal'],
+                    ) = res
 
         # Flag objects where optimal extraction failed
         obj['flags'][~np.isfinite(obj['flux'])] |= 0x800
@@ -1072,9 +1094,7 @@ def _get_sep_psf(psf, fwhm, log):
         )
         return sep_psf
 
-    raise TypeError(
-        "Unsupported PSF type: %s. Expected sep.PSF or PSFEx dict." % type(psf)
-    )
+    raise TypeError("Unsupported PSF type: %s. Expected sep.PSF or PSFEx dict." % type(psf))
 
 
 def measure_objects_sep(
@@ -1167,11 +1187,7 @@ def measure_objects_sep(
         )
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if not len(obj):
         log('No objects to measure')
@@ -1195,16 +1211,14 @@ def measure_objects_sep(
 
     if bg is None:
         log(
-            'Subtracting global background: median %.1f rms %.2f' % (
-                np.median(bg_est_bg), np.std(bg_est_bg)
-            )
+            'Subtracting global background: median %.1f rms %.2f'
+            % (np.median(bg_est_bg), np.std(bg_est_bg))
         )
         image1 -= bg_est_bg
     else:
         log(
-            'Subtracting user-provided background: median %.1f rms %.2f' % (
-                np.median(bg), np.std(bg)
-            )
+            'Subtracting user-provided background: median %.1f rms %.2f'
+            % (np.median(bg), np.std(bg))
         )
         image1 -= bg
 
@@ -1212,18 +1226,15 @@ def measure_objects_sep(
 
     if err is None:
         log(
-            'Using global background noise map: median %.1f rms %.2f' % (
+            'Using global background noise map: median %.1f rms %.2f'
+            % (
                 np.median(bg_est_rms),
                 np.std(bg_est_rms),
             )
         )
         err = bg_est_rms
     else:
-        log(
-            'Using user-provided noise map: median %.1f rms %.2f' % (
-                np.median(err), np.std(err)
-            )
-        )
+        log('Using user-provided noise map: median %.1f rms %.2f' % (np.median(err), np.std(err)))
 
     # Ensure error map is C-contiguous
     err = np.ascontiguousarray(err)
@@ -1277,11 +1288,14 @@ def measure_objects_sep(
             )
 
             # Update positions where centroiding succeeded and shift is reasonable
-            total_shift = np.sqrt((xwin - x_vals[valid_pos])**2 +
-                                  (ywin - y_vals[valid_pos])**2)
+            total_shift = np.sqrt((xwin - x_vals[valid_pos]) ** 2 + (ywin - y_vals[valid_pos]) ** 2)
             max_total_shift = fwhm if fwhm else 3.0  # Reject shifts larger than 1 FWHM
-            good_centroid = ((flag == 0) & np.isfinite(xwin) & np.isfinite(ywin) &
-                             (total_shift < max_total_shift))
+            good_centroid = (
+                (flag == 0)
+                & np.isfinite(xwin)
+                & np.isfinite(ywin)
+                & (total_shift < max_total_shift)
+            )
             update_indices = np.where(valid_pos)[0][good_centroid]
 
             obj['x'][update_indices] = xwin[good_centroid]
@@ -1291,8 +1305,10 @@ def measure_objects_sep(
                 n_failed = np.sum(~good_centroid)
                 n_converged = np.sum(good_centroid)
                 median_shift = np.median(total_shift[good_centroid]) if np.any(good_centroid) else 0
-                log(f'  Centroiding: {n_converged} converged, {n_failed} failed/rejected, '
-                    f'median shift={median_shift:.3f} pix')
+                log(
+                    f'  Centroiding: {n_converged} converged, {n_failed} failed/rejected, '
+                    f'median shift={median_shift:.3f} pix'
+                )
 
     if 'flags' not in obj.keys():
         obj['flags'] = 0
@@ -1382,7 +1398,10 @@ def measure_objects_sep(
                 raise ValueError("'fwhm' must be provided for optimal extraction")
 
             if bkgann_pix:
-                log('Using SEP optimal extraction with sigma-clipped background annulus (%.1f, %.1f)' % bkgann_pix)
+                log(
+                    'Using SEP optimal extraction with sigma-clipped background annulus (%.1f, %.1f)'
+                    % bkgann_pix
+                )
             else:
                 log('Using SEP optimal extraction (no local background)')
 
@@ -1401,9 +1420,9 @@ def measure_objects_sep(
                 mask=mask | mask0,
                 bkgann=bkgann_pix,  # SEP handles sigma-clipped background
                 grouped=group_sources,
-                group_radius_factor=1.2, # Empirical
+                group_radius_factor=1.2,  # Empirical
                 clip_sigma=clip_sigma,
-                clip_iters=clip_iters
+                clip_iters=clip_iters,
             )
 
             obj['flux'][valid_pos] = flux
@@ -1424,7 +1443,7 @@ def measure_objects_sep(
                 mask=mask | mask0,
                 bkgann=None,  # Handle separately for aperture photometry
                 clip_sigma=clip_sigma,
-                clip_iters=clip_iters
+                clip_iters=clip_iters,
             )
 
             obj['flux'][valid_pos] = flux
@@ -1443,7 +1462,7 @@ def measure_objects_sep(
                     bkgann_pix[1],
                     mask=mask | mask0,
                     clip_sigma=clip_sigma,
-                    clip_iters=clip_iters
+                    clip_iters=clip_iters,
                 )
 
                 # Subtract local background (use median)

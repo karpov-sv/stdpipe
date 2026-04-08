@@ -2,7 +2,6 @@
 Module containing the routines for handling various online catalogues.
 """
 
-
 import os, posixpath, shutil, tempfile
 import numpy as np
 
@@ -177,13 +176,14 @@ def _augment_ps1(cat, verbose=False):
                 -0.02239162647929074,
                 0.04401240100377888,
                 -0.038500349283596795,
-                -0.19509051168348646
+                -0.19509051168348646,
             ],
             [
                 0.014586929059030904,
                 -0.025228407778416825,
                 -0.21476143248697746,
-                -0.19509051168348637]
+                -0.19509051168348637,
+            ],
         )
 
         cat['Bmag'] = (
@@ -216,15 +216,9 @@ def _augment_ps1(cat, verbose=False):
         for _ in ['B', 'V', 'R', 'I']:
             cat[_] = cat[_ + 'mag']
 
-        cat['good'] = (cat['gmag'] - cat['rmag'] > -0.5) & (
-            cat['gmag'] - cat['rmag'] < 2.5
-        )
-        cat['good'] &= (cat['rmag'] - cat['imag'] > -0.5) & (
-            cat['rmag'] - cat['imag'] < 2.0
-        )
-        cat['good'] &= (cat['imag'] - cat['zmag'] > -0.5) & (
-            cat['imag'] - cat['zmag'] < 1.0
-        )
+        cat['good'] = (cat['gmag'] - cat['rmag'] > -0.5) & (cat['gmag'] - cat['rmag'] < 2.5)
+        cat['good'] &= (cat['rmag'] - cat['imag'] > -0.5) & (cat['rmag'] - cat['imag'] < 2.0)
+        cat['good'] &= (cat['imag'] - cat['zmag'] > -0.5) & (cat['imag'] - cat['zmag'] < 1.0)
 
         # to SDSS, zero points and color terms from https://arxiv.org/pdf/1203.0297.pdf
         cat['g_SDSS'] = (
@@ -304,9 +298,7 @@ def _augment_gaiadr2(cat, verbose=False):
             - 0.046799 * g[(g > 2) & (g < 6)] ** 2
             + 0.0035015 * g[(g > 2) & (g < 6)] ** 3
         )
-        gcorr[(g > 6) & (g < 16)] = g[(g > 6) & (g < 16)] - 0.0032 * (
-            g[(g > 6) & (g < 16)] - 6
-        )
+        gcorr[(g > 6) & (g < 16)] = g[(g > 6) & (g < 16)] - 0.0032 * (g[(g > 6) & (g < 16)] - 6)
         gcorr[g > 16] = g[g > 16] - 0.032
         g = gcorr
 
@@ -338,13 +330,9 @@ def _augment_gaiadr2(cat, verbose=False):
         )
 
         # to SDSS, from https://gea.esac.esa.int/archive/documentation/GDR2/Data_processing/chap_cu5pho/sec_cu5pho_calibr/ssec_cu5pho_PhotTransf.html
-        cat['g_SDSS'] = g - (
-            0.13518 - 0.46245 * bp_rp - 0.25171 * bp_rp ** 2 + 0.021349 * bp_rp ** 3
-        )
-        cat['r_SDSS'] = g - (
-            -0.12879 + 0.24662 * bp_rp - 0.027464 * bp_rp ** 2 - 0.049465 * bp_rp ** 3
-        )
-        cat['i_SDSS'] = g - (-0.29676 + 0.64728 * bp_rp - 0.10141 * bp_rp ** 2)
+        cat['g_SDSS'] = g - (0.13518 - 0.46245 * bp_rp - 0.25171 * bp_rp**2 + 0.021349 * bp_rp**3)
+        cat['r_SDSS'] = g - (-0.12879 + 0.24662 * bp_rp - 0.027464 * bp_rp**2 - 0.049465 * bp_rp**3)
+        cat['i_SDSS'] = g - (-0.29676 + 0.64728 * bp_rp - 0.10141 * bp_rp**2)
 
     except KeyError as e:
         log(f"Warning: Missing required column for Gaia DR2 augmentation: {e}")
@@ -357,75 +345,40 @@ def _augment_skymapper(cat, verbose=False):
         log("Augmenting the catalogue with Pan-STARRS photometry using SkyMapper DR4 mags")
 
         # SkyMapper DR4 to PS1 griz, my fit based on Pancino et al. (2022)
-        pg1,pg2 = (
-            [
-                -0.07715320986152466,
-                0.2694597282089696,
-                0.04069379065128178,
-                0.01396290714542747
-            ],
-            [
-                0.026097008342026252,
-                -0.14040957287568073,
-                0.133647539780504,
-                0.013962907145427432
-            ]
+        pg1, pg2 = (
+            [-0.07715320986152466, 0.2694597282089696, 0.04069379065128178, 0.01396290714542747],
+            [0.026097008342026252, -0.14040957287568073, 0.133647539780504, 0.013962907145427432],
         )
-        pr1,pr2 = (
-            [
-                0.08779280979185472,
-                -0.23257704629617004,
-                0.1890698144343673,
-                -0.008125550119663026
-            ],
-            [
-                -0.06273832689338121,
-                0.21909317812693613,
-                -0.23340488268623696,
-                -0.00812555011966309
-            ]
+        pr1, pr2 = (
+            [0.08779280979185472, -0.23257704629617004, 0.1890698144343673, -0.008125550119663026],
+            [-0.06273832689338121, 0.21909317812693613, -0.23340488268623696, -0.00812555011966309],
         )
-        pi1,pi2 = (
+        pi1, pi2 = (
             [
                 0.03553380678975111,
                 -0.021174189684500792,
                 -0.028159666883815007,
-                0.0009748746568893062
+                0.0009748746568893062,
             ],
-            [
-                0.00911922467970264,
-                -0.0362286983251751,
-                0.1403094994141109,
-                0.0009748746568892609
-            ]
+            [0.00911922467970264, -0.0362286983251751, 0.1403094994141109, 0.0009748746568892609],
         )
-        pz1,pz2 = (
+        pz1, pz2 = (
             [
                 0.08071260245520126,
                 -0.051693023216670575,
                 -0.0739439627982131,
-                -0.0020460270205769223
+                -0.0020460270205769223,
             ],
             [
                 0.09720715174271254,
                 -0.32063637962189184,
                 0.37918283208242526,
-                -0.0020460270205769305
-            ]
-        )
-        py1,py2 = (
-            [
-                0.038781034592287725,
-                -0.11040188064275973,
-                0.08235396198116865,
-                0.006980454415779221
+                -0.0020460270205769305,
             ],
-            [
-                -0.0649739656901001,
-                0.205320995228645,
-                -0.28233276303592,
-                0.006980454415779424
-            ]
+        )
+        py1, py2 = (
+            [0.038781034592287725, -0.11040188064275973, 0.08235396198116865, 0.006980454415779221],
+            [-0.0649739656901001, 0.205320995228645, -0.28233276303592, 0.006980454415779424],
         )
 
         cat['gmag'] = (
@@ -462,60 +415,35 @@ def _augment_skymapper(cat, verbose=False):
 
         # SkyMapper DR4 to Johnson-Cousins BVRI, my fit based on Pancino et al. (2022)
         pB1, pB2 = (
-            [
-                -0.22773918482205113,
-                0.1818124624962873,
-                1.0021365492384895,
-                0.10762635377473588
-            ],
-            [
-                -0.004034933919297649,
-                0.08214592357213418,
-                -0.07535454054888649,
-                0.10762635377473558
-            ]
+            [-0.22773918482205113, 0.1818124624962873, 1.0021365492384895, 0.10762635377473588],
+            [-0.004034933919297649, 0.08214592357213418, -0.07535454054888649, 0.10762635377473558],
         )
         pV1, pV2 = (
             [
                 -0.02545732895304914,
                 0.03256423830249228,
                 -0.33074199873567045,
-                -0.002938730214382037
+                -0.002938730214382037,
             ],
-            [
-                -0.007342074336918033,
-                0.08255055271047995,
-                -0.14349325478829064,
-                -0.0029387302143822
-            ]
+            [-0.007342074336918033, 0.08255055271047995, -0.14349325478829064, -0.0029387302143822],
         )
         pR1, pR2 = (
-            [
-                0.07296699439306827,
-                -0.1943702618426095,
-                0.15375263988851387,
-                -0.08547735652048871
-            ],
-            [
-                -0.07378125129406726,
-                0.18462924970775316,
-                -0.40720945890364135,
-                -0.08547735652048903
-            ]
+            [0.07296699439306827, -0.1943702618426095, 0.15375263988851387, -0.08547735652048871],
+            [-0.07378125129406726, 0.18462924970775316, -0.40720945890364135, -0.08547735652048903],
         )
         pI1, pI2 = (
             [
                 -0.00925391710305653,
                 0.046223960182760516,
                 -0.06889215990613289,
-                -0.19321699685334734
+                -0.19321699685334734,
             ],
             [
                 0.01197866152020802,
                 -0.044370062623186206,
                 -0.05231484699406009,
-                -0.19321699685334745
-            ]
+                -0.19321699685334745,
+            ],
         )
 
         cat['Bmag'] = (
@@ -589,9 +517,7 @@ def _augment_gaiadr3syn(cat, verbose=False):
     try:
         # Compute magnitude errors from flux errors
         for name in ['U', 'B', 'V', 'R', 'I', 'u', 'g', 'r', 'i', 'z', 'y']:
-            cat['e_' + name + 'mag'] = (
-                2.5 / np.log(10) * cat['e_F' + name] / cat['F' + name]
-            )
+            cat['e_' + name + 'mag'] = 2.5 / np.log(10) * cat['e_F' + name] / cat['F' + name]
 
         log("Converting the catalogue Sloan magnitudes to Pan-STARRS ones")
 
@@ -681,8 +607,16 @@ def augment_cat_bands(cat, catalog=None, verbose=False):
 
 
 def get_cat_vizier(
-    ra0, dec0, sr0, catalog='ps1', limit=-1, filters={}, extra=[],
-    get_distance=False, augment_bands=True, verbose=False
+    ra0,
+    dec0,
+    sr0,
+    catalog='ps1',
+    limit=-1,
+    filters={},
+    extra=[],
+    get_distance=False,
+    augment_bands=True,
+    verbose=False,
 ):
     """Download any catalogue from Vizier.
 
@@ -714,11 +648,7 @@ def get_cat_vizier(
     """
 
     # Simple Wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     # TODO: add positional errors
 
@@ -765,11 +695,7 @@ def get_cat_vizier(
     log('Got', len(cat), 'entries with', len(cat.colnames), 'columns')
 
     # Fix _RAJ2000/_DEJ2000
-    if (
-        '_RAJ2000' in cat.keys()
-        and '_DEJ2000' in cat.keys()
-        and not 'RAJ2000' in cat.keys()
-    ):
+    if '_RAJ2000' in cat.keys() and '_DEJ2000' in cat.keys() and not 'RAJ2000' in cat.keys():
         cat.rename_columns(['_RAJ2000', '_DEJ2000'], ['RAJ2000', 'DEJ2000'])
 
     if get_distance and 'RAJ2000' in cat.colnames and 'DEJ2000' in cat.colnames:
@@ -817,9 +743,7 @@ def xmatch_objects(obj, catalog='ps1', sr=3 / 3600, col_ra='ra', col_dec='dec', 
     return xcat
 
 
-def xmatch_skybot(
-    obj, sr=10 / 3600, time=None, col_ra='ra', col_dec='dec', col_id='id'
-):
+def xmatch_skybot(obj, sr=10 / 3600, time=None, col_ra='ra', col_dec='dec', col_id='id'):
     """Cross-match object list with positions of Solar System objects using SkyBoT service
 
     The routine works by requesting the list of all solar system objects in a cone containing all
@@ -882,9 +806,7 @@ def xmatch_ned(obj, sr=3 / 3600, col_ra='ra', col_dec='dec', col_id='id'):
 
     # FIXME: is there more optimal way to query NED for multiple sky positions?..
     for row in obj:
-        res = Ned().query_region(
-            SkyCoord(row[col_ra], row[col_dec], unit='deg'), sr * u.deg
-        )
+        res = Ned().query_region(SkyCoord(row[col_ra], row[col_dec], unit='deg'), sr * u.deg)
 
         if res:
             res['id'] = row[col_id]

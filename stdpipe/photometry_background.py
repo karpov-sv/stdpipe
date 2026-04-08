@@ -128,7 +128,9 @@ def get_background_percentile(
     return back
 
 
-def get_background_morphology(image, mask=None, size=25, iterations=1, smooth=True, smooth_size=None):
+def get_background_morphology(
+    image, mask=None, size=25, iterations=1, smooth=True, smooth_size=None
+):
     """
     Background estimation via morphological opening (non-grid method).
 
@@ -184,8 +186,8 @@ def get_background_morphology(image, mask=None, size=25, iterations=1, smooth=Tr
 
     # Morphological opening with circular structuring element
     # Create circular structuring element
-    y, x = np.ogrid[-size//2:size//2+1, -size//2:size//2+1]
-    structure = (x*x + y*y) <= (size/2)**2
+    y, x = np.ogrid[-size // 2 : size // 2 + 1, -size // 2 : size // 2 + 1]
+    structure = (x * x + y * y) <= (size / 2) ** 2
 
     # Apply opening
     back = grey_opening(img, structure=structure)
@@ -465,9 +467,7 @@ def get_background_polynomial(
     # --- helpers ---------------------------------------------------------
     def _poly_terms(ord_):
         """Return list of (p, q) exponent pairs for full 2D polynomial."""
-        return [(p, q)
-                for p in range(ord_ + 1)
-                for q in range(ord_ + 1 - p)]
+        return [(p, q) for p in range(ord_ + 1) for q in range(ord_ + 1 - p)]
 
     terms = _poly_terms(order)
 
@@ -485,9 +485,9 @@ def get_background_polynomial(
         for p, q in terms:
             col = np.ones_like(x)
             if p:
-                col = col * x ** p
+                col = col * x**p
             if q:
-                col = col * y ** q
+                col = col * y**q
             cols.append(col)
         return np.column_stack(cols)
 
@@ -499,8 +499,7 @@ def get_background_polynomial(
         if directional:
             bg += coeffs[1] * x_1d[np.newaxis, :]
             bg += coeffs[2] * y_1d[:, np.newaxis]
-            t = (np.cos(theta_rad) * x_1d[np.newaxis, :]
-                 + np.sin(theta_rad) * y_1d[:, np.newaxis])
+            t = np.cos(theta_rad) * x_1d[np.newaxis, :] + np.sin(theta_rad) * y_1d[:, np.newaxis]
             tk = t.copy()
             for k in range(2, order + 1):
                 tk = tk * t
@@ -795,10 +794,12 @@ def get_background_gp(
         rows = np.arange(y0, y1, dtype=float)
 
         # Create (x, y) coordinate pairs for this chunk
-        X_pred = np.column_stack([
-            np.tile(x_coords, y1 - y0),
-            np.repeat(rows, nx),
-        ])
+        X_pred = np.column_stack(
+            [
+                np.tile(x_coords, y1 - y0),
+                np.repeat(rows, nx),
+            ]
+        )
 
         if get_uncertainty:
             pred, pred_std = gp.predict(X_pred, return_std=True)

@@ -3,7 +3,6 @@ Module containing higher-level pipeline building blocks, wrapping together lower
 functionality of STDPipe modules.
 """
 
-
 import os
 import numpy as np
 import itertools
@@ -33,7 +32,7 @@ def make_mask(
     external_mask=None,
     mask_cosmics=False,
     gain=None,
-    verbose=True
+    verbose=True,
 ):
     """
     Make basic mask for the image. The mask is a boolean bitmap with True values marking the regions
@@ -59,11 +58,7 @@ def make_mask(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     mask = ~np.isfinite(image)
 
@@ -80,7 +75,7 @@ def make_mask(
 
     if saturation is not None:
         if type(saturation) is bool and saturation == True:
-            saturation = 0.05*np.nanmedian(image) + 0.95*np.nanmax(image) # med + 0.95(max-med)
+            saturation = 0.05 * np.nanmedian(image) + 0.95 * np.nanmax(image)  # med + 0.95(max-med)
         log('Masking pixels above saturation level %.1f ADU' % saturation)
         mask |= image >= saturation
 
@@ -96,24 +91,26 @@ def make_mask(
         rms = bg.rms()
         var = rms**2
         if gain:
-            var += np.abs(image - bg.back())/gain
+            var += np.abs(image - bg.back()) / gain
         cmask, cimage = astroscrappy.detect_cosmics(
-            image, mask,
+            image,
+            mask,
             verbose=verbose,
             invar=var.astype(np.float32),
             gain=gain if gain else 1.0,
             satlevel=saturation if saturation else np.max(image),
-            cleantype='medmask')
-        log('Done masking cosmics, %d (%.1f%%) pixels masked' % (
-            np.sum(cmask),
-            100*np.sum(cmask)/cmask.shape[0]/cmask.shape[1]
-        ))
+            cleantype='medmask',
+        )
+        log(
+            'Done masking cosmics, %d (%.1f%%) pixels masked'
+            % (np.sum(cmask), 100 * np.sum(cmask) / cmask.shape[0] / cmask.shape[1])
+        )
         mask |= cmask
 
-    log('%d (%.1f%%) pixels masked in total' % (
-        np.sum(mask),
-        100*np.sum(mask)/mask.shape[0]/mask.shape[1]
-    ))
+    log(
+        '%d (%.1f%%) pixels masked in total'
+        % (np.sum(mask), 100 * np.sum(mask) / mask.shape[0] / mask.shape[1])
+    )
 
     return mask
 
@@ -136,9 +133,8 @@ def refine_astrometry(
     method='quadhash',
     update=True,
     verbose=False,
-    **kwargs
+    **kwargs,
 ):
-
     """Higher-level astrometric refinement routine that may use quad-hash, SCAMP, or pure Python based methods.
 
     :param obj: List of objects on the frame that should contain at least `x`, `y` and `flux` columns.
@@ -163,11 +159,7 @@ def refine_astrometry(
 
     """
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     log(
         'Astrometric refinement using %.1f arcsec radius, %s matching and %s WCS fitting'
@@ -195,7 +187,7 @@ def refine_astrometry(
             cat_col_mag=cat_col_mag,
             update=update,
             verbose=verbose,
-            **kwargs
+            **kwargs,
         )
 
     elif method == 'scamp':
@@ -214,7 +206,7 @@ def refine_astrometry(
             cat_col_dec_err=cat_col_dec_err,
             update=update,
             verbose=verbose,
-            **kwargs
+            **kwargs,
         )
 
     for iter in range(n_iter):
@@ -238,10 +230,7 @@ def refine_astrometry(
                 log('Photometric match failed, cannot refine WCS')
                 return None
             elif np.sum(m['idx']) < min_matches:
-                log(
-                    'Too few (%d) good photometric matches, cannot refine WCS'
-                    % np.sum(m['idx'])
-                )
+                log('Too few (%d) good photometric matches, cannot refine WCS' % np.sum(m['idx']))
                 return None
             else:
                 log(
@@ -260,14 +249,7 @@ def refine_astrometry(
         else:
             # Simple positional matching
             wcs = astrometry.refine_wcs(
-                obj,
-                cat,
-                order=order,
-                sr=sr,
-                match=True,
-                method=method,
-                verbose=verbose,
-                **kwargs
+                obj, cat, order=order, sr=sr, match=True, method=method, verbose=verbose, **kwargs
             )
 
         if update:
@@ -337,15 +319,11 @@ def filter_transient_candidates(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if fwhm is None:
         idx = obj['flags'] == 0
-        idx &= obj['magerr'] < 0.05 # S/N > 20
+        idx &= obj['magerr'] < 0.05  # S/N > 20
         fwhm = np.median(obj['fwhm'][idx])
 
     if sr is None:
@@ -393,10 +371,7 @@ def filter_transient_candidates(
         obj_in['candidate_refcat'] = False
     if cat is not None and np.any(cand_idx):
         m = astrometry.spherical_match(
-            obj[obj_col_ra],
-            obj[obj_col_dec],
-            cat[cat_col_ra],
-            cat[cat_col_dec], sr
+            obj[obj_col_ra], obj[obj_col_dec], cat[cat_col_ra], cat[cat_col_dec], sr
         )
         cand_idx[m[0]] = False
 
@@ -432,9 +407,7 @@ def filter_transient_candidates(
             cand_idx &= ~np.in1d(obj[col_id], xcat[col_id])
 
             if remove == False:
-                obj_in['candidate_vizier_' + catname][
-                    np.in1d(obj[col_id], xcat[col_id])
-                ] = True
+                obj_in['candidate_vizier_' + catname][np.in1d(obj[col_id], xcat[col_id])] = True
 
         log(
             np.sum(cand_idx),
@@ -453,19 +426,13 @@ def filter_transient_candidates(
 
         if time is not None:
             xcat = catalogs.xmatch_skybot(
-                obj[cand_idx],
-                time=time,
-                col_ra=obj_col_ra,
-                col_dec=obj_col_dec,
-                col_id=col_id
+                obj[cand_idx], time=time, col_ra=obj_col_ra, col_dec=obj_col_dec, col_id=col_id
             )
             if xcat is not None and len(xcat):
                 cand_idx &= ~np.in1d(obj[col_id], xcat[col_id])
 
                 if remove == False:
-                    obj_in['candidate_skybot'][
-                        np.in1d(obj[col_id], xcat[col_id])
-                    ] = True
+                    obj_in['candidate_skybot'][np.in1d(obj[col_id], xcat[col_id])] = True
 
             log(np.sum(cand_idx), 'remains after matching with SkyBot')
 
@@ -530,9 +497,8 @@ def calibrate_photometry(
     cat_col_dec='DEJ2000',
     update=True,
     verbose=False,
-    **kwargs
+    **kwargs,
 ):
-
     """Higher-level photometric calibration routine.
 
     It wraps :func:`stdpipe.photometry.match` routine with some convenient defaults so that it is easier to use with typical tabular data.
@@ -563,11 +529,7 @@ def calibrate_photometry(
 
     """
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if sr is None:
         if pixscale is not None:
@@ -615,7 +577,7 @@ def calibrate_photometry(
         spatial_order=order,
         bg_order=bg_order,
         verbose=verbose,
-        **kwargs
+        **kwargs,
     )
 
     if m:
@@ -677,11 +639,7 @@ def make_random_stars(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if (width is None or height is None) and shape is not None:
         height, width = shape
@@ -745,11 +703,7 @@ def place_random_stars(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     cat = make_random_stars(
         shape=image.shape,
@@ -770,17 +724,8 @@ def place_random_stars(
     return cat
 
 
-def split_sub_fn(
-    x1,
-    y1,
-    dx1,
-    dy1,
-    *args,
-    get_origin=False,
-    **kwargs
-):
-    """
-    """
+def split_sub_fn(x1, y1, dx1, dy1, *args, get_origin=False, **kwargs):
+    """ """
     result = []
 
     if get_origin:
@@ -879,7 +824,7 @@ def split_image(
     get_index=False,
     get_origin=False,
     verbose=False,
-    **kwargs
+    **kwargs,
 ):
     """Generator function to split the image into several (`nx` x `ny`)
     blocks, while also optionally providing the subsets of images, FITS
@@ -920,11 +865,7 @@ def split_image(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if not ny:
         ny = nx
@@ -961,9 +902,7 @@ def split_image(
     )
 
     for i, (x0, y0) in enumerate(
-        itertools.product(
-            range(xmin, xmax - dx + 1, dx), range(ymin, ymax - dy + 1, dy)
-        )
+        itertools.product(range(xmin, xmax - dx + 1, dx), range(ymin, ymax - dy + 1, dy))
     ):
         # Make some overlap
         x1 = max(0, x0 - overlap)
@@ -971,16 +910,7 @@ def split_image(
         dx1 = min(x0 - x1 + dx + overlap, xmax - x1)
         dy1 = min(y0 - y1 + dy + overlap, ymax - y1)
 
-        result = split_sub_fn(
-            x1,
-            y1,
-            dx1,
-            dy1,
-            image,
-            *args,
-            get_origin=get_origin,
-            **kwargs
-        )
+        result = split_sub_fn(x1, y1, dx1, dy1, image, *args, get_origin=get_origin, **kwargs)
 
         if get_index:
             result = [i] + result
@@ -999,7 +929,7 @@ def get_subimage_centered(
     height=None,
     get_origin=False,
     verbose=False,
-    **kwargs
+    **kwargs,
 ):
     """Convenience function for getting the cropped sub-image centered at a
     given pixel position, while also optionally providing the mask, header,
@@ -1032,11 +962,7 @@ def get_subimage_centered(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if not height:
         height = width
@@ -1056,14 +982,7 @@ def get_subimage_centered(
     )
 
     result = split_sub_fn(
-        x1,
-        y1,
-        x2 - x1 + 1,
-        y2 - y1 + 1,
-        image,
-        *args,
-        get_origin=get_origin,
-        **kwargs
+        x1, y1, x2 - x1 + 1, y2 - y1 + 1, image, *args, get_origin=get_origin, **kwargs
     )
 
     return result
@@ -1083,11 +1002,7 @@ def get_detection_limit(obj, sn=5, method='sn', verbose=True):
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     if method == 'sn':
         log('Estimating detection limit using S/N vs magnitude method')

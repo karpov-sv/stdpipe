@@ -1,4 +1,3 @@
-
 import xml.dom.minidom as minidom
 import requests
 import json
@@ -29,9 +28,9 @@ def simbadResolve(name='m31'):
 def parseSexadecimal(string):
     value = 0
 
-    m = re.search(
-        "^\s*([+-])?\s*(\d{1,3})\s+(\d{1,2})\s+(\d{1,2}\.?\d*)\s*$", string
-    ) or re.search("^\s*([+-])?\s*(\d{1,3})\:(\d{1,2})\:(\d{1,2}\.?\d*)\s*$", string)
+    m = re.search("^\s*([+-])?\s*(\d{1,3})\s+(\d{1,2})\s+(\d{1,2}\.?\d*)\s*$", string) or re.search(
+        "^\s*([+-])?\s*(\d{1,3})\:(\d{1,2})\:(\d{1,2}\.?\d*)\s*$", string
+    )
     if m:
         value = float(m.group(2)) + float(m.group(3)) / 60 + float(m.group(4)) / 3600
 
@@ -196,11 +195,7 @@ def resolve(string='M33', verbose=False):
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     target = None
 
@@ -225,9 +220,7 @@ def resolve(string='M33', verbose=False):
         if m:
             log("Resolved as two sexadecimal values, interpreted as hours and degrees")
 
-            ra = (
-                float(m.group(1)) + float(m.group(2)) / 60 + float(m.group(3)) / 3600
-            ) * 15
+            ra = (float(m.group(1)) + float(m.group(2)) / 60 + float(m.group(3)) / 3600) * 15
             dec = float(m.group(5)) + float(m.group(6)) / 60 + float(m.group(7)) / 3600
 
             if m.group(4) == '-':

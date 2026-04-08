@@ -47,9 +47,11 @@ from stdpipe.astrometry_wcs import fit_wcs_from_points
 # Utilities
 # -----------------------------
 
+
 def _as_float_array(x) -> np.ndarray:
     a = np.asarray(x)
     return a.astype(np.float64, copy=False)
+
 
 def _finite_mask(*cols) -> np.ndarray:
     m = np.ones(len(cols[0]), dtype=bool)
@@ -58,22 +60,25 @@ def _finite_mask(*cols) -> np.ndarray:
         m &= np.isfinite(c)
     return m
 
+
 def _pick_brightest_obj(obj: Table, n: int) -> np.ndarray:
     if "flux" in obj.colnames:
         v = _as_float_array(obj["flux"])
         key = -v  # higher flux = brighter
     elif "mag" in obj.colnames:
         v = _as_float_array(obj["mag"])
-        key = v   # lower mag = brighter
+        key = v  # lower mag = brighter
     else:
         raise ValueError("obj must contain 'flux' or 'mag'")
     idx = np.argsort(key)
     return idx[: min(n, len(idx))]
 
+
 def _pick_brightest_cat(cat: Table, n: int) -> np.ndarray:
     v = _as_float_array(cat["mag"])
     idx = np.argsort(v)
     return idx[: min(n, len(idx))]
+
 
 def _robust_sigma(x: np.ndarray) -> float:
     x = np.asarray(x, dtype=np.float64)
@@ -81,17 +86,22 @@ def _robust_sigma(x: np.ndarray) -> float:
     mad = np.nanmedian(np.abs(x - med))
     return 1.4826 * mad if mad > 0 else np.nanstd(x)
 
+
 def mag_signature(mags4: np.ndarray) -> Tuple[int, int, int, int]:
     mags4 = np.asarray(mags4, dtype=np.float64)
     if len(mags4) != 4:
         raise ValueError(f"Expected 4 magnitudes, got {len(mags4)}")
     return tuple(np.argsort(mags4).astype(int).tolist())
 
+
 # -----------------------------
 # TAN projection
 # -----------------------------
 
-def tan_project_deg(ra_deg: np.ndarray, dec_deg: np.ndarray, ra0_deg: float, dec0_deg: float) -> Tuple[np.ndarray, np.ndarray]:
+
+def tan_project_deg(
+    ra_deg: np.ndarray, dec_deg: np.ndarray, ra0_deg: float, dec0_deg: float
+) -> Tuple[np.ndarray, np.ndarray]:
     ra = np.deg2rad(_as_float_array(ra_deg))
     dec = np.deg2rad(_as_float_array(dec_deg))
     ra0 = np.deg2rad(float(ra0_deg))
@@ -112,11 +122,15 @@ def tan_project_deg(ra_deg: np.ndarray, dec_deg: np.ndarray, ra0_deg: float, dec
     v = (cos_dec0 * sin_dec - sin_dec0 * cos_dec * cos_dra) / denom
     return u, v
 
+
 # -----------------------------
 # Similarity transform (Umeyama)
 # -----------------------------
 
-def estimate_similarity_2d(A: np.ndarray, B: np.ndarray, allow_reflection: bool = True) -> Tuple[np.ndarray, np.ndarray, float]:
+
+def estimate_similarity_2d(
+    A: np.ndarray, B: np.ndarray, allow_reflection: bool = True
+) -> Tuple[np.ndarray, np.ndarray, float]:
     A = np.asarray(A, dtype=np.float64)
     B = np.asarray(B, dtype=np.float64)
     if A.shape != B.shape or A.shape[1] != 2:
@@ -144,13 +158,16 @@ def estimate_similarity_2d(A: np.ndarray, B: np.ndarray, allow_reflection: bool 
     t = mu_B - s * (R @ mu_A)
     return R, t, float(s)
 
+
 def apply_similarity(xy: np.ndarray, R: np.ndarray, t: np.ndarray, s: float) -> np.ndarray:
     xy = np.asarray(xy, dtype=np.float64)
     return (s * (xy @ R.T)) + t
 
+
 # -----------------------------
 # Affine transform
 # -----------------------------
+
 
 def estimate_affine_2d(A: np.ndarray, B: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     """Fit affine transform B = A @ M.T + t via least squares (6 DOF).
@@ -169,10 +186,11 @@ def estimate_affine_2d(A: np.ndarray, B: np.ndarray) -> Tuple[np.ndarray, np.nda
         raise ValueError(f"Degenerate affine fit (condition number {cond:.1e})")
     X, _, _, _ = np.linalg.lstsq(A_aug, B, rcond=None)
     M = X[:2].T  # (2, 2)
-    t = X[2]     # (2,)
+    t = X[2]  # (2,)
     if not (np.all(np.isfinite(M)) and np.all(np.isfinite(t))):
         raise ValueError("Degenerate affine fit (non-finite values)")
     return M, t
+
 
 def apply_affine(xy: np.ndarray, M: np.ndarray, t: np.ndarray) -> np.ndarray:
     """Apply affine transform: result = xy @ M.T + t
@@ -186,9 +204,11 @@ def apply_affine(xy: np.ndarray, M: np.ndarray, t: np.ndarray) -> np.ndarray:
         raise ValueError("Affine transform produced non-finite values")
     return result
 
+
 # -----------------------------
 # Mutual nearest-neighbor matching
 # -----------------------------
+
 
 def _mutual_nearest_neighbor(
     xy_a: np.ndarray,
@@ -227,9 +247,11 @@ def _mutual_nearest_neighbor(
     mutual = nn_rev[b_ids] == a_ids
     return a_ids[mutual], b_ids[mutual]
 
+
 # -----------------------------
 # Quad generation & descriptors
 # -----------------------------
+
 
 def make_local_quads(points: np.ndarray, k: int = 8) -> List[Tuple[int, int, int, int]]:
     points = np.asarray(points, dtype=np.float64)
@@ -248,6 +270,7 @@ def make_local_quads(points: np.ndarray, k: int = 8) -> List[Tuple[int, int, int
                 for c in range(b + 1, len(neigh)):
                     quads.append((i, int(neigh[a]), int(neigh[b]), int(neigh[c])))
     return quads
+
 
 def quad_descriptor(P: np.ndarray) -> Tuple[np.ndarray, float]:
     """
@@ -284,8 +307,11 @@ def quad_descriptor(P: np.ndarray) -> Tuple[np.ndarray, float]:
     desc = np.array([pair[0, 0], pair[0, 1], pair[1, 0], pair[1, 1]], dtype=np.float64)
     return desc, L
 
+
 # Phase 2 Optimization: Vectorized quad descriptor calculation
-def quad_descriptor_batch(points: np.ndarray, quad_indices: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+def quad_descriptor_batch(
+    points: np.ndarray, quad_indices: np.ndarray
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Vectorized quad descriptor calculation for multiple quads.
 
@@ -309,7 +335,7 @@ def quad_descriptor_batch(points: np.ndarray, quad_indices: np.ndarray) -> Tuple
 
     # Compute pairwise distances for all quads: (M, 4, 4)
     diff = P[:, None, :, :] - P[:, :, None, :]  # (M, 4, 4, 2)
-    d2 = np.sum(diff ** 2, axis=3)  # (M, 4, 4)
+    d2 = np.sum(diff**2, axis=3)  # (M, 4, 4)
 
     # Find longest baseline for each quad
     flat_idx = np.argmax(d2.reshape(M, -1), axis=1)
@@ -376,15 +402,13 @@ def quad_descriptor_batch(points: np.ndarray, quad_indices: np.ndarray) -> Tuple
     C_vec = C - A
     D_vec = D - A
 
-    c_coords = np.stack([
-        np.sum(C_vec * e1, axis=1),
-        np.sum(C_vec * e2, axis=1)
-    ], axis=1) / L[:, None]  # (M_final, 2)
+    c_coords = (
+        np.stack([np.sum(C_vec * e1, axis=1), np.sum(C_vec * e2, axis=1)], axis=1) / L[:, None]
+    )  # (M_final, 2)
 
-    d_coords = np.stack([
-        np.sum(D_vec * e1, axis=1),
-        np.sum(D_vec * e2, axis=1)
-    ], axis=1) / L[:, None]  # (M_final, 2)
+    d_coords = (
+        np.stack([np.sum(D_vec * e1, axis=1), np.sum(D_vec * e2, axis=1)], axis=1) / L[:, None]
+    )  # (M_final, 2)
 
     # Sort coordinates lexicographically for each quad (vectorized)
     # Stack c and d coordinates: (M_final, 2, 2) - 2 points × 2 coords
@@ -392,8 +416,9 @@ def quad_descriptor_batch(points: np.ndarray, quad_indices: np.ndarray) -> Tuple
 
     # Determine which point should come first (lexicographic order)
     # First compare x-coordinates ([:,0]), then y-coordinates ([:,1])
-    swap = ((pairs[:, 0, 0] > pairs[:, 1, 0]) |
-            ((pairs[:, 0, 0] == pairs[:, 1, 0]) & (pairs[:, 0, 1] > pairs[:, 1, 1])))
+    swap = (pairs[:, 0, 0] > pairs[:, 1, 0]) | (
+        (pairs[:, 0, 0] == pairs[:, 1, 0]) & (pairs[:, 0, 1] > pairs[:, 1, 1])
+    )
 
     # Swap where needed
     pairs[swap] = pairs[swap, ::-1, :]
@@ -404,9 +429,11 @@ def quad_descriptor_batch(points: np.ndarray, quad_indices: np.ndarray) -> Tuple
 
     return descs, lens
 
+
 def quantize_desc(desc: np.ndarray, eps: float) -> Tuple[int, int, int, int]:
     q = np.floor(desc / eps + 0.5).astype(np.int64)
     return int(q[0]), int(q[1]), int(q[2]), int(q[3])
+
 
 def reflect_desc(desc: np.ndarray) -> np.ndarray:
     """Reflect quad descriptor across its baseline (flip y) with lexicographic re-ordering."""
@@ -417,8 +444,10 @@ def reflect_desc(desc: np.ndarray) -> np.ndarray:
         x1, y1, x2, y2 = x2, y2, x1, y1
     return np.array([x1, y1, x2, y2], dtype=np.float64)
 
+
 # Phase 1 Optimization: Pre-computed neighbor offsets cache
 _NEIGHBOR_OFFSETS_CACHE: Dict[int, np.ndarray] = {}
+
 
 def _get_neighbor_offsets(r: int) -> np.ndarray:
     """Get pre-computed neighbor offsets for given radius."""
@@ -430,7 +459,10 @@ def _get_neighbor_offsets(r: int) -> np.ndarray:
         _NEIGHBOR_OFFSETS_CACHE[r] = offsets
     return _NEIGHBOR_OFFSETS_CACHE[r]
 
-def neighbors_bins(key: Tuple[int, int, int, int], r: int = 1) -> Iterable[Tuple[int, int, int, int]]:
+
+def neighbors_bins(
+    key: Tuple[int, int, int, int], r: int = 1
+) -> Iterable[Tuple[int, int, int, int]]:
     """Generate neighbor bins using optimized pre-computed offsets."""
     offsets = _get_neighbor_offsets(r)
     key_arr = np.array(key, dtype=np.int32)
@@ -439,7 +471,10 @@ def neighbors_bins(key: Tuple[int, int, int, int], r: int = 1) -> Iterable[Tuple
     for neighbor in neighbors:
         yield tuple(int(x) for x in neighbor)
 
-def multiprobe_desc_keys(desc: np.ndarray, eps: float, threshold: float = 0.3) -> List[Tuple[int, int, int, int]]:
+
+def multiprobe_desc_keys(
+    desc: np.ndarray, eps: float, threshold: float = 0.3
+) -> List[Tuple[int, int, int, int]]:
     """Multi-probe hashing: return the primary quantized key plus keys for nearby
     bins where the descriptor is close to a bin boundary.
 
@@ -488,6 +523,7 @@ def multiprobe_desc_keys(desc: np.ndarray, eps: float, threshold: float = 0.3) -
 
     return keys
 
+
 def compute_bin_edges(lengths: np.ndarray, n_bins: int) -> Optional[np.ndarray]:
     """Compute quantile-based bin edges from a set of baseline lengths.
 
@@ -502,7 +538,10 @@ def compute_bin_edges(lengths: np.ndarray, n_bins: int) -> Optional[np.ndarray]:
             qs[i] = np.nextafter(qs[i - 1], np.inf)
     return qs
 
-def baseline_rank_bins(lengths: np.ndarray, n_bins: int, edges: Optional[np.ndarray] = None) -> np.ndarray:
+
+def baseline_rank_bins(
+    lengths: np.ndarray, n_bins: int, edges: Optional[np.ndarray] = None
+) -> np.ndarray:
     """
     Assign each length to a *rank* bin based on quantiles.
     If edges are provided, use those instead of computing from the data.
@@ -525,12 +564,14 @@ def baseline_rank_bins(lengths: np.ndarray, n_bins: int, edges: Optional[np.ndar
     b = np.searchsorted(qs[1:-1], lengths, side="right")
     return b.astype(np.int16)
 
+
 @dataclass
 class QuadEntry:
     idxs: Tuple[int, int, int, int]
     desc: np.ndarray
     bin_id: int
     mags: Optional[Tuple[float, float, float, float]] = None
+
 
 def build_quad_hash_multiscale(
     points: np.ndarray,
@@ -593,8 +634,10 @@ def build_quad_hash_multiscale(
 
     return H
 
+
 class _PatternMatchFailed(RuntimeError):
     """Internal sentinel for pattern matching failure (used by adaptive retry)."""
+
     pass
 
 
@@ -630,6 +673,7 @@ def _auto_match_resolution(det_xy: np.ndarray, ref_uv: np.ndarray) -> Optional[f
 # Solver
 # -----------------------------
 
+
 @dataclass
 class AstrometryConfig:
     # Selection sizes
@@ -651,12 +695,12 @@ class AstrometryConfig:
     enforce_parity: bool = True
 
     # Two-stage scoring
-    stage1_n_det: int = 50              # cheap scoring uses only brightest subset of selected detections
+    stage1_n_det: int = 50  # cheap scoring uses only brightest subset of selected detections
     stage1_radius_arcsec: float = 20.0  # loose
-    stage2_radius_arcsec: float = 8.0   # tighter
-    top_k_hypotheses: int = 60          # keep best hypotheses from stage 1
-    max_quads_tested: int = 5000        # max detection quads to try
-    max_candidates_per_bucket: int = 60 # cap ref candidates pulled per hash bucket
+    stage2_radius_arcsec: float = 8.0  # tighter
+    top_k_hypotheses: int = 60  # keep best hypotheses from stage 1
+    max_quads_tested: int = 5000  # max detection quads to try
+    max_candidates_per_bucket: int = 60  # cap ref candidates pulled per hash bucket
 
     # Multi-probe hashing: probe only nearby bins instead of all (2r+1)^4
     use_multiprobe: bool = True
@@ -664,10 +708,10 @@ class AstrometryConfig:
     # Final fit
     sip_degree: int = 3
     refine_clip_sigma: float = 4.0
-    refine_clip_sigma_start: float = 5.0    # progressive clipping: start value
+    refine_clip_sigma_start: float = 5.0  # progressive clipping: start value
     refine_min_match_fraction: float = 0.5  # keep at least this fraction of initial matches
     refine_max_iter: int = 5
-    refine_rematch_iters: int = 2           # iterative affine re-matching rounds
+    refine_rematch_iters: int = 2  # iterative affine re-matching rounds
     # Optional expanded refinement pool (use many more objects for final fit)
     refine_use_all: bool = False
     refine_n_det: Optional[int] = None
@@ -678,8 +722,8 @@ class AstrometryConfig:
     auto_match_resolution: bool = True
 
     # Adaptive source count: retry with more sources if matching fails
-    adaptive_n_retry: int = 2          # number of retry doublings (0 = disabled)
-    adaptive_min_inliers: int = 12     # minimum inliers to accept without retry
+    adaptive_n_retry: int = 2  # number of retry doublings (0 = disabled)
+    adaptive_min_inliers: int = 12  # minimum inliers to accept without retry
 
 
 class QuadHashAstrometry:
@@ -715,10 +759,13 @@ class QuadHashAstrometry:
                     py = np.array([crpix[1], crpix[1], crpix[1] + 1.0], dtype=np.float64)
                     ra_s, dec_s = wcs_init.all_pix2world(px, py, 1)
                     x_s, y_s = wcs_init.all_world2pix(ra_s, dec_s, 0)
-                    J = np.array([
-                        [x_s[1] - x_s[0], x_s[2] - x_s[0]],
-                        [y_s[1] - y_s[0], y_s[2] - y_s[0]],
-                    ], dtype=np.float64)
+                    J = np.array(
+                        [
+                            [x_s[1] - x_s[0], x_s[2] - x_s[0]],
+                            [y_s[1] - y_s[0], y_s[2] - y_s[0]],
+                        ],
+                        dtype=np.float64,
+                    )
                     det_j = float(np.linalg.det(J))
                     if np.isfinite(det_j) and det_j != 0:
                         expected_parity = 1.0 if det_j > 0 else -1.0
@@ -737,7 +784,8 @@ class QuadHashAstrometry:
 
         # Reference multiscale hash
         ref_hash = build_quad_hash_multiscale(
-            ref_uv, ref_mag,
+            ref_uv,
+            ref_mag,
             k=cfg.neighbor_k,
             eps=cfg.eps_desc,
             n_scale_bins=cfg.n_scale_bins,
@@ -763,9 +811,9 @@ class QuadHashAstrometry:
         else:
             det_bins = baseline_rank_bins(det_lens, n_bins=cfg.n_scale_bins)
 
-        det_quads_quantized = np.array([
-            quantize_desc(desc, cfg.eps_desc) for desc in det_descs
-        ], dtype=object)
+        det_quads_quantized = np.array(
+            [quantize_desc(desc, cfg.eps_desc) for desc in det_descs], dtype=object
+        )
 
         ref_tree = cKDTree(ref_uv)
 
@@ -838,8 +886,7 @@ class QuadHashAstrometry:
                     if tol >= 0:
                         if not (expected_scale * (1 - tol) <= s <= expected_scale * (1 + tol)):
                             continue
-                if (expected_parity is not None and cfg.enforce_parity
-                        and cfg.allow_reflection):
+                if expected_parity is not None and cfg.enforce_parity and cfg.allow_reflection:
                     detR = float(np.linalg.det(R))
                     if not np.isfinite(detR) or np.sign(detR) != expected_parity:
                         continue
@@ -858,21 +905,21 @@ class QuadHashAstrometry:
         if not top_hyp:
             raise _PatternMatchFailed(
                 "Pattern matching failed at stage 1. "
-                "Try increasing n_det/n_ref, eps_desc, or stage1_radius_arcsec.")
+                "Try increasing n_det/n_ref, eps_desc, or stage1_radius_arcsec."
+            )
 
         # --- Stage 2 ---
         top_hyp.sort(key=lambda x: x[0], reverse=True)
 
         best = {"score": -1.0, "inliers": -1, "R": None, "t": None, "s": None, "pairs": None}
 
-        for (score1, R, t, s) in top_hyp:
+        for score1, R, t, s in top_hyp:
             if expected_scale is not None and cfg.scale_tolerance is not None:
                 tol = float(cfg.scale_tolerance)
                 if tol >= 0:
                     if not (expected_scale * (1 - tol) <= s <= expected_scale * (1 + tol)):
                         continue
-            if (expected_parity is not None and cfg.enforce_parity
-                    and cfg.allow_reflection):
+            if expected_parity is not None and cfg.enforce_parity and cfg.allow_reflection:
                 detR = float(np.linalg.det(R))
                 if not np.isfinite(detR) or np.sign(detR) != expected_parity:
                     continue
@@ -885,8 +932,7 @@ class QuadHashAstrometry:
                 continue
 
             dists = np.hypot(
-                det_uv[det_ids, 0] - ref_uv[ref_ids, 0],
-                det_uv[det_ids, 1] - ref_uv[ref_ids, 1]
+                det_uv[det_ids, 0] - ref_uv[ref_ids, 0], det_uv[det_ids, 1] - ref_uv[ref_ids, 1]
             )
             weights = 1.0 - (dists / r2) ** 2
             score = float(np.sum(weights))
@@ -894,12 +940,20 @@ class QuadHashAstrometry:
             pairs = list(zip(det_ids.tolist(), ref_ids.tolist()))
 
             if score > best["score"]:
-                best = {"score": score, "inliers": len(pairs), "R": R, "t": t, "s": s, "pairs": pairs}
+                best = {
+                    "score": score,
+                    "inliers": len(pairs),
+                    "R": R,
+                    "t": t,
+                    "s": s,
+                    "pairs": pairs,
+                }
 
         if best["inliers"] < 8:
             raise _PatternMatchFailed(
                 f"Pattern matching failed at stage 2 (best inliers={best['inliers']}). "
-                f"Try loosening stage2_radius_arcsec or increasing top_k_hypotheses.")
+                f"Try loosening stage2_radius_arcsec or increasing top_k_hypotheses."
+            )
 
         # --- Iterative affine re-matching ---
         pairs = best["pairs"]
@@ -1001,7 +1055,7 @@ class QuadHashAstrometry:
         pairs = None
 
         for _attempt in range(n_retries + 1):
-            scale_factor = 2 ** _attempt
+            scale_factor = 2**_attempt
             cur_n_det = min(cfg.n_det * scale_factor, len(x))
             cur_n_ref = min(cfg.n_ref * scale_factor, len(ra))
 
@@ -1038,7 +1092,12 @@ class QuadHashAstrometry:
 
             try:
                 pairs, top_hyp, best = self._pattern_match(
-                    det_xy, det_mag, ref_uv, ref_mag, wcs_init, pixel_scale_arcsec,
+                    det_xy,
+                    det_mag,
+                    ref_uv,
+                    ref_mag,
+                    wcs_init,
+                    pixel_scale_arcsec,
                     cfg=cfg,
                 )
             except _PatternMatchFailed as e:
@@ -1053,7 +1112,8 @@ class QuadHashAstrometry:
                 break
             # Not enough inliers — retry with more sources if possible
             last_error = _PatternMatchFailed(
-                f"Only {len(pairs)} inliers (need {cfg.adaptive_min_inliers})")
+                f"Only {len(pairs)} inliers (need {cfg.adaptive_min_inliers})"
+            )
             if cur_n_det >= len(x) and cur_n_ref >= len(ra):
                 break  # can't add more sources
 
@@ -1224,8 +1284,12 @@ class QuadHashAstrometry:
             "refine_pool_ref": int(refine_pool_ref),
             "refine_matches_preclip": int(refine_matches_preclip),
             "final_matches": int(len(match)),
-            "rms_dr_arcsec": float(np.sqrt(np.mean(match["dr_arcsec"] ** 2))) if len(match) else np.nan,
-            "mad_dr_arcsec": float(_robust_sigma(_as_float_array(match["dr_arcsec"]))) if len(match) else np.nan,
+            "rms_dr_arcsec": float(np.sqrt(np.mean(match["dr_arcsec"] ** 2)))
+            if len(match)
+            else np.nan,
+            "mad_dr_arcsec": float(_robust_sigma(_as_float_array(match["dr_arcsec"])))
+            if len(match)
+            else np.nan,
             "config": self.cfg,
         }
 
@@ -1236,7 +1300,7 @@ def refine_wcs_quadhash(
     obj: Table,
     cat: Table,
     wcs: WCS = None,
-    header = None,
+    header=None,
     sr: float = 10 / 3600,
     order: int = 2,
     cat_col_ra: str = 'RAJ2000',
@@ -1310,15 +1374,12 @@ def refine_wcs_quadhash(
     """
 
     # Simple wrapper around print for logging in verbose mode only
-    log = (
-        (verbose if callable(verbose) else print)
-        if verbose
-        else lambda *args, **kwargs: None
-    )
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     # Get WCS from header if needed
     if wcs is None and header is not None:
         from astropy.io import fits
+
         wcs = WCS(header)
 
     if wcs is None or not wcs.is_celestial:
@@ -1331,7 +1392,9 @@ def refine_wcs_quadhash(
         return None
 
     if cat_col_mag not in cat.colnames:
-        log(f"Warning: Catalog magnitude column '{cat_col_mag}' not found, using first magnitude column")
+        log(
+            f"Warning: Catalog magnitude column '{cat_col_mag}' not found, using first magnitude column"
+        )
         # Try to find any magnitude column
         mag_cols = [c for c in cat.colnames if 'mag' in c.lower()]
         if mag_cols:
@@ -1353,7 +1416,9 @@ def refine_wcs_quadhash(
     has_flux = obj_col_flux in obj.colnames
 
     if not has_mag and not has_flux:
-        log(f"Error: Object list must contain either '{obj_col_mag or 'mag'}' or '{obj_col_flux}' column")
+        log(
+            f"Error: Object list must contain either '{obj_col_mag or 'mag'}' or '{obj_col_flux}' column"
+        )
         return None
 
     # Apply S/N filtering if requested
@@ -1421,9 +1486,13 @@ def refine_wcs_quadhash(
     log(f"  Catalog: {len(cat_std)} stars")
     log(f"  Detections: {len(obj_std)} objects")
     log(f"  Initial WCS center: RA={wcs.wcs.crval[0]:.6f}, Dec={wcs.wcs.crval[1]:.6f}")
-    log(f"  Pixel scale: {pixel_scale_arcsec:.2f} arcsec/pixel, FOV diagonal: {fov_diag_deg:.2f} deg")
-    log(f"  Matching radii: stage1={stage1_arcsec:.1f} arcsec ({stage1_arcsec/pixel_scale_arcsec:.1f} pix), "
-        f"stage2={stage2_arcsec:.1f} arcsec ({stage2_arcsec/pixel_scale_arcsec:.1f} pix)")
+    log(
+        f"  Pixel scale: {pixel_scale_arcsec:.2f} arcsec/pixel, FOV diagonal: {fov_diag_deg:.2f} deg"
+    )
+    log(
+        f"  Matching radii: stage1={stage1_arcsec:.1f} arcsec ({stage1_arcsec / pixel_scale_arcsec:.1f} pix), "
+        f"stage2={stage2_arcsec:.1f} arcsec ({stage2_arcsec / pixel_scale_arcsec:.1f} pix)"
+    )
     log(f"  Source counts: n_det={scaled_n_det}, n_ref={scaled_n_ref}")
     log(f"  SIP order: {order}")
 
@@ -1468,7 +1537,9 @@ def refine_wcs_quadhash(
         log(f"  Final matches: {diagnostics['final_matches']}")
         log(f"  RMS residual: {diagnostics['rms_dr_arcsec']:.3f} arcsec")
         log(f"  MAD residual: {diagnostics['mad_dr_arcsec']:.3f} arcsec")
-        log(f"  Refined WCS center: RA={wcs_refined.wcs.crval[0]:.6f}, Dec={wcs_refined.wcs.crval[1]:.6f}")
+        log(
+            f"  Refined WCS center: RA={wcs_refined.wcs.crval[0]:.6f}, Dec={wcs_refined.wcs.crval[1]:.6f}"
+        )
 
         # Update object table with sky coordinates if requested
         if update and wcs_refined is not None:
@@ -1487,5 +1558,6 @@ def refine_wcs_quadhash(
         log(f"Refinement failed: {e}")
         if verbose:
             import traceback
+
             traceback.print_exc()
         return None

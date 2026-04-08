@@ -18,6 +18,7 @@ from . import photometry
 # Optional powerbin import
 try:
     import powerbin
+
     HAS_POWERBIN = True
 except ImportError:
     HAS_POWERBIN = False
@@ -446,9 +447,7 @@ def _powerbin_adaptive_bins(x, y, target_count, data_range=None, verbose=False):
             maxiter=500,
         )
     except (IndexError, ValueError) as e:
-        raise RuntimeError(
-            f"PowerBin failed (may not work with scattered point data): {e}"
-        )
+        raise RuntimeError(f"PowerBin failed (may not work with scattered point data): {e}")
 
     bin_numbers_subset = pb.bin_num  # Note: attribute is bin_num, not bin_number
     centroids = pb.xybin  # 2D array of bin centroids
@@ -589,9 +588,7 @@ def adaptive_binned_map(
 
     if method == 'powerbin':
         if not HAS_POWERBIN:
-            raise ImportError(
-                "powerbin package required. Install with: pip install powerbin"
-            )
+            raise ImportError("powerbin package required. Install with: pip install powerbin")
 
         try:
             bin_numbers, centroids = _powerbin_adaptive_bins(
@@ -616,12 +613,14 @@ def adaptive_binned_map(
                 # Pad to ensure all regions are finite
                 pad_x = (xmax - xmin) * 0.1
                 pad_y = (ymax - ymin) * 0.1
-                corners = np.array([
-                    [xmin - pad_x, ymin - pad_y],
-                    [xmin - pad_x, ymax + pad_y],
-                    [xmax + pad_x, ymin - pad_y],
-                    [xmax + pad_x, ymax + pad_y],
-                ])
+                corners = np.array(
+                    [
+                        [xmin - pad_x, ymin - pad_y],
+                        [xmin - pad_x, ymax + pad_y],
+                        [xmax + pad_x, ymin - pad_y],
+                        [xmax + pad_x, ymax + pad_y],
+                    ]
+                )
                 all_centroids = np.vstack([centroids, corners])
                 vor = Voronoi(all_centroids)
 
@@ -743,7 +742,6 @@ def adaptive_binned_map(
             # ax.get_figure().colorbar(sm, ax=ax)
             colorbar(sm, ax=ax)
 
-
     if not show_axis:
         ax.set_axis_off()
     else:
@@ -821,9 +819,7 @@ def plot_cutout(
             curplot += 1
 
             params = {
-                'stretch': 'asinh'
-                if name in ['image', 'template', 'convolved']
-                else 'linear',
+                'stretch': 'asinh' if name in ['image', 'template', 'convolved'] else 'linear',
                 'r0': r0 if name in ['image', 'template', 'diff'] else None,
                 # 'qq': [0.5, 100] if name in ['image', 'template', 'convolved'] else [0.5, 99.5],
                 'cmap': 'Blues_r',
@@ -837,7 +833,7 @@ def plot_cutout(
             ax.set_title(name.upper())
 
             if mark_ra is not None and mark_dec is not None and cutout.get('wcs'):
-                mark_x,mark_y = cutout['wcs'].all_world2pix(mark_ra, mark_dec, 0)
+                mark_x, mark_y = cutout['wcs'].all_world2pix(mark_ra, mark_dec, 0)
 
             if mark_x is not None and mark_y is not None:
                 ax.add_artist(
@@ -860,10 +856,9 @@ def plot_cutout(
                                 edgecolor=mark_color,
                                 facecolor='none',
                                 ls='--',
-                                lw=mark_lw/2,
+                                lw=mark_lw / 2,
                             )
                         )
-
 
             if curplot > nplots:
                 break
@@ -892,9 +887,7 @@ def plot_cutout(
             if 'mag_calib' in cutout['meta']:
                 title += ' : mag = %.2f $\\pm$ %.2f' % (
                     cutout['meta'].get('mag_calib', np.nan),
-                    cutout['meta'].get(
-                        'mag_calib_err', cutout['meta'].get('magerr', np.nan)
-                    ),
+                    cutout['meta'].get('mag_calib_err', cutout['meta'].get('magerr', np.nan)),
                 )
 
             if additional_title:
@@ -903,9 +896,7 @@ def plot_cutout(
         fig.suptitle(title)
 
 
-def plot_photometric_match(
-    m, ax=None, mode='mag', show_masked=True, show_final=True, **kwargs
-):
+def plot_photometric_match(m, ax=None, mode='mag', show_masked=True, show_final=True, **kwargs):
     """Convenience plotting routine for photometric match results.
 
     It plots various representations of the photometric match results returned by :func:`stdpipe.photometry.match` or :func:`stdpipe.pipeline.calibrate_photometry`, depending on the `mode` parameter:
@@ -943,7 +934,8 @@ def plot_photometric_match(
     ):
         model_str += ' ' + photometry.format_color_term(
             m['color_term'],
-            color_name='%s - %s' % (
+            color_name='%s - %s'
+            % (
                 m['cat_col_mag1'],
                 m['cat_col_mag2'],
             ),
@@ -983,14 +975,12 @@ def plot_photometric_match(
         ax.grid(alpha=0.2)
 
         ax.set_xlabel(
-            'Catalogue %s magnitude'
-            % (m['cat_col_mag'] if 'cat_col_mag' in m.keys() else '')
+            'Catalogue %s magnitude' % (m['cat_col_mag'] if 'cat_col_mag' in m.keys() else '')
         )
         ax.set_ylabel('Instrumental - Model')
 
         ax.set_title(
-            '%d of %d unmasked stars used in final fit'
-            % (np.sum(m['idx']), np.sum(m['idx0']))
+            '%d of %d unmasked stars used in final fit' % (np.sum(m['idx']), np.sum(m['idx0']))
         )
 
         ax.text(0.02, 0.05, model_str, transform=ax.transAxes)
@@ -1028,14 +1018,12 @@ def plot_photometric_match(
         ax.grid(alpha=0.2)
 
         ax.set_xlabel(
-            'Catalogue %s magnitude'
-            % (m['cat_col_mag'] if 'cat_col_mag' in m.keys() else '')
+            'Catalogue %s magnitude' % (m['cat_col_mag'] if 'cat_col_mag' in m.keys() else '')
         )
         ax.set_ylabel('(Instrumental - Model) / Error')
 
         ax.set_title(
-            '%d of %d unmasked stars used in final fit'
-            % (np.sum(m['idx']), np.sum(m['idx0']))
+            '%d of %d unmasked stars used in final fit' % (np.sum(m['idx']), np.sum(m['idx0']))
         )
 
         ax.text(0.02, 0.05, model_str, transform=ax.transAxes)
@@ -1073,11 +1061,7 @@ def plot_photometric_match(
 
         ax.set_xlabel(
             'Catalogue %s color'
-            % (
-                m['cat_col_mag1'] + '-' + m['cat_col_mag2']
-                if 'cat_col_mag1' in m.keys()
-                else ''
-            )
+            % (m['cat_col_mag1'] + '-' + m['cat_col_mag2'] if 'cat_col_mag1' in m.keys() else '')
         )
         ax.set_ylabel('Instrumental - Model')
 
@@ -1145,7 +1129,13 @@ def plot_photometric_match(
 
 
 def plot_detection_limit(
-    obj, sn=5, mag_name=None, obj_col_mag='mag_calib', obj_col_mag_err='magerr', show_local=True, ax=None
+    obj,
+    sn=5,
+    mag_name=None,
+    obj_col_mag='mag_calib',
+    obj_col_mag_err='magerr',
+    show_local=True,
+    ax=None,
 ):
     """
     Plot the details of detection limit estimation
@@ -1163,15 +1153,11 @@ def plot_detection_limit(
     mag = obj[obj_col_mag]
     mag_sn = 1 / obj[obj_col_mag_err]
 
-    ax.plot(
-        mag, mag_sn, '.', alpha=(0.2 if len(mag_sn) > 1000 else 0.4), label='Objects'
-    )
+    ax.plot(mag, mag_sn, '.', alpha=(0.2 if len(mag_sn) > 1000 else 0.4), label='Objects')
 
     ax.axhline(sn, color='black', ls='--', label=f"S/N={sn}")
 
-    mag0, sn_model = photometry.get_detection_limit_sn(
-        mag, mag_sn, sn=sn, get_model=True
-    )
+    mag0, sn_model = photometry.get_detection_limit_sn(mag, mag_sn, sn=sn, get_model=True)
     if mag0 is not None:
         x0 = np.linspace(np.nanmin(mag) - 1, max(np.nanmax(mag), mag0 + 1))
         ax.plot(x0, sn_model(x0), '-', color='red', label='Model')
@@ -1205,7 +1191,14 @@ def plot_detection_limit(
 
 
 def plot_mag_histogram(
-    obj, cat=None, cat_col_mag=None, sn=None, obj_col_mag='mag_calib', obj_col_mag_err='magerr', accept_flags=0, ax=None
+    obj,
+    cat=None,
+    cat_col_mag=None,
+    sn=None,
+    obj_col_mag='mag_calib',
+    obj_col_mag_err='magerr',
+    accept_flags=0,
+    ax=None,
 ):
     """
     Plot the histogram of calibrated magnitudes for detected objects,
@@ -1241,12 +1234,8 @@ def plot_mag_histogram(
     vmin = np.floor(vmin)
     vmax = np.ceil(vmax)
 
-    ax.hist(
-        mag, bins=np.linspace(vmin, vmax, 50), alpha=0.4, color='C0', label="Objects"
-    )
-    ax.hist(
-        mag, bins=np.linspace(vmin, vmax, 50), alpha=0.8, histtype='step', color='C0'
-    )
+    ax.hist(mag, bins=np.linspace(vmin, vmax, 50), alpha=0.4, color='C0', label="Objects")
+    ax.hist(mag, bins=np.linspace(vmin, vmax, 50), alpha=0.8, histtype='step', color='C0')
 
     ax.hist(
         mag[idx],
@@ -1374,14 +1363,7 @@ def plot_outline(x, y, *args, ax=None, **kwargs):
 
 
 def cornerplot(
-    features,
-    scales=None,
-    lines=None,
-    subsets=None,
-    show_all=True,
-    extra=None,
-    fig=None,
-    **kwargs
+    features, scales=None, lines=None, subsets=None, show_all=True, extra=None, fig=None, **kwargs
 ):
     """
     Plot pairwise feature scatter panels in an upper-left triangular corner layout.
@@ -1418,8 +1400,8 @@ def cornerplot(
 
     N = len(features)
 
-    assert(scales is None or len(scales) == len(features))
-    assert(lines is None or len(lines) == len(features))
+    assert scales is None or len(scales) == len(features)
+    assert lines is None or len(lines) == len(features)
 
     if subsets is None:
         subsets = []
@@ -1443,15 +1425,15 @@ def cornerplot(
             if j > (N - iy):
                 continue
 
-            col_x,col_y = features[ix], features[iy]
+            col_x, col_y = features[ix], features[iy]
 
             ax = fig.add_subplot(N - 1, N - 1, i)
             ax.grid(alpha=0.2)
 
             if ix == 0:
-                ax.set_ylabel(col_y[1])#, rotation=105, labelpad=20)
+                ax.set_ylabel(col_y[1])  # , rotation=105, labelpad=20)
             if iy == N - 1 or ix > iy:
-                ax.set_xlabel(col_x[1])#, rotation=15)
+                ax.set_xlabel(col_x[1])  # , rotation=15)
 
             # Main plotting
 
@@ -1471,7 +1453,8 @@ def cornerplot(
                 kw.update(sub)
 
                 ax.plot(
-                    col_x[0][idx], col_y[0][idx],
+                    col_x[0][idx],
+                    col_y[0][idx],
                     **kw,
                 )
 
