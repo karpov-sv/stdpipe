@@ -43,6 +43,164 @@ class TestMakeKernel:
         assert kernel.sum() > 0
 
 
+class TestEstimateFwhm:
+    """Test robust FWHM estimation."""
+
+    @pytest.mark.unit
+    def test_tight_cluster(self):
+        """Tight Gaussian cluster recovers the center."""
+        rng = np.random.default_rng(42)
+        values = rng.normal(loc=4.0, scale=0.2, size=200)
+        result = photometry.estimate_fwhm(values)
+        assert abs(result - 4.0) < 0.1
+
+    @pytest.mark.unit
+    def test_outlier_resistance(self):
+        """Outlier tail from galaxies does not bias the estimate."""
+        rng = np.random.default_rng(42)
+        stars = rng.normal(loc=3.5, scale=0.15, size=100)
+        galaxies = rng.uniform(6.0, 15.0, size=50)
+        values = np.concatenate([stars, galaxies])
+        result = photometry.estimate_fwhm(values)
+        assert abs(result - 3.5) < 0.2
+
+    @pytest.mark.unit
+    def test_single_value(self):
+        """Single surviving candidate is returned as-is."""
+        result = photometry.estimate_fwhm(np.array([5.0]), min_candidates=1)
+        assert result == 5.0
+
+    @pytest.mark.unit
+    def test_empty_returns_nan(self):
+        result = photometry.estimate_fwhm(np.array([]))
+        assert np.isnan(result)
+
+    @pytest.mark.unit
+    def test_all_nan_returns_nan(self):
+        result = photometry.estimate_fwhm(np.array([np.nan, np.nan, np.nan]))
+        assert np.isnan(result)
+
+    @pytest.mark.unit
+    def test_below_min_candidates(self):
+        result = photometry.estimate_fwhm(np.array([3.0, 4.0]), min_candidates=5)
+        assert np.isnan(result)
+
+    @pytest.mark.unit
+    def test_range_clipping(self):
+        """Values outside fwhm_range are excluded."""
+        values = np.array([0.5, 3.0, 3.1, 3.2, 3.0, 3.1, 25.0])
+        result = photometry.estimate_fwhm(values, fwhm_range=(2.0, 10.0))
+        assert 2.9 < result < 3.3
+
+    @pytest.mark.unit
+    def test_good_mask(self):
+        """Only objects with good=True are used."""
+        rng = np.random.default_rng(42)
+        stars = rng.normal(3.0, 0.1, 20)
+        junk = rng.normal(10.0, 0.1, 20)
+        values = np.concatenate([stars, junk])
+        good = np.array([True]*20 + [False]*20)
+        result = photometry.estimate_fwhm(values, good=good)
+        assert abs(result - 3.0) < 0.2
+
+    @pytest.mark.unit
+    def test_bimodal_picks_dominant(self):
+        """With two groups, picks the denser one."""
+        rng = np.random.default_rng(42)
+        dominant = rng.normal(loc=3.0, scale=0.1, size=80)
+        minor = rng.normal(loc=7.0, scale=0.1, size=20)
+        values = np.concatenate([dominant, minor])
+        result = photometry.estimate_fwhm(values)
+        assert abs(result - 3.0) < 0.2
+
+
+class TestEstimateFwhmFromObjects:
+    """Test convenience wrapper for table-based FWHM estimation."""
+
+    @pytest.mark.unit
+    def test_sep_table(self):
+        """Works with SEP-style table columns."""
+        rng = np.random.default_rng(42)
+        n = 100
+        obj = Table({
+            'fwhm': rng.normal(4.0, 0.2, n),
+            'a': rng.uniform(1.5, 2.5, n),
+            'b': rng.uniform(1.4, 2.4, n),
+            'flag': np.zeros(n, dtype=int),
+        })
+        result = photometry.estimate_fwhm_from_objects(obj, snr_min=None)
+        assert abs(result - 4.0) < 0.2
+
+    @pytest.mark.unit
+    def test_sextractor_table(self):
+        """Works with SExtractor-style column names."""
+        rng = np.random.default_rng(42)
+        n = 100
+        obj = Table({
+            'FWHM_IMAGE': rng.normal(3.5, 0.15, n),
+            'A_IMAGE': rng.uniform(1.5, 2.5, n),
+            'B_IMAGE': rng.uniform(1.4, 2.4, n),
+            'FLAGS': np.zeros(n, dtype=int),
+        })
+        result = photometry.estimate_fwhm_from_objects(obj, snr_min=None)
+        assert abs(result - 3.5) < 0.2
+
+    @pytest.mark.unit
+    def test_moment_fallback(self):
+        """Falls back to a/b moments when no fwhm column exists."""
+        rng = np.random.default_rng(42)
+        n = 100
+        # For Gaussian: FWHM = 2*sqrt(ln2*(a^2+b^2))
+        # If a=b=sigma, FWHM = 2*sqrt(2*ln2)*sigma ≈ 2.355*sigma
+        sigma = 1.7  # -> FWHM ~ 4.0
+        obj = Table({
+            'a': np.full(n, sigma) + rng.normal(0, 0.05, n),
+            'b': np.full(n, sigma) + rng.normal(0, 0.05, n),
+            'flag': np.zeros(n, dtype=int),
+        })
+        expected = 2.0 * np.sqrt(np.log(2) * 2) * sigma
+        result = photometry.estimate_fwhm_from_objects(obj, snr_min=None)
+        assert abs(result - expected) < 0.3
+
+    @pytest.mark.unit
+    def test_flag_rejection(self):
+        """Flagged objects are excluded."""
+        rng = np.random.default_rng(42)
+        n = 100
+        flags = np.zeros(n, dtype=int)
+        flags[:50] = 1  # flag half the objects
+        fwhm_vals = np.empty(n)
+        fwhm_vals[:50] = 10.0  # flagged objects have wrong FWHM
+        fwhm_vals[50:] = rng.normal(3.0, 0.1, 50)
+        obj = Table({
+            'fwhm': fwhm_vals,
+            'flag': flags,
+        })
+        result = photometry.estimate_fwhm_from_objects(obj, snr_min=None, max_ellipticity=None)
+        assert abs(result - 3.0) < 0.2
+
+    @pytest.mark.unit
+    def test_ellipticity_rejection(self):
+        """Elongated objects are excluded."""
+        rng = np.random.default_rng(42)
+        n = 100
+        obj = Table({
+            'fwhm': np.concatenate([rng.normal(3.0, 0.1, 80), rng.normal(8.0, 0.5, 20)]),
+            'a': np.concatenate([np.full(80, 2.0), np.full(20, 5.0)]),
+            'b': np.concatenate([np.full(80, 1.8), np.full(20, 1.0)]),  # elongated
+            'flag': np.zeros(n, dtype=int),
+        })
+        result = photometry.estimate_fwhm_from_objects(obj, snr_min=None, max_ellipticity=0.3)
+        assert abs(result - 3.0) < 0.2
+
+    @pytest.mark.unit
+    def test_no_usable_columns(self):
+        """Returns nan when table has no FWHM-related columns."""
+        obj = Table({'x': [1, 2, 3], 'y': [4, 5, 6]})
+        result = photometry.estimate_fwhm_from_objects(obj)
+        assert np.isnan(result)
+
+
 class TestSEPPhotometry:
     """Test SEP-based object detection and photometry."""
 

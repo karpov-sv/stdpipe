@@ -66,6 +66,125 @@ def make_kernel(r0=1.0, ext=1.0):
     return image
 
 
+def estimate_fwhm(values, *, good=None, fwhm_range=(1.0, 20.0), min_candidates=5):
+    """Robust global FWHM estimate from per-object FWHM measurements.
+
+    Uses a sliding-window mode estimator (narrowest quartile interval) that is
+    resistant to outliers from galaxies, blends, and non-Gaussian tails.
+
+    :param values: 1-D array of per-object FWHM values in pixels
+    :param good: Optional boolean mask, True = use this object. The caller is
+        responsible for applying any S/N, flag, or ellipticity cuts before
+        calling, or encoding them in this mask.
+    :param fwhm_range: Hard clip range ``(lo, hi)`` in pixels.  Values outside
+        this range are excluded before the mode calculation.
+    :param min_candidates: Minimum number of surviving candidates required.
+        Returns ``np.nan`` if fewer remain.
+    :returns: Scalar FWHM estimate (pixels), or ``np.nan`` on failure.
+    """
+
+    values = np.asarray(values, dtype=float).ravel()
+    mask = np.isfinite(values)
+
+    if good is not None:
+        mask &= np.asarray(good, dtype=bool).ravel()
+
+    mask &= (values >= fwhm_range[0]) & (values < fwhm_range[1])
+
+    f = np.sort(values[mask])
+
+    if len(f) < min_candidates:
+        return np.nan
+
+    if len(f) == 1:
+        return float(f[0])
+
+    # Sliding-window mode: find the narrowest interval spanning n//4 objects
+    nw = max(len(f) // 4, 1)
+    widths = f[nw:] - f[:-nw]
+    i = int(np.argmin(widths))
+
+    return float(0.5 * (f[i] + f[i + nw]))
+
+
+def estimate_fwhm_from_objects(
+    obj,
+    *,
+    snr_min=10.0,
+    max_ellipticity=0.3,
+    use_flags=True,
+    fwhm_range=(1.0, 20.0),
+    min_candidates=5,
+):
+    """Estimate global FWHM from an object table (SEP or SExtractor).
+
+    Extracts per-object FWHM values and builds a quality mask from the
+    available catalog columns, then delegates to :func:`estimate_fwhm`.
+
+    :param obj: Astropy Table (or structured ndarray) with detection results
+    :param snr_min: Minimum S/N for candidate selection (via ``magerr``).
+        Set to ``None`` to disable.
+    :param max_ellipticity: Maximum ellipticity ``1 - b/a``.
+        Set to ``None`` to disable.
+    :param use_flags: If True, reject objects with nonzero flags.
+    :param fwhm_range: Passed through to :func:`estimate_fwhm`.
+    :param min_candidates: Passed through to :func:`estimate_fwhm`.
+    :returns: Scalar FWHM estimate (pixels), or ``np.nan`` on failure.
+    """
+
+    names = obj.dtype.names if hasattr(obj, 'dtype') else obj.colnames
+
+    # --- Extract per-object FWHM values ---
+    if 'fwhm' in names:
+        values = np.asarray(obj['fwhm'], dtype=float)
+    elif 'FWHM_IMAGE' in names:
+        values = np.asarray(obj['FWHM_IMAGE'], dtype=float)
+    elif 'a' in names and 'b' in names:
+        values = 2.0 * np.sqrt(np.log(2) * (np.asarray(obj['a'], dtype=float)**2
+                                             + np.asarray(obj['b'], dtype=float)**2))
+    elif 'A_IMAGE' in names and 'B_IMAGE' in names:
+        values = 2.0 * np.sqrt(np.log(2) * (np.asarray(obj['A_IMAGE'], dtype=float)**2
+                                             + np.asarray(obj['B_IMAGE'], dtype=float)**2))
+    else:
+        return np.nan
+
+    # --- Build quality mask ---
+    good = np.ones(len(obj), dtype=bool)
+
+    if snr_min is not None:
+        if 'magerr' in names:
+            good &= np.isfinite(obj['magerr']) & (obj['magerr'] < 1.0 / snr_min)
+            good &= np.asarray(obj['magerr'], dtype=float) > 0
+        elif 'MAGERR_APER' in names:
+            magerr = np.asarray(obj['MAGERR_APER'], dtype=float)
+            if magerr.ndim > 1:
+                magerr = magerr[:, 0]
+            good &= np.isfinite(magerr) & (magerr < 1.0 / snr_min) & (magerr > 0)
+
+    if max_ellipticity is not None:
+        if 'a' in names and 'b' in names:
+            a = np.asarray(obj['a'], dtype=float)
+            b = np.asarray(obj['b'], dtype=float)
+            with np.errstate(invalid='ignore'):
+                good &= (a > 0) & ((1.0 - b / a) < max_ellipticity)
+        elif 'A_IMAGE' in names and 'B_IMAGE' in names:
+            a = np.asarray(obj['A_IMAGE'], dtype=float)
+            b = np.asarray(obj['B_IMAGE'], dtype=float)
+            with np.errstate(invalid='ignore'):
+                good &= (a > 0) & ((1.0 - b / a) < max_ellipticity)
+
+    if use_flags:
+        if 'flags' in names:
+            good &= np.asarray(obj['flags']) == 0
+        elif 'flag' in names:
+            good &= np.asarray(obj['flag']) == 0
+        elif 'FLAGS' in names:
+            good &= np.asarray(obj['FLAGS']) == 0
+
+    return estimate_fwhm(values, good=good, fwhm_range=fwhm_range,
+                         min_candidates=min_candidates)
+
+
 def get_objects_sep(
     image,
     header=None,
@@ -287,22 +406,22 @@ def get_objects_sep(
         scale_with_fwhm = True
         log("Using provided FWHM = %.2g" % fwhm_value)
     elif fwhm is True or (optimal and fwhm is False):
-        # Estimate FWHM from detected objects
+        # Estimate FWHM from detected objects using robust mode estimator
         # (either explicitly requested or needed for optimal extraction)
-        idx_fwhm = obj0['flag'] == 0
-        fwhm_est = 2.0 * np.sqrt(np.hypot(obj0['a'][idx_fwhm], obj0['b'][idx_fwhm]) * np.log(2))
-        fwhm_est = (
-            2.0
-            * sep.flux_radius(
-                image1,
-                obj0['x'][idx_fwhm],
-                obj0['y'][idx_fwhm],
-                relfluxradius * fwhm_est * np.ones_like(obj0['x'][idx_fwhm]),
-                0.5,
-                mask=mask,
-            )[0]
+        fwhm_value = estimate_fwhm_from_objects(
+            obj0, snr_min=None, use_flags=True,
         )
-        fwhm_value = np.median(fwhm_est)
+
+        if not np.isfinite(fwhm_value):
+            # Fall back to plain median of moment-based FWHM for unflagged objects
+            idx_fwhm = obj0['flag'] == 0
+            if 'fwhm' in obj0.dtype.names:
+                fwhm_value = np.nanmedian(obj0['fwhm'][idx_fwhm])
+            else:
+                fwhm_value = np.nanmedian(
+                    2.0 * np.sqrt(np.log(2) * (obj0['a'][idx_fwhm]**2 + obj0['b'][idx_fwhm]**2))
+                )
+            log("Robust FWHM estimation failed, falling back to median")
 
         if fwhm is True:
             # Scale aperture/annulus when explicitly requested (fwhm=True)
