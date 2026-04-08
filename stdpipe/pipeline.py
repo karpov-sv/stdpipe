@@ -34,27 +34,43 @@ def make_mask(
     gain=None,
     verbose=True,
 ):
-    """
-    Make basic mask for the image. The mask is a boolean bitmap with True values marking the regions
-    that should be excluded from following processing, thus "masked".
+    """Make a basic mask for an image.
 
-    The routine masks the following regions of the image:
+    The mask is a boolean bitmap with ``True`` values marking regions to be
+    excluded from further processing.  The following regions are masked:
+
     - pixels with undefined or non-finite (inf or nan) values
-    - regions outside of usable area defined by header DATASEC or TRIMSEC keyword
-    - pixels with values above the saturation limit, if provided
-    - pixels masked in external mask, if provided
+    - regions outside the usable area defined by the ``DATASEC`` or ``TRIMSEC``
+      header keyword
+    - pixels above the saturation limit, if provided
+    - pixels set in the external mask, if provided
     - cosmic rays, if requested
 
-    If :code:`saturation=True`, saturation level will be estimated from the image as :code:`median + 0.95(max - median)`
+    If ``saturation=True``, the saturation level is estimated from the image as
+    ``median + 0.95 * (max - median)``.
 
-    :param image: Image to be masked
-    :param header: FITS header, optional
-    :param saturation: Saturation level. If set to `True`, will be estimated from the image itself. Optional
-    :param external_mask: External mask, to be ORed with the created mask. Optional
-    :param mask_cosmics: If set, cosmic rays will be masked using LACosmic algorithm.
-    :param gain: Gain value to be used for cosmic rays masking
-    :returns: Boolean bitmap ("mask") with True values marking the regions that should be excluded from following processing
+    Parameters
+    ----------
+    image : ndarray
+        2D image array to mask.
+    header : astropy.io.fits.Header, optional
+        FITS header; used to read ``DATASEC`` / ``TRIMSEC`` keywords.
+    saturation : float or bool, optional
+        Saturation level in ADU.  If ``True``, estimated automatically from
+        the image.
+    external_mask : ndarray, optional
+        Boolean mask to OR with the created mask.
+    mask_cosmics : bool, optional
+        If True, detect and mask cosmic rays using the LACosmic algorithm.
+    gain : float, optional
+        Detector gain in e-/ADU, used for cosmic-ray masking.
+    verbose : bool or callable, optional
+        Whether to show verbose messages. May be boolean or a ``print``-like callable.
 
+    Returns
+    -------
+    ndarray of bool
+        Boolean mask with ``True`` marking excluded pixels.
     """
 
     # Simple wrapper around print for logging in verbose mode only
@@ -135,28 +151,56 @@ def refine_astrometry(
     verbose=False,
     **kwargs,
 ):
-    """Higher-level astrometric refinement routine that may use quad-hash, SCAMP, or pure Python based methods.
+    """Higher-level astrometric refinement routine.
 
-    :param obj: List of objects on the frame that should contain at least `x`, `y` and `flux` columns.
-    :param cat: Reference astrometric catalogue
-    :param sr: Matching radius in degrees
-    :param wcs: Initial WCS
-    :param order: Polynomial order for SIP or PV distortion solution (default: 0 for TAN, 2 recommended for quadhash)
-    :param cat_col_mag: Catalogue column name for the magnitude in closest band
-    :param cat_col_mag_err: Catalogue column name for the magnitude error
-    :param cat_col_ra: Catalogue column name for Right Ascension
-    :param cat_col_dec: Catalogue column name for Declination
-    :param cat_col_ra_err: Catalogue column name for Right Ascension error
-    :param cat_col_dec_err: Catalogue column name for Declination error
-    :param n_iter: Number of iterations for Python-based matching
-    :param use_photometry: Use photometry-assisted method in Python-based matching
-    :param min_matches: Minimal number of good matches in Python-based matching
-    :param method: May be 'quadhash' (default, 2-7× more accurate), 'scamp', 'astropy', or 'astrometrynet'
-    :param update: If set, the object list will be updated in-place to contain correct `ra` and `dec` sky coordinates
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :param \\**kwargs: All other parameters will be directly passed to the respective refinement function
-    :returns: Refined astrometric solution
+    Dispatches to quad-hash, SCAMP, astropy, or astrometrynet fitting
+    depending on ``method``.
 
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        List of objects on the frame, must contain at least ``x``, ``y``, and ``flux`` columns.
+    cat : astropy.table.Table or str
+        Reference astrometric catalogue.
+    sr : float, optional
+        Matching radius in degrees.
+    wcs : astropy.wcs.WCS, optional
+        Initial WCS solution.
+    order : int, optional
+        Polynomial order for SIP or PV distortion solution. Default 0 for TAN;
+        2 is recommended for ``quadhash``.
+    cat_col_mag : str, optional
+        Catalogue column name for magnitude.
+    cat_col_mag_err : str, optional
+        Catalogue column name for magnitude error.
+    cat_col_ra : str, optional
+        Catalogue column name for Right Ascension.
+    cat_col_dec : str, optional
+        Catalogue column name for Declination.
+    cat_col_ra_err : str, optional
+        Catalogue column name for Right Ascension error.
+    cat_col_dec_err : str, optional
+        Catalogue column name for Declination error.
+    n_iter : int, optional
+        Number of iterations for Python-based matching.
+    use_photometry : bool, optional
+        Use photometry-assisted matching in Python-based methods.
+    min_matches : int, optional
+        Minimum number of good matches required.
+    method : str, optional
+        Fitting method. One of ``'quadhash'`` (default, 2–7× more accurate),
+        ``'scamp'``, ``'astropy'``, or ``'astrometrynet'``.
+    update : bool, optional
+        If True, update ``ra`` and ``dec`` columns in ``obj`` in-place.
+    verbose : bool or callable, optional
+        Whether to show verbose messages. May be boolean or a ``print``-like callable.
+    **kwargs
+        All other keyword arguments are passed to the respective refinement function.
+
+    Returns
+    -------
+    astropy.wcs.WCS or None
+        Refined astrometric solution, or None on failure.
     """
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
@@ -282,40 +326,73 @@ def filter_transient_candidates(
 ):
     """Higher-level transient candidate filtering routine.
 
-    It optionally filters out the following classes of objects:
+    Optionally filters out the following classes of objects:
 
-       - flagged ones, i.e. with :code:`obj['flags'] != 0`
-       - positionally coincident with stars from provided cataloge table (if :code:`cat != None`)
-       - positionally coincident with stars from Vizier catalogues provided as a list of names (if `vizier` is non-empty)
-       - positionally and temporally coincident with Solar system objects from SkyBoT service (if :code:`skybot = True`)
-       - positionally and temporally coincident with NED objects (if :code:`ned = True`).
+    - flagged ones (``obj['flags'] != 0``)
+    - positionally coincident with stars from a provided reference catalogue
+    - positionally coincident with stars from Vizier catalogues
+    - positionally and temporally coincident with Solar System objects from SkyBoT
+    - positionally and temporally coincident with NED objects
 
-    If :code:`get_candidates = False`, it returns only the indices of "good" objects, else returning filtered object list.
-    If :code:`get_candidates = True` and :code:`remove = False`, it does not remove the objects but just mark them in added columns corresponding to various filters applied.
+    The original object list is never modified; a filtered or annotated copy is returned.
 
-    The routine will not modify the original list, but return its filtered / modified copy instead.
+    If ``get_candidates=False``, returns only a boolean mask of objects surviving all filters.
+    If ``get_candidates=True`` and ``remove=False``, all objects are returned but annotated
+    with ``candidate_*`` columns indicating which filters matched each object, plus a
+    ``candidate_good`` column that is ``True`` for objects surviving all filters.
 
-    :param obj: Input object list
-    :param obj_col_ra: Column name for object Right Ascension
-    :param obj_col_dec: Column name for object Declination
-    :param sr: Matching radius in degrees
-    :param pixscale: Pixel scale. If provided, and `sr` is not specified, the latter will be set to half FWHM
-    :param fwhm: FWHM value in pixels. If not set, will be estimated as a median of FWHMs of all unflagged objects
-    :param time: Time corresponding to the object observations, as :class:`astropy.time.Time` or :class:`datetime.datetime` object.
-    :param cat: Input reference catalogue, as :class:`astropy.table.Table` or similar object. Optional
-    :param cat_col_ra: Column name for catalogue Right Ascension
-    :param cat_col_dec: Column name for catalogue Declination
-    :param vizier: List of Vizier catalogue identifiers, or their short names, to cross-match the objects with.
-    :param skybot: Whether to cross-match the objects with the positions of known minor planets at the time of observations (specified through `time` parameter)
-    :param ned: Whether to cross-match the positions of objects with NED database entries
-    :param flagged: Whether to filter out flagged objects, keeping only the ones with :code:`(obj['flags'] & flagmask) == 0`
-    :param flagmask: The mask to be used for filtering of flagged objects. Will be ANDed with object flags, so should have a bit set for every relevant mask bit
-    :param col_id: Column name for some unique identifier that should not appear twice in the object list. If not specified, new column `stdpipe_id` with unique integer identifiers will be created automatically
-    :param vizier_checker_fn: Function to check whether the cross-matched Vizier catalogue entries satisfy some additional conditions to be considered true matches. Signature should be :code:`fn(obj, xcat, catname)`, with passed `obj` having the same shape and order as `xcat` returned by cross-match, and should return boolean array of the same shape. Optional
-    :param get_candidates: Whether to return the list of candidates, or (if :code:`get_candidates=False`) just a boolean mask of objects surviving the filters
-    :param remove: Whether to remove the filtered entries from the returned list. If not, a number of additional columns (all having names `candidate_*`) will be added for every filter used, with `True` set if the filter matches the object. Finally, the boolean column `candidate_good` will have `True` for the objects surviving all the filters
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :returns: Either the copy of the list with "good" candidates, or (if :code:`get_candidates=False`) just a boolean mask of objects surviving the filters, with the same size as original objects list.
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        Input object list.
+    sr : float, optional
+        Matching radius in degrees. Defaults to half FWHM (if ``pixscale`` is set) or 1 arcsec.
+    pixscale : float, optional
+        Pixel scale in degrees/pixel. Used to compute the default matching radius.
+    fwhm : float, optional
+        FWHM in pixels. Estimated from unflagged objects if not provided.
+    time : astropy.time.Time or datetime.datetime, optional
+        Observation time; required for SkyBoT cross-matching.
+    obj_col_ra : str, optional
+        Column name for object Right Ascension.
+    obj_col_dec : str, optional
+        Column name for object Declination.
+    cat : astropy.table.Table, optional
+        Reference catalogue for spatial cross-matching.
+    cat_col_ra : str, optional
+        Column name for catalogue Right Ascension.
+    cat_col_dec : str, optional
+        Column name for catalogue Declination.
+    vizier : list of str, optional
+        Vizier catalogue identifiers (or short names) to cross-match against.
+    skybot : bool, optional
+        If True, cross-match with SkyBoT Solar System object positions.
+    ned : bool, optional
+        If True, cross-match with NED database entries.
+    flagged : bool, optional
+        If True, filter out objects where ``(obj['flags'] & flagmask) != 0``.
+    flagmask : int, optional
+        Bitmask applied to ``obj['flags']`` for flag filtering.
+    col_id : str, optional
+        Column name for a unique object identifier. A ``stdpipe_id`` column is
+        created automatically if not specified.
+    vizier_checker_fn : callable, optional
+        Function ``fn(obj, xcat, catname) -> bool array`` to apply additional
+        conditions on Vizier cross-matches before they are considered true matches.
+    get_candidates : bool, optional
+        If True (default), return the filtered/annotated object list.
+        If False, return only a boolean mask over the original list.
+    remove : bool, optional
+        If True (default), remove filtered entries from the returned list.
+        If False, keep all objects and add ``candidate_*`` annotation columns.
+    verbose : bool or callable, optional
+        Whether to show verbose messages. May be boolean or a ``print``-like callable.
+
+    Returns
+    -------
+    astropy.table.Table or ndarray of bool
+        Filtered/annotated copy of the object list, or (if ``get_candidates=False``)
+        a boolean mask of the same length as the input.
     """
 
     # Simple wrapper around print for logging in verbose mode only
@@ -501,32 +578,64 @@ def calibrate_photometry(
 ):
     """Higher-level photometric calibration routine.
 
-    It wraps :func:`stdpipe.photometry.match` routine with some convenient defaults so that it is easier to use with typical tabular data.
+    Wraps :func:`stdpipe.photometry.match` with convenient defaults for typical
+    tabular data.
 
-    :param obj: Table of detected objects
-    :param cat: Reference photometric catalogue
-    :param sr: Matching radius in degrees, optional
-    :param pixscale: Pixel scale, degrees per pixel. If specified, and `sr` is not set, then median value of half of FWHM, multiplied by pixel scale, is used as a matching radius.
-    :param order: Order of zero point spatial polynomial (0 for constant).
-    :param bg_order: Order of additive flux term spatial polynomial (None to disable this term in the model)
-    :param obj_col_mag: Column name for object instrumental magnitude
-    :param obj_col_mag_err: Column name for object magnitude error
-    :param obj_col_ra: Column name for object Right Ascension
-    :param obj_col_dec: Column name for object Declination
-    :param obj_col_flags: Column name for object flags
-    :param obj_col_x: Column name for object x coordinate
-    :param obj_col_y: Column name for object y coordinate
-    :param cat_col_mag: Column name for catalogue magnitude
-    :param cat_col_mag_err: Column name for catalogue magnitude error
-    :param cat_col_mag1: Column name for the first catalogue magnitude defining the stellar color
-    :param cat_col_mag2: Column name for the second catalogue magnitude defining the stellar color
-    :param cat_col_ra: Column name for catalogue Right Ascension
-    :param cat_col_dec: Column name for catalogue Declination
-    :param update: If True, `mag_calib` and `mag_calib_err` columns with calibrated magnitude (without color term) and its error will be added to the object table
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
-    :param \\**kwargs: The rest of keyword arguments will be directly passed to :func:`stdpipe.photometry.match`.
-    :returns: The dictionary with photometric results, as returned by :func:`stdpipe.photometry.match`.
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        Table of detected objects.
+    cat : astropy.table.Table
+        Reference photometric catalogue.
+    sr : float, optional
+        Matching radius in degrees. Defaults to half the median FWHM in sky
+        units if ``pixscale`` is provided, otherwise 1 arcsec.
+    pixscale : float, optional
+        Pixel scale in degrees/pixel; used to compute the default matching radius.
+    order : int, optional
+        Spatial polynomial order for the zero-point model (0 = constant).
+    bg_order : int or None, optional
+        Spatial polynomial order for an additive flux background term.
+        None disables this term.
+    obj_col_mag : str, optional
+        Column name for object instrumental magnitude.
+    obj_col_mag_err : str, optional
+        Column name for object magnitude error.
+    obj_col_ra : str, optional
+        Column name for object Right Ascension.
+    obj_col_dec : str, optional
+        Column name for object Declination.
+    obj_col_flags : str, optional
+        Column name for object flags.
+    obj_col_x : str, optional
+        Column name for object x coordinate.
+    obj_col_y : str, optional
+        Column name for object y coordinate.
+    cat_col_mag : str, optional
+        Column name for catalogue magnitude.
+    cat_col_mag_err : str, optional
+        Column name for catalogue magnitude error.
+    cat_col_mag1 : str, optional
+        First catalogue magnitude column for the color term (e.g. ``'B'``).
+    cat_col_mag2 : str, optional
+        Second catalogue magnitude column for the color term (e.g. ``'R'``).
+    cat_col_ra : str, optional
+        Column name for catalogue Right Ascension.
+    cat_col_dec : str, optional
+        Column name for catalogue Declination.
+    update : bool, optional
+        If True, add ``mag_calib`` and ``mag_calib_err`` columns to ``obj``
+        in-place with the calibrated magnitude and its error.
+    verbose : bool or callable, optional
+        Whether to show verbose messages. May be boolean or a ``print``-like callable.
+    **kwargs
+        Additional keyword arguments passed to :func:`stdpipe.photometry.match`.
 
+    Returns
+    -------
+    dict or None
+        Dictionary with photometric results as returned by
+        :func:`stdpipe.photometry.match`, or None on failure.
     """
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
@@ -617,25 +726,36 @@ def make_random_stars(
 ):
     """Generate a table of random stars.
 
-    Coordinates are distributed uniformly with :code:`edge <= x < width-edge` and :code:`edge <= y < height-edge`.
+    Coordinates are distributed uniformly with
+    ``edge <= x < width - edge`` and ``edge <= y < height - edge``.
+    Fluxes are log-uniform between ``minflux`` and ``maxflux``.
 
-    Fluxes are log-uniform between user-provided min and max values.
+    Parameters
+    ----------
+    width : int, optional
+        Width of the image in pixels.
+    height : int, optional
+        Height of the image in pixels.
+    shape : tuple of int, optional
+        Image shape ``(height, width)``; used instead of ``width`` and ``height`` if set.
+    nstars : int, optional
+        Number of artificial stars to generate.
+    minflux : float, optional
+        Minimum star flux in ADU.
+    maxflux : float, optional
+        Maximum star flux in ADU.
+    edge : int, optional
+        Minimum distance to image edges for star placement.
+    wcs : astropy.wcs.WCS, optional
+        If provided, sky coordinates ``ra`` and ``dec`` are added to the catalogue.
+    verbose : bool or callable, optional
+        Whether to show verbose messages. May be boolean or a ``print``-like callable.
 
-    Returns the catalogue of generated stars, with at least `x`, `y` and `flux` fields set.
-    If `wcs` is set, the returned catalogue will also contain `ra` and `dec` fields with
-    sky coordinates of the stars.
-
-    :param width: Width of the image containing generated stars
-    :param height: Height of the image containing generated stars
-    :param shape: Shape  of the image containing generated stars, to be used instead of `width` and `height` if set
-    :param nstars: Number of artificial stars to inject into the image
-    :param minflux: Minimal flux of arttificial stars, in ADU units
-    :param maxflux: Maximal flux of arttificial stars, in ADU units
-    :param edge: Minimal distance to image edges for artificial stars to be placed. Optional
-    :param wcs: WCS as :class:`astropy.wcs.WCS` to be used to derive sky coordinates of injected stars. Optional
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :returns: The catalogue of injected stars, containing the fluxes, image coordinates and (if `wcs` is set) sky coordinates of injected stars.
-
+    Returns
+    -------
+    astropy.table.Table
+        Catalogue with columns ``x``, ``y``, ``flux``, ``mag``, and optionally
+        ``ra``, ``dec`` if ``wcs`` is provided.
     """
 
     # Simple wrapper around print for logging in verbose mode only
@@ -673,33 +793,40 @@ def place_random_stars(
     wcs=None,
     verbose=False,
 ):
-    """Randomly place artificial stars into the image.
+    """Randomly place artificial stars into an image in-place.
 
-    The stars will be placed on top of the existing content of the image, and the Poissonian
-    noise will be applied to these stars according to the specified `gain` value. Also, the saturation
-    level will be applied to the resulting image according to the `saturation` value.
+    Stars are added on top of the existing image content. Poissonian noise is
+    applied according to ``gain``, and pixel values are clipped at ``saturation``.
+    Coordinates are uniformly distributed; fluxes are log-uniform.
 
-    Coordinates of the injected stars are distributed uniformly.
-    Fluxes are log-uniform between user-provided `minflux` and `maxflux` values in ADU units.
+    Parameters
+    ----------
+    image : ndarray
+        2D image array; modified in-place.
+    psf_model : dict
+        PSF model structure as returned by :func:`stdpipe.psf.run_psfex`.
+    nstars : int, optional
+        Number of artificial stars to inject.
+    minflux : float, optional
+        Minimum star flux in ADU.
+    maxflux : float, optional
+        Maximum star flux in ADU.
+    gain : float, optional
+        Detector gain in e-/ADU; used to add Poissonian noise to each injected star.
+    saturation : float, optional
+        Saturation level in ADU; injected pixels above this are clipped.
+    edge : int, optional
+        Minimum distance to image edges for star placement.
+    wcs : astropy.wcs.WCS, optional
+        If provided, sky coordinates ``ra`` and ``dec`` are added to the catalogue.
+    verbose : bool or callable, optional
+        Whether to show verbose messages. May be boolean or a ``print``-like callable.
 
-    Returns the catalogue of generated stars, with at least `x`, `y` and `flux` fields set,
-    as returned by :func:`stdpipe.pipeline.make_random_stars`
-
-    If `wcs` is set, the returned catalogue will also contain `ra` and `dec` fields with
-    sky coordinates of the stars
-
-    :param image: Image where artificial stars will be injected
-    :param psf_model: PSF model structure as returned by :func:`stdpipe.psf.run_psfex`
-    :param nstars: Number of artificial stars to inject into the image
-    :param minflux: Minimal flux of arttificial stars, in ADU units
-    :param maxflux: Maximal flux of arttificial stars, in ADU units
-    :param gain: Image gain value. If set, will be used to apply Poissonian noise to the source
-    :param saturation: Saturation level in ADU units to be applied to the image
-    :param edge: Minimal distance to image edges for artificial stars to be placed
-    :param wcs: WCS as :class:`astropy.wcs.WCS` to be used to derive sky coordinates of injected stars
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
-    :returns: The catalogue of injected stars, containing the fluxes, image coordinates and (if `wcs` is set) sky coordinates of injected stars.
-
+    Returns
+    -------
+    astropy.table.Table
+        Catalogue of injected stars as returned by :func:`make_random_stars`,
+        with columns ``x``, ``y``, ``flux``, ``mag``, and optionally ``ra``, ``dec``.
     """
 
     # Simple wrapper around print for logging in verbose mode only
@@ -826,42 +953,53 @@ def split_image(
     verbose=False,
     **kwargs,
 ):
-    """Generator function to split the image into several (`nx` x `ny`)
-    blocks, while also optionally providing the subsets of images, FITS
-    headers, WCS solutions, PSFs, catalogues or object lists for the
-    sub-blocks. FITS headers and WCS solutions will be adjusted to properly
-    reflect the astrometry in the sub-image. Tables will be sub-setted to only
-    include the rows that are inside the sub-image, according to their `x` and
-    `y`, or `ra` and `dec`, or `RAJ2000` and `DEJ2000` columns.
+    """Generator that splits an image into ``nx × ny`` sub-image blocks.
 
-    The blocks may optionally be extended by 'overlap' pixels in all
-    directions, so that at least in some sub-images every part of original
-    image is far from the edge. This parameter may be used e.g. in conjunction
-    with `edge` parameter of :func:`stdpipe.photometry.get_objects_sextractor`
-    to avoid detecting the same object twice.
+    Also optionally yields sub-setted copies of any additional images, FITS
+    headers, WCS solutions, PSF models, catalogues, or object lists passed as
+    positional or keyword arguments.  FITS headers and WCS solutions are
+    adjusted to reflect the sub-image astrometry.  Tables are filtered to rows
+    whose ``x``/``y``, ``ra``/``dec``, or ``RAJ2000``/``DEJ2000`` coordinates
+    fall inside the sub-image.
 
-    :param image: Image to split
-    :param \\*args: Set of additional images, headers, WCS solutions, or tables to split
-    :param nx: Number of sub-images in `x` direction
-    :param ny: Number of sub-images in `y` direction
-    :param overlap: If set, defines how much sub-images will overlap, in pixels.
-    :param xmin: If set, defines the image sub-region for splitting, otherwise 0
-    :param xmax: If set, defines the image sub-region for splitting, otherwise image.shape[1]
-    :param ymin: If set, defines the image sub-region for splitting, otherwise 0
-    :param ymax: If set, defines the image sub-region for splitting, otherwise image.shape[0]
-    :param get_index: If set, also returns the number of current sub-image, starting from zero
-    :param get_origin: If set, also return the sub-image origin pixel coordinates
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
-    :param \\**kwargs: Set of images, headers, WCS solutions, or tables to split
-    :returns: Every concesutive call to the generator will return the list of cropped objects corresponding to the next sub-image, as well as some sub-image metadata.
+    Sub-images may optionally overlap by ``overlap`` pixels in every direction,
+    so that each part of the original image appears far from an edge in at least
+    one block.
 
-    The returned list is constructed from the following elements:
+    Parameters
+    ----------
+    image : ndarray
+        2D image to split.
+    *args
+        Additional images, headers, WCS objects, or tables to crop alongside ``image``.
+    nx : int, optional
+        Number of sub-images along the x axis.
+    ny : int, optional
+        Number of sub-images along the y axis. Defaults to ``nx``.
+    overlap : int, optional
+        Number of pixels by which adjacent blocks overlap.
+    xmin, xmax : int, optional
+        Horizontal extent of the region to split (defaults to full image width).
+    ymin, ymax : int, optional
+        Vertical extent of the region to split (defaults to full image height).
+    get_index : bool, optional
+        If True, prepend the sub-image index (0-based) to each yielded list.
+    get_origin : bool, optional
+        If True, include the sub-image origin ``(x1, y1)`` in each yielded list.
+    verbose : bool or callable, optional
+        Whether to show verbose messages. May be boolean or a ``print``-like callable.
+    **kwargs
+        Additional images, headers, WCS objects, or tables to crop.
 
-    - Index of current sub-image, if :code:`get_index=True`
-    - `x` and `y` coordinates of current sub-image origin inside the original image
-    - Cropped image
-    - Cropped additional images, headers, WCS objects or tables in the order of their appearance in the arguments
+    Yields
+    ------
+    list
+        Each element is a list built from (in order):
 
+        - sub-image index, if ``get_index=True``
+        - origin ``x1``, ``y1``, if ``get_origin=True``
+        - cropped image
+        - cropped versions of each ``*args`` and ``**kwargs`` entry
     """
 
     # Simple wrapper around print for logging in verbose mode only
@@ -931,34 +1069,46 @@ def get_subimage_centered(
     verbose=False,
     **kwargs,
 ):
-    """Convenience function for getting the cropped sub-image centered at a
-    given pixel position, while also optionally providing the mask, header,
-    wcs, psf, object list etc for it.  Its behaviour and arguments are mostly
-    identical to the ones of :func:`stdpipe.pipeline.split_image`.
+    """Crop a sub-image centered at a given pixel position.
 
-    In contrast to :func:`stdpipe.utils.crop_image_centered` it accepts output
-    width and height as parameters.  These will correspond to the size of the
-    output if it is completely inside the original image; if not - they will be
-    correspondingly smaller (i.e. it does not pad the data to keep requested
-    position exactly at the center).
+    Also optionally crops any additional images, masks, headers, WCS solutions,
+    PSF models, object lists, etc. passed as arguments.  Behaviour is identical
+    to :func:`split_image` for a single block.
 
-    :param image: Image to crop
-    :param \\*args: Set of additional images, headers, WCS solutions, or tables to split
-    :param x0: Pixel `x` coordinate of the cropped image center in the original image
-    :param y0: Pixel `y` coordinate of the cropped image center in the original image
-    :param width: Pixel width of the sub-image
-    :param height: Pixel height of the sub-image, optional. If not provided, assumed to be equal to `width`
-    :param get_origin: If set, also return the sub-image origin pixel coordinates
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
-    :param \\**kwargs: Set of images, headers, WCS solutions, or tables to split
-    :returns: list of cropped objects corresponding to the sub-image, as well as some sub-image metadata.
+    Unlike :func:`stdpipe.utils.crop_image_centered`, this function accepts
+    explicit output ``width`` and ``height``.  If the requested region extends
+    beyond the image boundary, the returned sub-image will be smaller (no
+    padding is applied).
 
-    The returned list is constructed from the following elements:
+    Parameters
+    ----------
+    image : ndarray
+        2D image to crop.
+    *args
+        Additional images, headers, WCS objects, or tables to crop alongside ``image``.
+    x0 : int or float
+        Pixel x coordinate of the desired center in the original image.
+    y0 : int or float
+        Pixel y coordinate of the desired center in the original image.
+    width : int
+        Pixel width of the sub-image.
+    height : int, optional
+        Pixel height of the sub-image. Defaults to ``width``.
+    get_origin : bool, optional
+        If True, include the sub-image origin ``(x1, y1)`` in the returned list.
+    verbose : bool or callable, optional
+        Whether to show verbose messages. May be boolean or a ``print``-like callable.
+    **kwargs
+        Additional images, headers, WCS objects, or tables to crop.
 
-    - `x` and `y` coordinates of current sub-image origin inside the original image
-    - Cropped image
-    - Cropped additional images, headers, WCS objects or tables in the order of their appearance in the arguments
+    Returns
+    -------
+    list
+        List containing:
 
+        - origin ``x1``, ``y1``, if ``get_origin=True``
+        - cropped image
+        - cropped versions of each ``*args`` and ``**kwargs`` entry
     """
 
     # Simple wrapper around print for logging in verbose mode only
@@ -989,16 +1139,28 @@ def get_subimage_centered(
 
 
 def get_detection_limit(obj, sn=5, method='sn', verbose=True):
-    """
-    Estimate the detection limit using one of several methods.
-    The objects table should contain calibrated magnitudes and their errors
-    in `mag_calib` and `'mag_calib_err` columns.
+    """Estimate the detection limit magnitude.
 
-    :param obj: astropy.table.Table with calibrated objects
-    :param sn: S/N value corresponding to the detection limit
-    :param method: Method to use. One of 'sn' (extrapolation S/N vs magnitude) or 'bg' (not yet implemented)
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :returns: The magnitude corresponding to the detection limit on a given S/N level.
+    The object table must contain calibrated magnitudes and errors in
+    ``mag_calib`` and ``mag_calib_err`` columns.
+
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        Table with calibrated objects.
+    sn : float, optional
+        S/N threshold defining the detection limit.
+    method : str, optional
+        Estimation method. Currently only ``'sn'`` (S/N vs magnitude
+        extrapolation) is implemented.
+    verbose : bool or callable, optional
+        Whether to show verbose messages. May be boolean or a ``print``-like callable.
+
+    Returns
+    -------
+    float or None
+        Magnitude corresponding to the detection limit at the given S/N level,
+        or None if estimation fails.
     """
 
     # Simple wrapper around print for logging in verbose mode only

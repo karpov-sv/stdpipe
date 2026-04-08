@@ -218,14 +218,26 @@ def _mutual_nearest_neighbor(
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Find mutual nearest-neighbor pairs between two point sets within radius.
 
-    Returns (idx_a, idx_b) arrays of matched indices where each pair is
+    Returns ``(idx_a, idx_b)`` arrays of matched indices where each pair is
     the mutual closest match within the given radius.
 
-    Args:
-        xy_a: (N, 2) first point set
-        xy_b: (M, 2) second point set
-        radius: maximum matching distance
-        tree_b: optional pre-built cKDTree for xy_b (avoids rebuilding)
+    Parameters
+    ----------
+    xy_a : (N, 2) ndarray
+        First point set.
+    xy_b : (M, 2) ndarray
+        Second point set.
+    radius : float
+        Maximum matching distance.
+    tree_b : cKDTree, optional
+        Pre-built cKDTree for ``xy_b`` (avoids rebuilding).
+
+    Returns
+    -------
+    idx_a : ndarray of int
+        Indices into ``xy_a`` for matched pairs.
+    idx_b : ndarray of int
+        Indices into ``xy_b`` for matched pairs.
     """
     if len(xy_a) == 0 or len(xy_b) == 0:
         return np.array([], dtype=np.int32), np.array([], dtype=np.int32)
@@ -1327,50 +1339,83 @@ def refine_wcs_quadhash(
     """Refine WCS using quad-hash pattern matching algorithm.
 
     Pure Python implementation of astrometric refinement using quad-hash based
-    pattern matching. Provides robust WCS refinement with no external dependencies.
+    pattern matching with no external dependencies (only numpy, scipy, astropy).
+    Typically achieves sub-arcsecond accuracy; ~2–7× more accurate than SCAMP,
+    especially for challenging conditions, though ~4× slower.
 
-    :param obj: List of objects on the frame that should contain at least `x`, `y` and either `flux` or `mag` columns.
-    :param cat: Reference astrometric catalogue with RA, Dec, and magnitude columns
-    :param wcs: Initial WCS solution (rough estimate)
-    :param header: FITS header containing initial astrometric solution (alternative to wcs parameter)
-    :param sr: Matching radius in degrees (used for stage 2 matching)
-    :param order: Polynomial order for SIP distortion solution (1-3, default 2)
-    :param cat_col_ra: Catalogue column name for Right Ascension (default 'RAJ2000')
-    :param cat_col_dec: Catalogue column name for Declination (default 'DEJ2000')
-    :param cat_col_mag: Catalogue column name for magnitude (default 'rmag')
-    :param obj_col_mag: Object list column name for magnitude (default: auto-detect 'mag')
-    :param obj_col_flux: Object list column name for flux (default 'flux', used if mag not present)
-    :param sn: If provided, only objects with signal to noise ratio exceeding this value will be used
-    :param n_det: Number of brightest detections to use for matching (default 150)
-    :param n_ref: Number of brightest catalog stars to use for matching (default 600)
-    :param max_quads_tested: Maximum number of detection quads to test (default 8000)
-    :param allow_reflection: Allow reflected quad matches (default True)
-    :param use_wcs_prior: Use initial WCS to filter hypotheses by scale/parity (default True)
-    :param scale_tolerance: Fractional tolerance for scale filtering (default 0.30)
-    :param enforce_parity: Enforce parity consistency with initial WCS (default True)
-    :param refine_use_all: If True, expand final refinement to a larger pool of objects/catalog entries
-    :param refine_n_det: Max number of detections to use in expanded refinement pool (None = all)
-    :param refine_n_ref: Max number of catalog stars to use in expanded refinement pool (None = all)
-    :param refine_match_radius_arcsec: Matching radius (arcsec) for expanded refinement pool (default: stage2 radius)
-    :param get_header: If True, function will return the FITS header object instead of WCS solution
-    :param update: If set, the object list will be updated in-place to contain correct `ra` and `dec` sky coordinates
-    :param verbose: Whether to show verbose messages during the run. May be either boolean, or a `print`-like function.
-    :returns: Refined WCS solution (or FITS header if get_header=True), or None if refinement fails
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        List of objects on the frame, must contain at least ``x``, ``y``, and
+        either ``flux`` or ``mag`` columns.
+    cat : astropy.table.Table
+        Reference astrometric catalogue with RA, Dec, and magnitude columns.
+    wcs : astropy.wcs.WCS, optional
+        Initial WCS solution (rough estimate).
+    header : astropy.io.fits.Header, optional
+        FITS header containing the initial astrometric solution (alternative to ``wcs``).
+    sr : float, optional
+        Matching radius in degrees for stage 2 matching.
+    order : int, optional
+        SIP polynomial order for the distortion solution (1–3).
+    cat_col_ra : str, optional
+        Catalogue column name for Right Ascension. Default is ``'RAJ2000'``.
+    cat_col_dec : str, optional
+        Catalogue column name for Declination. Default is ``'DEJ2000'``.
+    cat_col_mag : str, optional
+        Catalogue column name for magnitude. Default is ``'rmag'``.
+    obj_col_mag : str, optional
+        Object list column name for magnitude. Auto-detected if not provided.
+    obj_col_flux : str, optional
+        Object list column name for flux. Used if magnitude column is absent.
+        Default is ``'flux'``.
+    sn : float, optional
+        If provided, only objects with S/N exceeding this value will be used.
+    n_det : int, optional
+        Number of brightest detections to use for matching. Default is 150.
+    n_ref : int, optional
+        Number of brightest catalogue stars to use for matching. Default is 600.
+    max_quads_tested : int, optional
+        Maximum number of detection quads to test. Default is 8000.
+    allow_reflection : bool, optional
+        Allow reflected quad matches. Default is True.
+    use_wcs_prior : bool, optional
+        Use the initial WCS to filter hypotheses by scale/parity. Default is True.
+    scale_tolerance : float, optional
+        Fractional tolerance for scale filtering. Default is 0.30 (±30%).
+    enforce_parity : bool, optional
+        Enforce parity consistency with the initial WCS. Default is True.
+    refine_use_all : bool, optional
+        If True, expand the final refinement to a larger pool of objects/catalogue entries.
+    refine_n_det : int or None, optional
+        Max number of detections in the expanded refinement pool. None means all.
+    refine_n_ref : int or None, optional
+        Max number of catalogue stars in the expanded refinement pool. None means all.
+    refine_match_radius_arcsec : float or None, optional
+        Matching radius in arcsec for the expanded refinement pool.
+        Defaults to the stage 2 radius.
+    get_header : bool, optional
+        If True, return the FITS header object instead of WCS solution.
+    update : bool, optional
+        If True, update object sky coordinates in-place using the refined WCS.
+    verbose : bool or callable, optional
+        Whether to show verbose messages. May be boolean or a ``print``-like callable.
 
-    .. note::
-        This is a pure Python implementation with no external dependencies (only numpy, scipy, astropy).
-        It typically achieves sub-arcsecond accuracy but is ~4x slower than SCAMP (~2s vs ~0.5s).
-        However, it is 2-7x more accurate than SCAMP, especially for challenging conditions.
+    Returns
+    -------
+    astropy.wcs.WCS or astropy.io.fits.Header or None
+        Refined WCS solution, or FITS header if ``get_header=True``, or None on failure.
 
-    Example:
-        >>> from stdpipe.astrometry_quad import refine_wcs_quadhash
-        >>> wcs_refined = refine_wcs_quadhash(
-        ...     obj, cat, wcs_init,
-        ...     sr=10/3600,  # 10 arcsec matching radius
-        ...     order=2,     # Quadratic SIP distortion
-        ...     sn=5,        # Use only S/N > 5 objects
-        ...     verbose=True
-        ... )
+    Examples
+    --------
+    >>> from stdpipe.astrometry_quad import refine_wcs_quadhash
+    >>> wcs_refined = refine_wcs_quadhash(
+    ...     obj, cat, wcs_init,
+    ...     sr=10/3600,  # 10 arcsec matching radius
+    ...     order=2,     # quadratic SIP distortion
+    ...     sn=5,        # use only S/N > 5 objects
+    ...     verbose=True
+    ... )
     """
 
     # Simple wrapper around print for logging in verbose mode only
