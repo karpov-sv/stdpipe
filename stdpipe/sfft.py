@@ -423,36 +423,52 @@ def solve(
     Iterative sigma-clipping rejects outlier pixels (transients, cosmic
     rays, artifacts) that would otherwise bias the kernel solution.
 
-    :param image: Science image as a 2-D NumPy array
-    :param template: Template/reference image, same shape, aligned to science
-    :param mask: Boolean mask where True = bad pixels to ignore, optional.
-        If both science and template masks are needed, combine them before
-        passing (``mask = science_mask | template_mask``).
-    :param template_mask: Additional mask for template-only defects, optional.
-        Merged with ``mask`` internally.
-    :param err: Per-pixel error (standard deviation) map for weighting.
-        If None, uniform weights are used. If set to True, a simple
-        noise estimate is derived from the image.
-    :param kernel_shape: (ky, kx) size of the convolution kernel, must be odd.
-        Default (7, 7). Larger kernels handle bigger PSF differences but
-        are slower.
-    :param kernel_poly_order: Polynomial order for spatial variation of
-        each kernel coefficient. Default 2 (quadratic). Higher orders
-        capture more complex PSF variation but need more pixels.
-    :param bg_poly_order: Polynomial order for the differential background
-        model. Default 2.
-    :param flux_poly_order: Polynomial order for the kernel-sum constraint
-        (flux scale variation). Default 1 (linear gradient). Set to 0 for
-        constant flux scale.
-    :param flux_penalty: Penalty weight for the kernel-sum constraint.
-        Default 1e3. Larger values enforce the constraint more strictly.
-        Set to 0 to disable the constraint entirely.
-    :param ridge: Tikhonov regularization parameter. Default 1e-6.
-    :param sigma_clip: Sigma threshold for iterative outlier rejection.
-        Default 3.0. Set to None or 0 to disable clipping.
-    :param max_iter: Maximum number of sigma-clipping iterations. Default 5.
-    :param verbose: If True, print progress. If callable, use as log function.
-    :returns: :class:`SFFTResult` with difference image and all fit metadata
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Science image as a 2-D NumPy array.
+    template : numpy.ndarray
+        Template/reference image, same shape, aligned to science.
+    mask : numpy.ndarray, optional
+        Boolean mask where True = bad pixels to ignore. If both science and
+        template masks are needed, combine them before passing
+        (``mask = science_mask | template_mask``).
+    template_mask : numpy.ndarray, optional
+        Additional mask for template-only defects. Merged with ``mask`` internally.
+    err : numpy.ndarray, optional
+        Per-pixel error (standard deviation) map for weighting. If None, uniform
+        weights are used. If set to True, a simple noise estimate is derived from
+        the image.
+    kernel_shape : tuple of int, optional
+        (ky, kx) size of the convolution kernel, must be odd. Default (7, 7).
+        Larger kernels handle bigger PSF differences but are slower.
+    kernel_poly_order : int, optional
+        Polynomial order for spatial variation of each kernel coefficient.
+        Default 2 (quadratic). Higher orders capture more complex PSF variation
+        but need more pixels.
+    bg_poly_order : int, optional
+        Polynomial order for the differential background model. Default 2.
+    flux_poly_order : int, optional
+        Polynomial order for the kernel-sum constraint (flux scale variation).
+        Default 1 (linear gradient). Set to 0 for constant flux scale.
+    flux_penalty : float, optional
+        Penalty weight for the kernel-sum constraint. Default 1e3. Larger values
+        enforce the constraint more strictly. Set to 0 to disable the constraint
+        entirely.
+    ridge : float, optional
+        Tikhonov regularization parameter. Default 1e-6.
+    sigma_clip : float, optional
+        Sigma threshold for iterative outlier rejection. Default 3.0. Set to
+        None or 0 to disable clipping.
+    max_iter : int, optional
+        Maximum number of sigma-clipping iterations. Default 5.
+    verbose : bool or callable, optional
+        If True, print progress. If callable, use as log function.
+
+    Returns
+    -------
+    SFFTResult
+        Result object with difference image and all fit metadata.
     """
 
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
@@ -690,11 +706,21 @@ def solve(
 def evaluate_kernel_at(result, x, y, image_shape):
     """Evaluate the spatially varying kernel at a single image position.
 
-    :param result: :class:`SFFTResult` from :func:`solve`
-    :param x: X pixel coordinate
-    :param y: Y pixel coordinate
-    :param image_shape: (ny, nx) of the original image
-    :returns: 2-D array of shape ``result.kernel_shape``
+    Parameters
+    ----------
+    result : SFFTResult
+        :class:`SFFTResult` from :func:`solve`.
+    x : float
+        X pixel coordinate.
+    y : float
+        Y pixel coordinate.
+    image_shape : tuple of int
+        (ny, nx) of the original image.
+
+    Returns
+    -------
+    numpy.ndarray
+        2-D array of shape ``result.kernel_shape``.
     """
     ny, nx = image_shape
     x_n, y_n = _norm_coords(ny, nx)
@@ -712,11 +738,21 @@ def evaluate_kernel_at(result, x, y, image_shape):
 def evaluate_flux_scale(result, x, y, image_shape):
     """Evaluate the flux-scale polynomial at image position(s).
 
-    :param result: :class:`SFFTResult` from :func:`solve`
-    :param x: X coordinate(s), scalar or array
-    :param y: Y coordinate(s), scalar or array
-    :param image_shape: (ny, nx) of the original image
-    :returns: Flux scale value(s), same shape as x/y
+    Parameters
+    ----------
+    result : SFFTResult
+        :class:`SFFTResult` from :func:`solve`.
+    x : float or array-like
+        X coordinate(s), scalar or array.
+    y : float or array-like
+        Y coordinate(s), scalar or array.
+    image_shape : tuple of int
+        (ny, nx) of the original image.
+
+    Returns
+    -------
+    float or numpy.ndarray
+        Flux scale value(s), same shape as x/y.
     """
     ny, nx = image_shape
     xn = (np.asarray(x, dtype=np.float64) - 0.5 * (nx - 1)) / max(1.0, 0.5 * (nx - 1))
@@ -729,11 +765,21 @@ def evaluate_flux_scale(result, x, y, image_shape):
 def evaluate_background(result, x, y, image_shape):
     """Evaluate the differential background model at image position(s).
 
-    :param result: :class:`SFFTResult` from :func:`solve`
-    :param x: X coordinate(s), scalar or array
-    :param y: Y coordinate(s), scalar or array
-    :param image_shape: (ny, nx) of the original image
-    :returns: Background value(s), same shape as x/y
+    Parameters
+    ----------
+    result : SFFTResult
+        :class:`SFFTResult` from :func:`solve`.
+    x : float or array-like
+        X coordinate(s), scalar or array.
+    y : float or array-like
+        Y coordinate(s), scalar or array.
+    image_shape : tuple of int
+        (ny, nx) of the original image.
+
+    Returns
+    -------
+    float or numpy.ndarray
+        Background value(s), same shape as x/y.
     """
     ny, nx = image_shape
     xn = (np.asarray(x, dtype=np.float64) - 0.5 * (nx - 1)) / max(1.0, 0.5 * (nx - 1))

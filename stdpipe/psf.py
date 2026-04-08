@@ -43,40 +43,77 @@ def run_psfex(
 
     For the details of PSFEx operation we suggest to consult its documentation at https://psfex.readthedocs.io
 
-    :param image: Input image as a NumPy array
-    :param mask: Image mask as a boolean array (True values will be masked), optional
-    :param thresh: Detection threshold in sigmas above local background, for running initial SExtractor object detection
-    :param aper: Circular aperture radius in pixels, to be used for PSF normalization. Should contain most of object flux. If not specified, will be estimated as twice the FWHM
-    :param r0: Smoothing kernel size (sigma) to be used for improving object detection in initial SExtractor call
-    :param gain: Image gain
-    :param minarea: Minimal number of pixels in the object to be considered a detection (`DETECT_MINAREA` parameter of SExtractor)
-    :param vignet_size: The size of *postage stamps* to be used for PSF model creation
-    :param psf_size: The size of the supersampled PSF model
-    :param order: Spatial order of PSF model variance
-    :param sex_extra: Dictionary of additional options to be passed to SExtractor for initial object detection (`extra` parameter of :func:`stdpipe.photometry.get_objects_sextractor`). Optional
-    :param checkimages: List of PSFEx checkimages to return along with PSF model. Optional.
-    :param extra: Dictionary of extra configuration parameters to be passed to PSFEx call, with keys as parameter names. See :code:`psfex -dd` for the full list.
-    :param psffile: If specified, PSF model file will also be stored under this file name, so that it may e.g. be re-used by SExtractor later. Optional
-    :param get_obj: If set, also return the table with SExtractor detected objects.
-    :param _workdir: If specified, all temporary files will be created in this directory, and will be kept intact after running SExtractor and PSFEx. May be used for debugging exact inputs and outputs of the executable. Optional
-    :param _tmpdir: If specified, all temporary files will be created in a dedicated directory (that will be deleted after running the executable) inside this path.
-    :param _exe: Full path to PSFEx executable. If not provided, the code tries to locate it automatically in your :envvar:`PATH`.
-    :param _sex_exe: Full path to SExtractor executable. If not provided, the code tries to locate it automatically in your :envvar:`PATH`.
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :returns: PSF structure corresponding to the built PSFEx model.
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Input image as a NumPy array.
+    mask : numpy.ndarray, optional
+        Image mask as a boolean array (True values will be masked).
+    thresh : float, optional
+        Detection threshold in sigmas above local background, for running initial SExtractor object detection.
+    aper : float, optional
+        Circular aperture radius in pixels, to be used for PSF normalization. Should contain most of
+        object flux. If not specified, will be estimated as twice the FWHM.
+    r0 : float, optional
+        Smoothing kernel size (sigma) to be used for improving object detection in initial SExtractor call.
+    gain : float, optional
+        Image gain.
+    minarea : int, optional
+        Minimal number of pixels in the object to be considered a detection (``DETECT_MINAREA`` parameter
+        of SExtractor).
+    vignet_size : int, optional
+        The size of *postage stamps* to be used for PSF model creation.
+    psf_size : int, optional
+        The size of the supersampled PSF model.
+    order : int, optional
+        Spatial order of PSF model variance.
+    sex_extra : dict, optional
+        Dictionary of additional options to be passed to SExtractor for initial object detection
+        (``extra`` parameter of :func:`stdpipe.photometry.get_objects_sextractor`).
+    checkimages : list, optional
+        List of PSFEx checkimages to return along with PSF model.
+    extra : dict, optional
+        Dictionary of extra configuration parameters to be passed to PSFEx call, with keys as
+        parameter names. See :code:`psfex -dd` for the full list.
+    psffile : str, optional
+        If specified, PSF model file will also be stored under this file name, so that it may e.g.
+        be re-used by SExtractor later.
+    get_obj : bool, optional
+        If set, also return the table with SExtractor detected objects.
+    _workdir : str, optional
+        If specified, all temporary files will be created in this directory, and will be kept intact
+        after running SExtractor and PSFEx. May be used for debugging exact inputs and outputs of
+        the executable.
+    _tmpdir : str, optional
+        If specified, all temporary files will be created in a dedicated directory (that will be
+        deleted after running the executable) inside this path.
+    _exe : str, optional
+        Full path to PSFEx executable. If not provided, the code tries to locate it automatically
+        in your :envvar:`PATH`.
+    _sex_exe : str, optional
+        Full path to SExtractor executable. If not provided, the code tries to locate it automatically
+        in your :envvar:`PATH`.
+    verbose : bool or callable, optional
+        Whether to show verbose messages during the run of the function or not.
 
-    The structure has at least the following fields:
+    Returns
+    -------
+    dict
+        PSF structure corresponding to the built PSFEx model.
 
-    - `width`, `height` - dimesnions of supersampled PSF stamp
-    - `fwhm` - mean full width at half maximum (FWHM) of the images used for building the PSF model
-    - `sampling` - conversion factor between PSF stamp (supersampled) pixel size, and original image one (less than unity when supersampled resolution is finer than original image one)
-    - `ncoeffs` - number of coefficients pixel polynomials have
-    - `degree` - polynomial degree of a spatial variance of PSF model
-    - `data` - the data containing per-pixel polynomial coefficients for PSF model
-    - `header` - original FITS header of PSF model file, if :code:`get_header=True` parameter was set
+        The structure has at least the following fields:
 
-    This structure corresponds to the contents of original PSFEx generated output file that
-    is documented at https://psfex.readthedocs.io/en/latest/Appendices.html#psf-file-format-description
+        - ``width``, ``height`` - dimensions of supersampled PSF stamp
+        - ``fwhm`` - mean full width at half maximum (FWHM) of the images used for building the PSF model
+        - ``sampling`` - conversion factor between PSF stamp (supersampled) pixel size, and original image
+          one (less than unity when supersampled resolution is finer than original image one)
+        - ``ncoeffs`` - number of coefficients pixel polynomials have
+        - ``degree`` - polynomial degree of a spatial variance of PSF model
+        - ``data`` - the data containing per-pixel polynomial coefficients for PSF model
+        - ``header`` - original FITS header of PSF model file, if :code:`get_header=True` parameter was set
+
+        This structure corresponds to the contents of original PSFEx generated output file that
+        is documented at https://psfex.readthedocs.io/en/latest/Appendices.html#psf-file-format-description
 
     """
 
@@ -271,10 +308,20 @@ def load_psf(filename, get_header=False, verbose=False):
 
     The structure may be useful for inspection of PSF model with :func:`stdpipe.psf.get_supersampled_psf_stamp` and :func:`stdpipe.psf.get_psf_stamp`, as well as for injection of PSF instances (fake objects) into the image with :func:`stdpipe.psf.place_psf_stamp`.
 
-    :param filename: Name of a file containing PSF model built by PSFEx
-    :param get_header: Whether to return the original FITS header of PSF model file or not. If set, the header will be stored in `header` field of the returned structire
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :returns: PSF structure in the same format as returned from :func:`stdpipe.psf.run_psfex`.
+    Parameters
+    ----------
+    filename : str
+        Name of a file containing PSF model built by PSFEx.
+    get_header : bool, optional
+        Whether to return the original FITS header of PSF model file or not. If set,
+        the header will be stored in the ``header`` field of the returned structure.
+    verbose : bool or callable, optional
+        Whether to show verbose messages during the run of the function or not.
+
+    Returns
+    -------
+    dict
+        PSF structure in the same format as returned from :func:`stdpipe.psf.run_psfex`.
 
     """
 
@@ -350,11 +397,22 @@ def get_supersampled_psf_stamp(psf, x=0, y=0, normalize=True):
     with its center always in the center of central stamp pixel.
     Every *supersampled* pixel of the stamp corresponds to :code:`psf['sampling']` pixels of the original image.
 
-    :param psf: Input PSF structure as returned by :func:`stdpipe.psf.run_psfex` or :func:`stdpipe.psf.load_psf`
-    :param x: `x` coordinate of the position inside the original image to evaluate the PSF model
-    :param y: `y` coordinate of the position inside the original image to evaluate the PSF model
-    :param normalize: Whether to normalize the stamp to have flux exactly equal to unity or not
-    :returns: stamp of the PSF model evaluated at the given position inside the image
+    Parameters
+    ----------
+    psf : dict
+        Input PSF structure as returned by :func:`stdpipe.psf.run_psfex` or
+        :func:`stdpipe.psf.load_psf`.
+    x : float, optional
+        ``x`` coordinate of the position inside the original image to evaluate the PSF model.
+    y : float, optional
+        ``y`` coordinate of the position inside the original image to evaluate the PSF model.
+    normalize : bool, optional
+        Whether to normalize the stamp to have flux exactly equal to unity or not.
+
+    Returns
+    -------
+    numpy.ndarray
+        Stamp of the PSF model evaluated at the given position inside the image.
 
     """
 
@@ -398,13 +456,27 @@ def get_psf_stamp(psf, x=0, y=0, dx=None, dy=None, normalize=True):
     The stamp should directly represent stellar shape at a given position (including sub-pixel
     center shift) inside the image.
 
-    :param psf: Input PSF structure as returned by :func:`stdpipe.psf.run_psfex` or :func:`stdpipe.psf.load_psf`
-    :param x: `x` coordinate of the position inside the original image to evaluate the PSF model
-    :param y: `y` coordinate of the position inside the original image to evaluate the PSF model
-    :param dx: Sub-pixel adjustment of PSF position in image space, `x` direction
-    :param dy: Sub-pixel adjustment of PSF position in image space, `y` direction
-    :param normalize: Whether to normalize the stamp to have flux exactly equal to unity or not
-    :returns: Stamp of the PSF model evaluated at the given position inside the image, in original image pixels.
+    Parameters
+    ----------
+    psf : dict
+        Input PSF structure as returned by :func:`stdpipe.psf.run_psfex` or
+        :func:`stdpipe.psf.load_psf`.
+    x : float, optional
+        ``x`` coordinate of the position inside the original image to evaluate the PSF model.
+    y : float, optional
+        ``y`` coordinate of the position inside the original image to evaluate the PSF model.
+    dx : float, optional
+        Sub-pixel adjustment of PSF position in image space, ``x`` direction.
+    dy : float, optional
+        Sub-pixel adjustment of PSF position in image space, ``y`` direction.
+    normalize : bool, optional
+        Whether to normalize the stamp to have flux exactly equal to unity or not.
+
+    Returns
+    -------
+    numpy.ndarray
+        Stamp of the PSF model evaluated at the given position inside the image, in original
+        image pixels.
 
     """
 
@@ -481,12 +553,21 @@ def place_psf_stamp(image, psf, x0, y0, flux=1, gain=None):
 
     The image is modified in-place.
 
-    :param image: The image where artifi
-    :param psf: Input PSF structure as returned by :func:`stdpipe.psf.run_psfex` or :func:`stdpipe.psf.load_psf`
-    :param x0: `x` coordinate of the position to inject the source
-    :param y0: `y` coordinate of the position to inject the source
-    :param flux: The source flux in ADU units
-    :param gain: Image gain value. If set, used to apply Poissonian noise to the source.
+    Parameters
+    ----------
+    image : numpy.ndarray
+        The image where the artificial source will be injected (modified in-place).
+    psf : dict
+        Input PSF structure as returned by :func:`stdpipe.psf.run_psfex` or
+        :func:`stdpipe.psf.load_psf`.
+    x0 : float
+        ``x`` coordinate of the position to inject the source.
+    y0 : float
+        ``y`` coordinate of the position to inject the source.
+    flux : float, optional
+        The source flux in ADU units.
+    gain : float, optional
+        Image gain value. If set, used to apply Poissonian noise to the source.
 
     """
 
@@ -551,20 +632,49 @@ def create_psf_model(
     :func:`stdpipe.psf.run_psfex` and can be used with the same evaluation
     functions like :func:`stdpipe.psf.get_psf_stamp`.
 
-    :param image: Input image as a NumPy array, must be background subtracted
-    :param obj: Table of star positions. If None, stars will be detected automatically. Should have 'x', 'y' columns and optionally 'flux'.
-    :param fwhm: Approximate FWHM of stars in pixels. If None, will be estimated.
-    :param size: Size of cutouts to extract around stars (should be odd). If None, automatically determined from FWHM as ``max(25, round_up_to_odd(8 * fwhm))``.
-    :param mask: Image mask as a boolean array (True values will be masked), optional
-    :param oversampling: Oversampling factor for the ePSF (default: 2)
-    :param degree: Polynomial degree for spatial PSF variation (default: 0 = constant). Degree 1 = linear (3 coefficients), degree 2 = quadratic (6 coefficients), etc.
-    :param regularization: Tikhonov regularization parameter for polynomial fitting (default: 1e-6). Only used when ``degree > 0``. Set to 0 for unregularized least-squares.
-    :param subtract_neighbors: If True (default), subtract estimated flux from neighboring stars before extracting cutouts. Reduces contamination in crowded fields. Only used when ``degree > 0``.
-    :param subtract_background: If True, subtract local background (median of edge pixels) from each stamp before normalization. Only used when ``degree > 0``. Set to True when the input image has NOT been background-subtracted. Default is False, since the image should normally be background-subtracted before calling this function.
-    :param isolation: Minimum nearest-neighbor distance in FWHM units for selecting stars for ePSF building (default: 5.0). Stars with a neighbor closer than ``isolation * fwhm`` are excluded to avoid contamination from overlapping wings. Set to 0 or None to disable isolation filtering.
-    :param get_raw: If True and ``degree=0``, returns raw photutils EPSFModel object. Ignored when ``degree > 0``.
-    :param verbose: Whether to show verbose messages
-    :returns: Dictionary with PSFEx-compatible structure containing the PSF model
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Input image as a NumPy array, must be background subtracted.
+    obj : astropy.table.Table, optional
+        Table of star positions. If None, stars will be detected automatically.
+        Should have 'x', 'y' columns and optionally 'flux'.
+    fwhm : float, optional
+        Approximate FWHM of stars in pixels. If None, will be estimated.
+    size : int, optional
+        Size of cutouts to extract around stars (should be odd). If None, automatically
+        determined from FWHM as ``max(25, round_up_to_odd(8 * fwhm))``.
+    mask : numpy.ndarray, optional
+        Image mask as a boolean array (True values will be masked).
+    oversampling : int, optional
+        Oversampling factor for the ePSF (default: 2).
+    degree : int, optional
+        Polynomial degree for spatial PSF variation (default: 0 = constant). Degree 1 =
+        linear (3 coefficients), degree 2 = quadratic (6 coefficients), etc.
+    regularization : float, optional
+        Tikhonov regularization parameter for polynomial fitting (default: 1e-6). Only used
+        when ``degree > 0``. Set to 0 for unregularized least-squares.
+    subtract_neighbors : bool, optional
+        If True (default), subtract estimated flux from neighboring stars before extracting
+        cutouts. Reduces contamination in crowded fields. Only used when ``degree > 0``.
+    subtract_background : bool, optional
+        If True, subtract local background (median of edge pixels) from each stamp before
+        normalization. Only used when ``degree > 0``. Set to True when the input image has
+        NOT been background-subtracted. Default is False.
+    isolation : float, optional
+        Minimum nearest-neighbor distance in FWHM units for selecting stars for ePSF building
+        (default: 5.0). Stars with a neighbor closer than ``isolation * fwhm`` are excluded.
+        Set to 0 or None to disable isolation filtering.
+    get_raw : bool, optional
+        If True and ``degree=0``, returns raw photutils EPSFModel object. Ignored when
+        ``degree > 0``.
+    verbose : bool or callable, optional
+        Whether to show verbose messages.
+
+    Returns
+    -------
+    dict
+        Dictionary with PSFEx-compatible structure containing the PSF model.
 
     """
 

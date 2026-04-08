@@ -79,32 +79,71 @@ def run_hotpants(
     assumes that :code:`image_fwhm > template_fwhm`, and of course needs `image_fwhm` and
     `template_fwhm` to be provided.
 
-    :param image: Input science image as a Numpy array
-    :param template: Input template image, should have the same shape as a science image
-    :param mask: Science image mask as a boolean array (True values will be masked), optional
-    :param template_mask: Template image mask as a boolean array (True values will be masked), optional
-    :param err: Science image error map (expected RMS of every pixel). If set to `True`, the code will try to build the noise map directly from the image and `image_gain` parameter. Optional
-    :param template_err: Template image error map. If set to `True`, the code will try to build the noise map directly from the template and `template_gain` parameter. Optional
-    :param extra: Extra parameters to be passed to HOTPANTS executable. Should be a dictionary with parameter names as keys. Optional
-    :param image_fwhm: FWHM of science image in pixels, optional
-    :param template_fwhm: FWHM of template image in pixels, optional
-    :param image_gain: Gain of science image
-    :param template_gain: Gain of template image
-    :param rel_r: If specified, HOTPANTS `r` parameters will be set to :code:`image_fwhm*rel_r`
-    :param rel_rss: If specified, HOTPANTS `rss` parameters will be set to :code:`image_fwhm*rel_rss`
-    :param nx: Number of image sub-regions in `x` direction
-    :param ny: Number of image sub-regions in `y` direction
-    :param obj: List of objects detected on science image. If provided, it will be used to better place the sub-stamps used to derive the convolution kernel.
-    :param get_convolved: Whether to also return the convolved template image
-    :param get_scaled: Whether to also return noise-normalized difference image
-    :param get_noise: Whether to also return difference image noise model
-    :param get_kernel: Whether to also return convolution kernel used in the subtraction
-    :param get_header: Whether to also return the FITS header from HOTPANTS output file
-    :param _workdir: If specified, all temporary files will be created in this directory, and will be kept intact after running HOTPANTS. May be used for debugging exact inputs and outputs of the executable. Optional
-    :param _tmpdir: If specified, all temporary files will be created in a dedicated directory (that will be deleted after running the executable) inside this path.
-    :param _exe: Full path to HOTPANTS executable. If not provided, the code tries to locate it automatically in your :envvar:`PATH`.
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :returns: The difference image and, optionally, other kinds of images as requested by the `get_*` options above
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Input science image as a NumPy array.
+    template : numpy.ndarray
+        Input template image, should have the same shape as the science image.
+    mask : numpy.ndarray, optional
+        Science image mask as a boolean array (True values will be masked).
+    template_mask : numpy.ndarray, optional
+        Template image mask as a boolean array (True values will be masked).
+    err : numpy.ndarray or bool, optional
+        Science image error map (expected RMS of every pixel). If set to True,
+        the code will try to build the noise map directly from the image and
+        ``image_gain`` parameter.
+    template_err : numpy.ndarray or bool, optional
+        Template image error map. If set to True, the code will try to build the
+        noise map directly from the template and ``template_gain`` parameter.
+    extra : dict, optional
+        Extra parameters to be passed to HOTPANTS executable, with parameter names as keys.
+    image_fwhm : float, optional
+        FWHM of science image in pixels.
+    template_fwhm : float, optional
+        FWHM of template image in pixels.
+    image_gain : float, optional
+        Gain of science image.
+    template_gain : float, optional
+        Gain of template image.
+    rel_r : float, optional
+        If specified, HOTPANTS ``r`` parameters will be set to :code:`image_fwhm*rel_r`.
+    rel_rss : float, optional
+        If specified, HOTPANTS ``rss`` parameters will be set to :code:`image_fwhm*rel_rss`.
+    nx : int, optional
+        Number of image sub-regions in ``x`` direction.
+    ny : int, optional
+        Number of image sub-regions in ``y`` direction.
+    obj : astropy.table.Table, optional
+        List of objects detected on science image. If provided, it will be used to
+        better place the sub-stamps used to derive the convolution kernel.
+    get_convolved : bool, optional
+        Whether to also return the convolved template image.
+    get_scaled : bool, optional
+        Whether to also return noise-normalized difference image.
+    get_noise : bool, optional
+        Whether to also return difference image noise model.
+    get_kernel : bool, optional
+        Whether to also return convolution kernel used in the subtraction.
+    get_header : bool, optional
+        Whether to also return the FITS header from HOTPANTS output file.
+    _workdir : str, optional
+        If specified, all temporary files will be created in this directory, and will
+        be kept intact after running HOTPANTS. May be used for debugging.
+    _tmpdir : str, optional
+        If specified, all temporary files will be created in a dedicated directory
+        (that will be deleted after running the executable) inside this path.
+    _exe : str, optional
+        Full path to HOTPANTS executable. If not provided, the code tries to locate
+        it automatically in your :envvar:`PATH`.
+    verbose : bool or callable, optional
+        Whether to show verbose messages during the run of the function or not.
+
+    Returns
+    -------
+    numpy.ndarray or list
+        The difference image and, optionally, other kinds of images as requested
+        by the ``get_*`` options above.
 
     """
 
@@ -436,48 +475,82 @@ def run_zogy(
     sub-images, subtracted independently, and then the results will be stitched
     back. Sub-images will overlap by `overlap` pixels.
 
-    :param image: Input science image as a Numpy array
-    :param template: Input template image, should have the same shape as a science image
-    :param mask: Science image mask as a boolean array (True values will be masked), optional
-    :param template_mask: Template image mask as a boolean array (True values will be masked), optional
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Input science image as a NumPy array.
+    template : numpy.ndarray
+        Input template image, should have the same shape as the science image.
+    mask : numpy.ndarray, optional
+        Science image mask as a boolean array (True values will be masked).
+    template_mask : numpy.ndarray, optional
+        Template image mask as a boolean array (True values will be masked).
+    err : numpy.ndarray, optional
+        Science image noise map (expected RMS of every pixel). If not set, the code
+        will try to build the noise map directly from the image and ``image_gain`` parameter.
+    template_err : numpy.ndarray, optional
+        Template image noise map. If not set, the code will try to build the noise map
+        directly from the template and ``template_gain`` parameter.
+    image_gain : float, optional
+        Gain of science image, to be used for construction of the noise map.
+    template_gain : float, optional
+        Gain of template image, to be used for construction of the noise map.
+    image_psf : dict, optional
+        PSF for science image. If not provided, will be estimated by
+        :func:`stdpipe.psf.run_psfex`.
+    template_psf : dict, optional
+        PSF for template image. If not provided, will be estimated by
+        :func:`stdpipe.psf.run_psfex`.
+    image_fwhm : float, optional
+        FWHM of science image, to be used for estimated PSF normalization.
+    template_fwhm : float, optional
+        FWHM of template image, to be used for estimated PSF normalization.
+    scale : float, optional
+        Template image flux scale relative to science image.
+    psf_clean : float, optional
+        If non-zero, will clean the PSF regions with relative values less than this factor.
+    dx : float, optional
+        Astrometric uncertainty (sigma) in x coordinate.
+    dy : float, optional
+        Astrometric uncertainty (sigma) in y coordinate.
+    nx : int, optional
+        Number of sub-images in ``x`` direction.
+    ny : int, optional
+        Number of sub-images in ``y`` direction.
+    overlap : int, optional
+        If set, defines how much sub-images will overlap, in pixels.
+    fit_scale : bool, optional
+        If set, will fit for the difference in flux scales between template and science images.
+    fit_shift : bool, optional
+        If set, will also fit for the sub-pixel shift between template and science images.
+    good_regions : numpy.ndarray, optional
+        If set, this boolean map will be used to restrict scale/shift fitting to only these regions.
+    image_obj : astropy.table.Table, optional
+        List of objects detected in science image. If provided, they will be used for placing good regions.
+    template_obj : astropy.table.Table, optional
+        List of objects detected in template image. If provided, they will be used for deriving
+        template flux scale.
+    get_psf : bool, optional
+        If set, will also return the PSF of the difference image.
+    get_Fpsf : bool, optional
+        If set, will also return the optimal PSF photometry image and its error.
+    nthreads : int, optional
+        Set the number of threads to use for FFTW routines (0 for auto).
+    verbose : bool or callable, optional
+        Whether to show verbose messages during the run of the function or not.
+    **kwargs
+        Extra parameters to be passed to :func:`stdpipe.psf.run_psfex` for PSF estimation.
 
-    :param err: Science image noise map (expected RMS of every pixel). If not set, the code will try to build the noise map directly from the image and `image_gain` parameter
-    :param template_err: Template image noise map. If not set, the code will try to build the noise map directly from the template and `template_gain` parameter
-    :param image_gain: Gain of science image, to be used for construction of the noise map
-    :param template_gain: Gain of template image, to be used for construction of the noise map
+    Returns
+    -------
+    list
+        The list of the difference image and other subtraction results:
 
-    :param image_psf: PSF for science image. If not provided, will be estimated by :func:`stdpipe.psf.run_psfex`.
-    :param template_psf: PSF for template image. If not provided, will be estimated by :func:`stdpipe.psf.run_psfex`.
-    :param image_fwhm: FWHM of science image, to be used for estimated PSF normalization
-    :param template_fwhm: FWHM of template image, to be used for estimated PSF normalization
-
-    :param scale: Template image flux scale relative to science image
-
-    :param psf_clean: If non-zero, will clean the PSF regions with relative values less than this factor
-    :param dx: Astrometric uncertainty (sigma) in x coordinate
-    :param dy: Astrometric uncertainty (sigma) in y coordinate
-
-    :param nx: Number of sub-images in `x` direction
-    :param ny: Number of sub-images in `y` direction
-    :param overlap: If set, defines how much sub-images will overlap, in pixels.
-
-    :param fit_scale: If set, will fit for the difference in flux scales between template and science images
-    :param fit_shift: If set, will also fit for the sub-pixel shift between template and science images
-    :param good_regions: If set, this boolean map will be used to restrict scale/shift fitting to only these regions
-    :param image_obj: List of objects detected in science image. If provided, they will be used for placing good regions
-    :param template_obj: List of objects detected in science image. If provided, they will be used for deriving template flux scale
-    :param get_psf: If set, will also return the PSF of the difference image
-    :param get_Fpsf: If set, will also return the optimal PSF photometry image and its error
-    :param nthreads: Set the number of threads to use for FFTW routines (0 for auto)
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :param **kwargs: Extra parameters to be passed to :func:`stdpipe.psf.run_psfex` for PSF estimation.
-    :returns: The list of the difference image and other subtraction results.
-
-    - D: Subtracted image
-    - S_corr: Corrected subtracted image
-    - P_D: PSF of subtracted image, if :code:`get_psf=True`
-    - Fpsf: optimal PSF photometry image, if :code:`get_Fpsf=True`
-    - Fpsf_err: optimal PSF photometry error image, if :code:`get_Fpsf=True`
+        - D: Subtracted image
+        - S_corr: Corrected subtracted image
+        - P_D: PSF of subtracted image, if :code:`get_psf=True`
+        - Fpsf: optimal PSF photometry image, if :code:`get_Fpsf=True`
+        - Fpsf_err: optimal PSF photometry error image, if :code:`get_Fpsf=True`
 
     """
 
@@ -911,46 +984,68 @@ def run_sfft(
     a noise map from the image using SEP background estimation and the
     corresponding gain parameter.
 
-    :param image: Input science image as a Numpy array
-    :param template: Input template image, same shape as science image
-    :param mask: Science image mask (True = bad), optional
-    :param template_mask: Template image mask (True = bad), optional
-    :param err: Science image noise map (per-pixel RMS). If ``True``,
-        built from the image and ``image_gain``. Optional
-    :param template_err: Template image noise map. If ``True``, built
-        from the template and ``template_gain``. Optional
-    :param image_gain: Gain of science image in e-/ADU
-    :param template_gain: Gain of template image in e-/ADU
-    :param kernel_shape: (ky, kx) kernel size, must be odd. Default (7, 7)
-    :param kernel_poly_order: Polynomial order for kernel spatial variation.
-        Default 2
-    :param bg_poly_order: Polynomial order for differential background.
-        Default 2
-    :param flux_poly_order: Polynomial order for kernel-sum (flux scale)
-        constraint. Default 1
-    :param flux_penalty: Penalty weight for kernel-sum constraint.
-        Default 1e3
-    :param ridge: Tikhonov regularization. Default 1e-6
-    :param sigma_clip: Sigma threshold for outlier rejection. Default 3.0
-    :param max_iter: Maximum sigma-clipping iterations. Default 5
-    :param obj: List of detected objects (Astropy Table with ``x``, ``y``
-        columns). If provided, kernel fitting is restricted to rectangular
-        regions around these objects, analogous to HOTPANTS stamp placement.
-        This concentrates the fit on high-S/N regions and can improve
-        kernel quality. Optional
-    :param obj_size: Half-size in pixels of the fitting region around each
-        object. If ``None`` (default), derived from the median ``fwhm``
-        column of *obj* (``3 × median(fwhm)``), or 15 pixels if ``fwhm``
-        is not available
-    :param get_convolved: Whether to also return the convolved template
-    :param get_scaled: Whether to also return noise-normalized difference
-    :param get_noise: Whether to also return the difference image noise map
-    :param get_kernel: Whether to also return the :class:`~stdpipe.sfft.SFFTResult`
-        object containing kernel coefficients and fit metadata
-    :param verbose: Whether to show verbose messages. May be boolean or
-        a ``print``-like function
-    :returns: The difference image, or a list ``[diff, ...]`` if any
-        ``get_*`` option is set
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Input science image as a NumPy array.
+    template : numpy.ndarray
+        Input template image, same shape as science image.
+    mask : numpy.ndarray, optional
+        Science image mask (True = bad).
+    template_mask : numpy.ndarray, optional
+        Template image mask (True = bad).
+    err : numpy.ndarray or bool, optional
+        Science image noise map (per-pixel RMS). If True, built from the image
+        and ``image_gain``.
+    template_err : numpy.ndarray or bool, optional
+        Template image noise map. If True, built from the template and
+        ``template_gain``.
+    image_gain : float, optional
+        Gain of science image in e-/ADU.
+    template_gain : float, optional
+        Gain of template image in e-/ADU.
+    kernel_shape : tuple of int, optional
+        (ky, kx) kernel size, must be odd. Default (7, 7).
+    kernel_poly_order : int, optional
+        Polynomial order for kernel spatial variation. Default 2.
+    bg_poly_order : int, optional
+        Polynomial order for differential background. Default 2.
+    flux_poly_order : int, optional
+        Polynomial order for kernel-sum (flux scale) constraint. Default 1.
+    flux_penalty : float, optional
+        Penalty weight for kernel-sum constraint. Default 1e3.
+    ridge : float, optional
+        Tikhonov regularization. Default 1e-6.
+    sigma_clip : float, optional
+        Sigma threshold for outlier rejection. Default 3.0.
+    max_iter : int, optional
+        Maximum sigma-clipping iterations. Default 5.
+    obj : astropy.table.Table, optional
+        List of detected objects with ``x``, ``y`` columns. If provided, kernel
+        fitting is restricted to rectangular regions around these objects, analogous
+        to HOTPANTS stamp placement. This concentrates the fit on high-S/N regions
+        and can improve kernel quality.
+    obj_size : int, optional
+        Half-size in pixels of the fitting region around each object. If None
+        (default), derived from the median ``fwhm`` column of *obj*
+        (``3 × median(fwhm)``), or 15 pixels if ``fwhm`` is not available.
+    get_convolved : bool, optional
+        Whether to also return the convolved template.
+    get_scaled : bool, optional
+        Whether to also return noise-normalized difference.
+    get_noise : bool, optional
+        Whether to also return the difference image noise map.
+    get_kernel : bool, optional
+        Whether to also return the :class:`~stdpipe.sfft.SFFTResult` object
+        containing kernel coefficients and fit metadata.
+    verbose : bool or callable, optional
+        Whether to show verbose messages.
+
+    Returns
+    -------
+    numpy.ndarray or list
+        The difference image, or a list ``[diff, ...]`` if any ``get_*`` option
+        is set.
     """
 
     # Simple wrapper around print for logging in verbose mode only

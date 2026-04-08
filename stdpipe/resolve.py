@@ -74,9 +74,17 @@ def resolve(string='M33', verbose=False):
     4. TNS name resolution (transients)
     5. Astropy SkyCoord.from_name() (fallback)
 
-    :param string: Input string to resolve (object name or coordinates)
-    :param verbose: Enable verbose output. Can be True/False or a print-like function.
-    :returns: astropy.coordinates.SkyCoord object if resolved, None otherwise
+    Parameters
+    ----------
+    string : str, optional
+        Input string to resolve (object name or coordinates).
+    verbose : bool or callable, optional
+        Enable verbose output. Can be True/False or a print-like function.
+
+    Returns
+    -------
+    astropy.coordinates.SkyCoord or None
+        Resolved sky coordinates, or None if resolution fails.
 
     **Supported Coordinate Formats:**
 

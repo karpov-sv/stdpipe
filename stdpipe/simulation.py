@@ -43,19 +43,38 @@ def create_psf_model(
     Fourier optics and convolved with the atmospheric seeing PSF (Gaussian or Moffat).
     When all coefficients are zero, the existing analytical path is used unchanged.
 
-    :param fwhm: Full width at half maximum in pixels
-    :param psf_type: Type of PSF model ('gaussian' or 'moffat')
-    :param beta: Moffat beta parameter (default 2.5, only used for psf_type='moffat')
-    :param size: Output stamp size in pixels (after downsampling). If None, automatically sized to capture ~99% of PSF flux (≥8*FWHM)
-    :param oversampling: Oversampling factor (default 2)
-    :param defocus: Zernike Z4 defocus coefficient in waves (default 0.0)
-    :param astigmatism_x: Zernike Z5 oblique astigmatism coefficient in waves (default 0.0)
-    :param astigmatism_y: Zernike Z6 vertical astigmatism coefficient in waves (default 0.0)
-    :param coma_x: Zernike Z7 vertical coma coefficient in waves (default 0.0)
-    :param coma_y: Zernike Z8 horizontal coma coefficient in waves (default 0.0)
-    :param wavelength: Observation wavelength in meters (default 550e-9, affects diffraction scale)
-    :param pupil_diameter: Pupil diameter in meters (default 1.0, affects diffraction scale)
-    :returns: Dictionary with PSFEx-compatible structure containing the PSF model
+    Parameters
+    ----------
+    fwhm : float, optional
+        Full width at half maximum in pixels.
+    psf_type : str, optional
+        Type of PSF model ('gaussian' or 'moffat').
+    beta : float, optional
+        Moffat beta parameter (default 2.5, only used for psf_type='moffat').
+    size : int, optional
+        Output stamp size in pixels (after downsampling). If None, automatically
+        sized to capture ~99% of PSF flux (>=8*FWHM).
+    oversampling : int, optional
+        Oversampling factor (default 2).
+    defocus : float, optional
+        Zernike Z4 defocus coefficient in waves (default 0.0).
+    astigmatism_x : float, optional
+        Zernike Z5 oblique astigmatism coefficient in waves (default 0.0).
+    astigmatism_y : float, optional
+        Zernike Z6 vertical astigmatism coefficient in waves (default 0.0).
+    coma_x : float, optional
+        Zernike Z7 vertical coma coefficient in waves (default 0.0).
+    coma_y : float, optional
+        Zernike Z8 horizontal coma coefficient in waves (default 0.0).
+    wavelength : float, optional
+        Observation wavelength in meters (default 550e-9, affects diffraction scale).
+    pupil_diameter : float, optional
+        Pupil diameter in meters (default 1.0, affects diffraction scale).
+
+    Returns
+    -------
+    dict
+        Dictionary with PSFEx-compatible structure containing the PSF model.
 
     """
 
@@ -234,15 +253,29 @@ def create_sersic_profile(
     - n=1.0: Exponential disk (typical spiral galaxy disk)
     - n=4.0: de Vaucouleurs profile (typical elliptical galaxy)
 
-    :param size: Size of the profile stamp (must be odd)
-    :param x0: X center position within the stamp
-    :param y0: Y center position within the stamp
-    :param amplitude: Central surface brightness amplitude
-    :param r_eff: Effective radius in pixels (half-light radius)
-    :param n: Sersic index (shape parameter)
-    :param ellipticity: Ellipticity (0 = circular, 0.5 = moderate, 0.9 = very elongated)
-    :param position_angle: Position angle in degrees (0 = vertical, increases CCW)
-    :returns: 2D numpy array of shape (size, size) with Sersic profile
+    Parameters
+    ----------
+    size : int
+        Size of the profile stamp (must be odd).
+    x0 : float
+        X center position within the stamp.
+    y0 : float
+        Y center position within the stamp.
+    amplitude : float, optional
+        Central surface brightness amplitude.
+    r_eff : float, optional
+        Effective radius in pixels (half-light radius).
+    n : float, optional
+        Sersic index (shape parameter).
+    ellipticity : float, optional
+        Ellipticity (0 = circular, 0.5 = moderate, 0.9 = very elongated).
+    position_angle : float, optional
+        Position angle in degrees (0 = vertical, increases CCW).
+
+    Returns
+    -------
+    numpy.ndarray
+        2D array of shape (size, size) with Sersic profile.
 
     """
 
@@ -290,14 +323,24 @@ def place_galaxy(image, x0, y0, flux, r_eff=5.0, n=1.0, ellipticity=0.0, positio
 
     The image is modified in-place.
 
-    :param image: Target image (2D numpy array)
-    :param x0: X coordinate where to place the galaxy center
-    :param y0: Y coordinate where to place the galaxy center
-    :param flux: Total integrated flux in ADU units
-    :param r_eff: Effective radius in pixels
-    :param n: Sersic index
-    :param ellipticity: Ellipticity (0 = circular, 1 = line)
-    :param position_angle: Position angle in degrees
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Target image (2D array), modified in-place.
+    x0 : float
+        X coordinate where to place the galaxy center.
+    y0 : float
+        Y coordinate where to place the galaxy center.
+    flux : float
+        Total integrated flux in ADU units.
+    r_eff : float, optional
+        Effective radius in pixels.
+    n : float, optional
+        Sersic index.
+    ellipticity : float, optional
+        Ellipticity (0 = circular, 1 = line).
+    position_angle : float, optional
+        Position angle in degrees.
 
     """
 
@@ -348,12 +391,23 @@ def create_cosmic_ray(length, width, angle, max_intensity, profile='sharp'):
 
     Cosmic rays appear as elongated tracks with sharp edges, oriented randomly.
 
-    :param length: Length of the track in pixels
-    :param width: Width of the track in pixels
-    :param angle: Angle in degrees (0 = horizontal, increases CCW)
-    :param max_intensity: Peak intensity in ADU
-    :param profile: Intensity profile ('sharp', 'tapered', 'worm')
-    :returns: Dictionary with 'stamp' (2D array), 'size' (stamp dimensions)
+    Parameters
+    ----------
+    length : float
+        Length of the track in pixels.
+    width : float
+        Width of the track in pixels.
+    angle : float
+        Angle in degrees (0 = horizontal, increases CCW).
+    max_intensity : float
+        Peak intensity in ADU.
+    profile : str, optional
+        Intensity profile ('sharp', 'tapered', 'worm').
+
+    Returns
+    -------
+    dict
+        Dictionary with 'stamp' (2D array), 'size' (stamp dimensions).
 
     """
 
@@ -438,13 +492,25 @@ def add_cosmic_rays(
 
     Cosmic rays are placed at random positions with random orientations.
 
-    :param image: Target image (modified in-place)
-    :param n_rays: Number of cosmic rays to add
-    :param length_range: (min, max) length in pixels
-    :param width_range: (min, max) width in pixels
-    :param intensity_range: (min, max) peak intensity in ADU
-    :param profile: Intensity profile ('sharp', 'tapered', 'worm')
-    :returns: Catalog (astropy Table) of added cosmic rays with columns: x, y, length, width, angle, intensity, type
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Target image (modified in-place).
+    n_rays : int, optional
+        Number of cosmic rays to add.
+    length_range : tuple, optional
+        (min, max) length in pixels.
+    width_range : tuple, optional
+        (min, max) width in pixels.
+    intensity_range : tuple, optional
+        (min, max) peak intensity in ADU.
+    profile : str, optional
+        Intensity profile ('sharp', 'tapered', 'worm').
+
+    Returns
+    -------
+    astropy.table.Table
+        Catalog of added cosmic rays with columns: x, y, length, width, angle, intensity, type.
 
     """
 
@@ -517,12 +583,23 @@ def add_hot_pixels(
     Hot pixels are single bright pixels at random locations, optionally clustered
     to simulate physical detector defects.
 
-    :param image: Target image (modified in-place)
-    :param n_pixels: Number of hot pixels to add
-    :param intensity_range: (min, max) intensity in ADU
-    :param clustering: If True, create clusters of hot pixels
-    :param cluster_size: Number of pixels per cluster (if clustering=True)
-    :returns: Catalog (astropy Table) of added hot pixels with columns: x, y, intensity, type
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Target image (modified in-place).
+    n_pixels : int, optional
+        Number of hot pixels to add.
+    intensity_range : tuple, optional
+        (min, max) intensity in ADU.
+    clustering : bool, optional
+        If True, create clusters of hot pixels.
+    cluster_size : int, optional
+        Number of pixels per cluster (if clustering=True).
+
+    Returns
+    -------
+    astropy.table.Table
+        Catalog of added hot pixels with columns: x, y, intensity, type.
 
     """
 
@@ -582,12 +659,23 @@ def add_bad_columns(
 
     Bad columns can be dead (low/zero values), hot (high values), or noisy (high variance).
 
-    :param image: Target image (modified in-place)
-    :param n_columns: Number of bad columns/rows to add
-    :param intensity_range: (min, max) intensity for 'hot' type. Ignored for 'dead' and 'noisy'.
-    :param bad_type: Type of bad column ('dead', 'hot', 'noisy')
-    :param orientation: 'vertical' for columns, 'horizontal' for rows
-    :returns: Catalog (astropy Table) of bad columns with columns: position, bad_type, orientation, type
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Target image (modified in-place).
+    n_columns : int, optional
+        Number of bad columns/rows to add.
+    intensity_range : tuple, optional
+        (min, max) intensity for 'hot' type. Ignored for 'dead' and 'noisy'.
+    bad_type : str, optional
+        Type of bad column ('dead', 'hot', 'noisy').
+    orientation : str, optional
+        'vertical' for columns, 'horizontal' for rows.
+
+    Returns
+    -------
+    astropy.table.Table
+        Catalog of bad columns with columns: position, bad_type, orientation, type.
 
     """
 
@@ -658,13 +746,25 @@ def create_satellite_trail(length, width, intensity, angle=None, profile='linear
 
     Satellite trails are long, thin, bright streaks caused by satellites passing through the field.
 
-    :param length: Length of the trail in pixels
-    :param width: Width of the trail in pixels
-    :param intensity: Peak intensity in ADU
-    :param angle: Angle in degrees (0 = horizontal). If None, random.
-    :param profile: Transverse profile ('linear', 'gaussian')
-    :param tumbling: If True, add intensity variations along the trail (tumbling satellite)
-    :returns: Dictionary with 'stamp' (2D array), 'angle' (actual angle used)
+    Parameters
+    ----------
+    length : float
+        Length of the trail in pixels.
+    width : float
+        Width of the trail in pixels.
+    intensity : float
+        Peak intensity in ADU.
+    angle : float, optional
+        Angle in degrees (0 = horizontal). If None, random.
+    profile : str, optional
+        Transverse profile ('linear', 'gaussian').
+    tumbling : bool, optional
+        If True, add intensity variations along the trail (tumbling satellite).
+
+    Returns
+    -------
+    dict
+        Dictionary with 'stamp' (2D array), 'angle' (actual angle used).
 
     """
 
@@ -739,14 +839,27 @@ def add_satellite_trails(
     """
     Add satellite trails to an image.
 
-    :param image: Target image (modified in-place)
-    :param n_trails: Number of satellite trails to add
-    :param length_range: (min, max) length in pixels
-    :param width_range: (min, max) width in pixels
-    :param intensity_range: (min, max) peak intensity in ADU
-    :param profile: Transverse profile ('linear', 'gaussian')
-    :param tumbling_prob: Probability of tumbling satellite (intensity variations)
-    :returns: Catalog (astropy Table) of added trails
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Target image (modified in-place).
+    n_trails : int, optional
+        Number of satellite trails to add.
+    length_range : tuple, optional
+        (min, max) length in pixels.
+    width_range : tuple, optional
+        (min, max) width in pixels.
+    intensity_range : tuple, optional
+        (min, max) peak intensity in ADU.
+    profile : str, optional
+        Transverse profile ('linear', 'gaussian').
+    tumbling_prob : float, optional
+        Probability of tumbling satellite (intensity variations).
+
+    Returns
+    -------
+    astropy.table.Table
+        Catalog of added trails.
 
     """
 
@@ -814,14 +927,27 @@ def create_diffraction_spikes(size, x0, y0, star_flux, n_spikes=4, spike_length=
     Diffraction spikes are caused by the support structure of telescopes (refractors, SCTs).
     Typically 4 spikes at 45-degree intervals.
 
-    :param size: Size of the stamp
-    :param x0: X center (star position)
-    :param y0: Y center (star position)
-    :param star_flux: Flux of the source star (determines spike intensity)
-    :param n_spikes: Number of spikes (typically 4)
-    :param spike_length: Length of each spike in pixels
-    :param spike_width: Width of each spike in pixels
-    :returns: 2D numpy array with diffraction spikes
+    Parameters
+    ----------
+    size : int
+        Size of the stamp.
+    x0 : float
+        X center (star position).
+    y0 : float
+        Y center (star position).
+    star_flux : float
+        Flux of the source star (determines spike intensity).
+    n_spikes : int, optional
+        Number of spikes (typically 4).
+    spike_length : float, optional
+        Length of each spike in pixels.
+    spike_width : float, optional
+        Width of each spike in pixels.
+
+    Returns
+    -------
+    numpy.ndarray
+        2D array with diffraction spikes.
 
     """
 
@@ -867,15 +993,28 @@ def create_optical_ghost(
     Optical ghosts are faint, blurred copies of bright sources caused by reflections
     in the optical system.
 
-    :param size: Minimum size of the stamp (will be expanded if needed to fit ghost)
-    :param x0: X center of original source within stamp
-    :param y0: Y center of original source within stamp
-    :param source_flux: Flux of the original source
-    :param ghost_fraction: Fraction of source flux appearing in ghost (typically 0.01-0.1)
-    :param offset: (dx, dy) offset of ghost from source in pixels
-    :param blur_sigma: Gaussian blur sigma for the ghost
-    :returns: Dictionary with 'stamp' (2D array) and 'source_pos' (x, y) giving the
-        source position within the stamp (needed to align stamp onto the image)
+    Parameters
+    ----------
+    size : int
+        Minimum size of the stamp (will be expanded if needed to fit ghost).
+    x0 : float
+        X center of original source within stamp.
+    y0 : float
+        Y center of original source within stamp.
+    source_flux : float
+        Flux of the original source.
+    ghost_fraction : float, optional
+        Fraction of source flux appearing in ghost (typically 0.01-0.1).
+    offset : tuple, optional
+        (dx, dy) offset of ghost from source in pixels.
+    blur_sigma : float, optional
+        Gaussian blur sigma for the ghost.
+
+    Returns
+    -------
+    dict
+        Dictionary with 'stamp' (2D array) and 'source_pos' (x, y) giving the
+        source position within the stamp (needed to align stamp onto the image).
 
     """
 
@@ -930,15 +1069,29 @@ def add_close_companions_to_catalog(
     near existing stars to simulate crowded fields. Companions are only added
     to sources with type='star'.
 
-    :param catalog: Input catalog (astropy Table) with 'x', 'y', 'flux', 'type' columns
-    :param fwhm: FWHM of the PSF in pixels (used to calculate separations)
-    :param fraction: Fraction of stars (0-1) that will have companions
-    :param min_separation_fwhm: Minimum separation in FWHM units
-    :param max_separation_fwhm: Maximum separation in FWHM units
-    :param flux_variation: (min, max) flux ratio for companion relative to primary
-    :param image_shape: (height, width) tuple for bounds checking, or None to skip
-    :param edge: Minimum distance from edges when bounds checking
-    :returns: New catalog with companions added (original catalog unchanged)
+    Parameters
+    ----------
+    catalog : astropy.table.Table
+        Input catalog with 'x', 'y', 'flux', 'type' columns.
+    fwhm : float
+        FWHM of the PSF in pixels (used to calculate separations).
+    fraction : float, optional
+        Fraction of stars (0-1) that will have companions.
+    min_separation_fwhm : float, optional
+        Minimum separation in FWHM units.
+    max_separation_fwhm : float, optional
+        Maximum separation in FWHM units.
+    flux_variation : tuple, optional
+        (min, max) flux ratio for companion relative to primary.
+    image_shape : tuple, optional
+        (height, width) tuple for bounds checking, or None to skip.
+    edge : int, optional
+        Minimum distance from edges when bounds checking.
+
+    Returns
+    -------
+    astropy.table.Table
+        New catalog with companions added (original catalog unchanged).
 
     """
     from astropy.table import vstack, Table
@@ -1022,20 +1175,40 @@ def add_stars(
     """
     Add stars to an image with realistic PSF.
 
-    :param image: Target image (modified in-place)
-    :param n: Number of stars to add
-    :param flux_range: (min, max) flux range in ADU
-    :param fwhm: FWHM of the PSF in pixels (used if psf is a string)
-    :param psf: PSF specification - either a string ('gaussian', 'moffat') or a PSF model dictionary (PSFEx format)
-    :param beta: Moffat beta parameter (only used if psf='moffat')
-    :param edge: Minimum distance from image edges
-    :param saturation: Saturation level in ADU
-    :param diffraction_spikes: If True, add diffraction spikes to bright stars
-    :param spike_threshold: Flux threshold for adding diffraction spikes
-    :param optical_ghosts: If True, add optical ghosts to very bright stars
-    :param ghost_threshold: Flux threshold for adding optical ghosts
-    :param wcs: WCS object for computing RA/Dec
-    :returns: Catalog (astropy Table) of added stars
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Target image (modified in-place).
+    n : int, optional
+        Number of stars to add.
+    flux_range : tuple, optional
+        (min, max) flux range in ADU.
+    fwhm : float, optional
+        FWHM of the PSF in pixels (used if psf is a string).
+    psf : str or dict, optional
+        PSF specification — either a string ('gaussian', 'moffat') or a PSF model
+        dictionary (PSFEx format).
+    beta : float, optional
+        Moffat beta parameter (only used if psf='moffat').
+    edge : int, optional
+        Minimum distance from image edges.
+    saturation : float, optional
+        Saturation level in ADU.
+    diffraction_spikes : bool, optional
+        If True, add diffraction spikes to bright stars.
+    spike_threshold : float, optional
+        Flux threshold for adding diffraction spikes.
+    optical_ghosts : bool, optional
+        If True, add optical ghosts to very bright stars.
+    ghost_threshold : float, optional
+        Flux threshold for adding optical ghosts.
+    wcs : astropy.wcs.WCS, optional
+        WCS object for computing RA/Dec.
+
+    Returns
+    -------
+    astropy.table.Table
+        Catalog of added stars.
 
     """
 
@@ -1153,15 +1326,29 @@ def add_galaxies(
     """
     Add galaxies with Sersic profiles to an image.
 
-    :param image: Target image (modified in-place)
-    :param n: Number of galaxies to add
-    :param flux_range: (min, max) total flux in ADU
-    :param r_eff_range: (min, max) effective radius in pixels
-    :param n_range: (min, max) Sersic index
-    :param ellipticity_range: (min, max) ellipticity
-    :param edge: Minimum distance from image edges
-    :param wcs: WCS object for computing RA/Dec
-    :returns: Catalog (astropy Table) of added galaxies
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Target image (modified in-place).
+    n : int, optional
+        Number of galaxies to add.
+    flux_range : tuple, optional
+        (min, max) total flux in ADU.
+    r_eff_range : tuple, optional
+        (min, max) effective radius in pixels.
+    n_range : tuple, optional
+        (min, max) Sersic index.
+    ellipticity_range : tuple, optional
+        (min, max) ellipticity.
+    edge : int, optional
+        Minimum distance from image edges.
+    wcs : astropy.wcs.WCS, optional
+        WCS object for computing RA/Dec.
+
+    Returns
+    -------
+    astropy.table.Table
+        Catalog of added galaxies.
 
     """
 
@@ -1253,50 +1440,99 @@ def simulate_image(
 
     This is the high-level API that creates a complete simulated image in one call.
 
-    :param width: Image width in pixels
-    :param height: Image height in pixels
-    :param n_stars: Number of stars to add
-    :param star_flux_range: (min, max) star flux in ADU
-    :param star_fwhm: FWHM of stellar PSF in pixels
-    :param star_psf: PSF type - either a string ('gaussian', 'moffat') or a PSF model dict
+    Parameters
+    ----------
+    width : int, optional
+        Image width in pixels.
+    height : int, optional
+        Image height in pixels.
+    n_stars : int, optional
+        Number of stars to add.
+    star_flux_range : tuple, optional
+        (min, max) star flux in ADU.
+    star_fwhm : float, optional
+        FWHM of stellar PSF in pixels.
+    star_psf : str or dict, optional
+        PSF type — either a string ('gaussian', 'moffat') or a PSF model dict
         (from create_psf_model). Use dict to specify aberrated PSFs.
-    :param star_beta: Moffat beta parameter (if star_psf='moffat')
-    :param n_galaxies: Number of galaxies to add
-    :param galaxy_flux_range: (min, max) galaxy flux in ADU
-    :param galaxy_r_eff_range: (min, max) effective radius in pixels
-    :param galaxy_n_range: (min, max) Sersic index
-    :param galaxy_ellipticity_range: (min, max) ellipticity
-    :param n_cosmic_rays: Number of cosmic ray tracks
-    :param cosmic_ray_length_range: (min, max) cosmic ray length in pixels
-    :param cosmic_ray_width_range: (min, max) cosmic ray width in pixels
-    :param cosmic_ray_intensity_range: (min, max) cosmic ray peak intensity
-    :param cosmic_ray_profile: cosmic ray profile ('sharp', 'tapered', 'worm')
-    :param n_hot_pixels: Number of hot pixels
-    :param hot_pixel_intensity_range: (min, max) hot pixel intensity
-    :param n_bad_columns: Number of bad columns
-    :param bad_column_type: Type of bad columns ('dead', 'hot', 'noisy')
-    :param n_satellites: Number of satellite trails
-    :param satellite_length_range: (min, max) satellite trail length in pixels
-    :param satellite_width_range: (min, max) satellite trail width in pixels
-    :param satellite_intensity_range: (min, max) satellite trail intensity
-    :param diffraction_spikes: Add diffraction spikes to bright stars
-    :param spike_threshold: Flux threshold for diffraction spikes
-    :param optical_ghosts: Add optical ghosts to very bright stars
-    :param ghost_threshold: Flux threshold for optical ghosts
-    :param add_companions: If True, add close stellar companions to simulate crowded fields
-    :param companion_fraction: Fraction of stars (0-1) that will have companions
-    :param companion_separation_fwhm: (min, max) companion separation in FWHM units
-    :param companion_flux_ratio: (min, max) companion flux relative to primary star
-    :param background: Background level in ADU
-    :param readnoise: Read noise in ADU
-    :param gain: Detector gain in e-/ADU
-    :param edge: Minimum distance from image edges for sources
-    :param wcs: WCS object for computing sky coordinates
-    :param return_catalog: If True, return catalog of all injected sources
-    :param return_masks: If True, return separate masks for each artifact type
-    :param seed: Random seed for reproducibility. If set, calls np.random.seed(seed).
-    :param verbose: Enable verbose output
-    :returns: Dictionary with 'image', 'catalog' (if requested), 'masks' (if requested), 'background', 'noise'
+    star_beta : float, optional
+        Moffat beta parameter (if star_psf='moffat').
+    n_galaxies : int, optional
+        Number of galaxies to add.
+    galaxy_flux_range : tuple, optional
+        (min, max) galaxy flux in ADU.
+    galaxy_r_eff_range : tuple, optional
+        (min, max) effective radius in pixels.
+    galaxy_n_range : tuple, optional
+        (min, max) Sersic index.
+    galaxy_ellipticity_range : tuple, optional
+        (min, max) ellipticity.
+    n_cosmic_rays : int, optional
+        Number of cosmic ray tracks.
+    cosmic_ray_length_range : tuple, optional
+        (min, max) cosmic ray length in pixels.
+    cosmic_ray_width_range : tuple, optional
+        (min, max) cosmic ray width in pixels.
+    cosmic_ray_intensity_range : tuple, optional
+        (min, max) cosmic ray peak intensity.
+    cosmic_ray_profile : str, optional
+        Cosmic ray profile ('sharp', 'tapered', 'worm').
+    n_hot_pixels : int, optional
+        Number of hot pixels.
+    hot_pixel_intensity_range : tuple, optional
+        (min, max) hot pixel intensity.
+    n_bad_columns : int, optional
+        Number of bad columns.
+    bad_column_type : str, optional
+        Type of bad columns ('dead', 'hot', 'noisy').
+    n_satellites : int, optional
+        Number of satellite trails.
+    satellite_length_range : tuple, optional
+        (min, max) satellite trail length in pixels.
+    satellite_width_range : tuple, optional
+        (min, max) satellite trail width in pixels.
+    satellite_intensity_range : tuple, optional
+        (min, max) satellite trail intensity.
+    diffraction_spikes : bool, optional
+        Add diffraction spikes to bright stars.
+    spike_threshold : float, optional
+        Flux threshold for diffraction spikes.
+    optical_ghosts : bool, optional
+        Add optical ghosts to very bright stars.
+    ghost_threshold : float, optional
+        Flux threshold for optical ghosts.
+    add_companions : bool, optional
+        If True, add close stellar companions to simulate crowded fields.
+    companion_fraction : float, optional
+        Fraction of stars (0-1) that will have companions.
+    companion_separation_fwhm : tuple, optional
+        (min, max) companion separation in FWHM units.
+    companion_flux_ratio : tuple, optional
+        (min, max) companion flux relative to primary star.
+    background : float, optional
+        Background level in ADU.
+    readnoise : float, optional
+        Read noise in ADU.
+    gain : float, optional
+        Detector gain in e-/ADU.
+    edge : int, optional
+        Minimum distance from image edges for sources.
+    wcs : astropy.wcs.WCS, optional
+        WCS object for computing sky coordinates.
+    return_catalog : bool, optional
+        If True, return catalog of all injected sources.
+    return_masks : bool, optional
+        If True, return separate masks for each artifact type.
+    seed : int, optional
+        Random seed for reproducibility. If set, calls np.random.seed(seed).
+    verbose : bool, optional
+        Enable verbose output.
+
+    Returns
+    -------
+    dict
+        Dictionary with 'image', 'catalog' (if requested), 'masks' (if requested),
+        'background', 'noise'.
 
     """
 
@@ -1542,42 +1778,70 @@ def generate_realbogus_training_data(
     (defocus, astigmatism, coma) computed via Fourier optics, helping the classifier
     handle realistic PSF variations from optical aberrations.
 
-    :param n_images: Number of simulated images to generate
-    :param image_size: (width, height) of simulated images
-    :param n_stars_range: (min, max) number of stars per image
-    :param n_galaxies_range: (min, max) number of galaxies per image
-    :param fwhm_range: (min, max) FWHM in pixels (varied per image)
-    :param background_range: (min, max) background level in ADU
-    :param n_cosmic_rays_range: (min, max) cosmic rays per image
-    :param n_hot_pixels_range: (min, max) hot pixels per image
-    :param n_satellites_range: (min, max) satellite trails per image
-    :param detection_threshold: Detection threshold in sigma (also used for min flux calculation)
-    :param match_radius: Matching radius in pixels for truth matching
-    :param cutout_radius: Cutout radius in pixels
-    :param augment: Apply data augmentation (rotations, flips)
-    :param real_source_types: List of source types to consider 'real'.
-        Default: ['star'] treats only stars as real and galaxies as bogus.
-        Use ['star', 'galaxy'] to treat both stars and galaxies as real sources.
-    :param close_pair_fraction: Fraction of sources (0-1) that will have close companions added.
-        Default: 0.2 (20% of sources get companions)
-    :param min_separation_fwhm: Minimum separation for companions in FWHM units.
-        Default: 1.0 (1× FWHM)
-    :param max_separation_fwhm: Maximum separation for companions in FWHM units.
-        Default: 3.0 (3× FWHM)
-    :param aberration_fraction: Fraction of images (0-1) with aberrated PSFs.
-        Default: 0.0 (all Gaussian). When > 0 and aberration ranges have non-zero
-        max values, uses Fourier optics with Zernike polynomials. Otherwise falls
-        back to Moffat PSFs as a simpler proxy.
-    :param defocus_range: (min, max) defocus aberration in waves (default: (0.0, 2.0))
-    :param astigmatism_range: (min, max) astigmatism aberration in waves (default: (0.0, 1.5))
-    :param coma_range: (min, max) coma aberration in waves (default: (0.0, 1.0))
-    :param readnoise_range: (min, max) read noise in ADU (randomized per image)
-    :param gain_range: (min, max) detector gain in e-/ADU (randomized per image)
-    :param asinh_softening: Asinh softening in units of background sigma for
-        realbogus preprocessing. If None, uses DEFAULT_ASINH_SOFTENING_SIGMA.
-    :param seed: Random seed for reproducibility. If set, calls np.random.seed(seed).
-    :param verbose: Print progress
-    :returns: Dictionary with 'X' (cutouts), 'y' (labels), 'fwhm' (FWHM values), 'metadata'
+    Parameters
+    ----------
+    n_images : int, optional
+        Number of simulated images to generate.
+    image_size : tuple, optional
+        (width, height) of simulated images.
+    n_stars_range : tuple, optional
+        (min, max) number of stars per image.
+    n_galaxies_range : tuple, optional
+        (min, max) number of galaxies per image.
+    fwhm_range : tuple, optional
+        (min, max) FWHM in pixels (varied per image).
+    background_range : tuple, optional
+        (min, max) background level in ADU.
+    n_cosmic_rays_range : tuple, optional
+        (min, max) cosmic rays per image.
+    n_hot_pixels_range : tuple, optional
+        (min, max) hot pixels per image.
+    n_satellites_range : tuple, optional
+        (min, max) satellite trails per image.
+    detection_threshold : float, optional
+        Detection threshold in sigma (also used for min flux calculation).
+    match_radius : float, optional
+        Matching radius in pixels for truth matching.
+    cutout_radius : int, optional
+        Cutout radius in pixels.
+    augment : bool, optional
+        Apply data augmentation (rotations, flips).
+    real_source_types : list, optional
+        List of source types to consider 'real'. Default: ['star'] treats only stars
+        as real and galaxies as bogus. Use ['star', 'galaxy'] to treat both as real.
+    close_pair_fraction : float, optional
+        Fraction of sources (0-1) that will have close companions added.
+        Default: 0.2 (20% of sources get companions).
+    min_separation_fwhm : float, optional
+        Minimum separation for companions in FWHM units. Default: 1.0 (1x FWHM).
+    max_separation_fwhm : float, optional
+        Maximum separation for companions in FWHM units. Default: 3.0 (3x FWHM).
+    aberration_fraction : float, optional
+        Fraction of images (0-1) with aberrated PSFs. Default: 0.0 (all Gaussian).
+        When > 0 and aberration ranges have non-zero max values, uses Fourier optics
+        with Zernike polynomials. Otherwise falls back to Moffat PSFs as a simpler proxy.
+    defocus_range : tuple, optional
+        (min, max) defocus aberration in waves (default: (0.0, 2.0)).
+    astigmatism_range : tuple, optional
+        (min, max) astigmatism aberration in waves (default: (0.0, 1.5)).
+    coma_range : tuple, optional
+        (min, max) coma aberration in waves (default: (0.0, 1.0)).
+    readnoise_range : tuple, optional
+        (min, max) read noise in ADU (randomized per image).
+    gain_range : tuple, optional
+        (min, max) detector gain in e-/ADU (randomized per image).
+    asinh_softening : float, optional
+        Asinh softening in units of background sigma for realbogus preprocessing.
+        If None, uses DEFAULT_ASINH_SOFTENING_SIGMA.
+    seed : int, optional
+        Random seed for reproducibility. If set, calls np.random.seed(seed).
+    verbose : bool, optional
+        Print progress.
+
+    Returns
+    -------
+    dict
+        Dictionary with 'X' (cutouts), 'y' (labels), 'fwhm' (FWHM values), 'metadata'.
 
     """
     from . import photometry
@@ -1821,11 +2085,21 @@ def _augment_training_data(X, y, augment_factor=8, verbose=False):
     - Flips: horizontal, vertical
     - Combined: rotations + flips (~8-16× augmentation)
 
-    :param X: Input cutouts (N, H, W, C)
-    :param y: Labels (N,)
-    :param augment_factor: Target augmentation factor
-    :param verbose: Print progress
-    :returns: (X_aug, y_aug) with augmented data
+    Parameters
+    ----------
+    X : numpy.ndarray
+        Input cutouts (N, H, W, C).
+    y : numpy.ndarray
+        Labels (N,).
+    augment_factor : int, optional
+        Target augmentation factor.
+    verbose : bool, optional
+        Print progress.
+
+    Returns
+    -------
+    tuple
+        (X_aug, y_aug) with augmented data.
     """
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
