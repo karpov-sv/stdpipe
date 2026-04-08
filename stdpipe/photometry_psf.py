@@ -379,33 +379,87 @@ def measure_objects_psf(
     If a PSF model is not provided, a simple Gaussian PSF will be constructed based on
     the `fwhm` parameter or estimated from the data.
 
-    :param obj: astropy.table.Table with initial object detections to be measured. Must have 'x' and 'y' columns.
-    :param image: Input image as a NumPy array
-    :param psf: PSF model to use. Can be:
-        - photutils PSF model (e.g., IntegratedGaussianPRF, FittableImageModel)
-        - PSFEx PSF structure from :func:`stdpipe.psf.run_psfex`
-        - None (will create Gaussian PSF based on fwhm)
-    :param psf_size: Size of the PSF model in pixels. If None, will be estimated from PSF or set to 5*fwhm
-    :param fwhm: Full width at half maximum in pixels. Used if PSF model is not provided, or to estimate psf_size. If None, will be estimated from obj['fwhm'] if available.
-    :param mask: Image mask as a boolean array (True values will be masked), optional
-    :param bg: If provided, use this background (NumPy array with same shape as input image) instead of automatically computed one
-    :param err: Image noise map as a NumPy array to be used instead of automatically computed one, optional
-    :param gain: Image gain, e/ADU, used to build image noise model
-    :param bg_size: Background grid size in pixels
-    :param bkgann: Background annulus for local background estimation, [inner_radius, outer_radius] in pixels. If None, no local background subtraction is performed (relies only on global Background2D subtraction). If set, uses gradient-aware local background fitting to handle non-uniform backgrounds. Note: radii are NOT scaled by FWHM (unlike measure_objects).
-    :param bkg_order: Polynomial order for local background fitting. 0 = constant (mean), 1 = plane (linear gradient, recommended), 2 = quadratic surface. Only used if bkgann is set. Default is 1.
-    :param sn: Minimal S/N ratio for the object to be considered good. If set, all measurements with magnitude errors exceeding 1/SN will be discarded
-    :param fit_shape: Shape of fitting region. Options: 'circular' (default), 'square'. Determines the aperture used for PSF fitting.
-    :param fit_size: Size of fitting region in pixels. If None, defaults to psf_size.
-    :param maxiters: Maximum number of iterations for PSF fitting
-    :param recentroid: If True, allow PSF position to vary during fitting (recommended)
-    :param keep_negative: If not set, measurements with negative fluxes will be discarded
-    :param get_bg: If True, the routine will also return estimated background and background noise images
-    :param use_position_dependent_psf: If True and PSF is a PSFEx model, use polynomial evaluation for position-dependent PSF (evaluates PSF at each source position)
-    :param group_sources: If True, use grouped PSF fitting for overlapping sources. Fits nearby sources simultaneously for better accuracy in crowded fields. Default is True (recommended).
-    :param grouper_radius: Radius in pixels for grouping nearby sources. If None, defaults to 2*psf_size. Only used if group_sources=True
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :returns: The copy of original table with `flux`, `fluxerr`, `mag`, `magerr`, `x_psf`, `y_psf` columns from PSF fitting. Also includes quality of fit columns: `qfit_psf` (fit quality, 0=good), `cfit_psf` (central pixel fit quality), `flags_psf` (photutils fit flags), `npix_psf` (number of unmasked pixels used in fit), and `reduced_chi2_psf` (reduced chi-squared, available in photutils >= 2.3.0). If :code:`get_bg=True`, also returns the background and background error images.
+    Parameters
+    ----------
+    obj : `~astropy.table.Table`
+        Table with initial object detections to be measured. Must have 'x' and
+        'y' columns.
+    image : `~numpy.ndarray`
+        Input image as a 2D NumPy array.
+    psf : photutils PSF model, dict, or None, optional
+        PSF model to use. Can be a photutils PSF model (e.g.,
+        IntegratedGaussianPRF, FittableImageModel), a PSFEx PSF structure from
+        :func:`stdpipe.psf.run_psfex`, or None (will create Gaussian PSF based
+        on fwhm).
+    psf_size : int or None, optional
+        Size of the PSF model in pixels. If None, will be estimated from PSF or
+        set to 5*fwhm.
+    fwhm : float or None, optional
+        Full width at half maximum in pixels. Used if PSF model is not provided,
+        or to estimate psf_size. If None, will be estimated from obj['fwhm'] if
+        available.
+    mask : `~numpy.ndarray` or None, optional
+        Image mask as a boolean array (True values will be masked).
+    bg : `~numpy.ndarray` or None, optional
+        If provided, use this background (same shape as input image) instead of
+        automatically computed one.
+    err : `~numpy.ndarray` or None, optional
+        Image noise map to be used instead of automatically computed one.
+    gain : float or None, optional
+        Image gain in e-/ADU, used to build image noise model.
+    bg_size : int, optional
+        Background grid size in pixels.
+    bkgann : list of float or None, optional
+        Background annulus for local background estimation, [inner_radius,
+        outer_radius] in pixels. If None, no local background subtraction is
+        performed (relies only on global Background2D subtraction). If set, uses
+        gradient-aware local background fitting to handle non-uniform
+        backgrounds. Note: radii are NOT scaled by FWHM (unlike
+        measure_objects).
+    bkg_order : int, optional
+        Polynomial order for local background fitting. 0 = constant (mean),
+        1 = plane (linear gradient, recommended), 2 = quadratic surface. Only
+        used if bkgann is set.
+    sn : float or None, optional
+        Minimal S/N ratio for the object to be considered good. If set, all
+        measurements with magnitude errors exceeding 1/sn will be discarded.
+    fit_shape : str, optional
+        Shape of fitting region. Options: 'circular' (default), 'square'.
+        Determines the aperture used for PSF fitting.
+    fit_size : int or None, optional
+        Size of fitting region in pixels. If None, defaults to psf_size.
+    maxiters : int, optional
+        Maximum number of iterations for PSF fitting.
+    recentroid : bool, optional
+        If True, allow PSF position to vary during fitting (recommended).
+    keep_negative : bool, optional
+        If False, measurements with negative fluxes will be discarded.
+    get_bg : bool, optional
+        If True, the routine will also return estimated background and
+        background noise images.
+    use_position_dependent_psf : bool, optional
+        If True and PSF is a PSFEx model, use polynomial evaluation for
+        position-dependent PSF (evaluates PSF at each source position).
+    group_sources : bool, optional
+        If True, use grouped PSF fitting for overlapping sources. Fits nearby
+        sources simultaneously for better accuracy in crowded fields.
+    grouper_radius : float or None, optional
+        Radius in pixels for grouping nearby sources. If None, defaults to
+        2*psf_size. Only used if group_sources is True.
+    verbose : bool or callable, optional
+        Whether to show verbose messages during the run. May be either boolean,
+        or a ``print``-like function.
+
+    Returns
+    -------
+    result : `~astropy.table.Table` or tuple
+        Copy of original table with ``flux``, ``fluxerr``, ``mag``, ``magerr``,
+        ``x_psf``, ``y_psf`` columns from PSF fitting. Also includes quality of
+        fit columns: ``qfit_psf`` (fit quality, 0=good), ``cfit_psf`` (central
+        pixel fit quality), ``flags_psf`` (photutils fit flags), ``npix_psf``
+        (number of unmasked pixels used in fit), and ``reduced_chi2_psf``
+        (reduced chi-squared, available in photutils >= 2.3.0). If `get_bg` is
+        True, returns a tuple of (table, background, background_error).
 
     """
 

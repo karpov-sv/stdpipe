@@ -71,15 +71,24 @@ def estimate_fwhm(values, *, good=None, fwhm_range=(1.0, 20.0), min_candidates=5
     Uses a sliding-window mode estimator (narrowest quartile interval) that is
     resistant to outliers from galaxies, blends, and non-Gaussian tails.
 
-    :param values: 1-D array of per-object FWHM values in pixels
-    :param good: Optional boolean mask, True = use this object. The caller is
-        responsible for applying any S/N, flag, or ellipticity cuts before
-        calling, or encoding them in this mask.
-    :param fwhm_range: Hard clip range ``(lo, hi)`` in pixels.  Values outside
-        this range are excluded before the mode calculation.
-    :param min_candidates: Minimum number of surviving candidates required.
-        Returns ``np.nan`` if fewer remain.
-    :returns: Scalar FWHM estimate (pixels), or ``np.nan`` on failure.
+    Parameters
+    ----------
+    values : array-like
+        1-D array of per-object FWHM values in pixels.
+    good : array-like of bool, optional
+        Boolean mask, True = use this object. The caller is responsible for
+        applying any S/N, flag, or ellipticity cuts before calling, or
+        encoding them in this mask.
+    fwhm_range : tuple of float
+        Hard clip range ``(lo, hi)`` in pixels. Values outside this range
+        are excluded before the mode calculation.
+    min_candidates : int
+        Minimum number of surviving candidates required.
+
+    Returns
+    -------
+    float
+        Scalar FWHM estimate in pixels, or ``np.nan`` on failure.
     """
 
     values = np.asarray(values, dtype=float).ravel()
@@ -120,15 +129,28 @@ def estimate_fwhm_from_objects(
     Extracts per-object FWHM values and builds a quality mask from the
     available catalog columns, then delegates to :func:`estimate_fwhm`.
 
-    :param obj: Astropy Table (or structured ndarray) with detection results
-    :param snr_min: Minimum S/N for candidate selection (via ``magerr``).
-        Set to ``None`` to disable.
-    :param max_ellipticity: Maximum ellipticity ``1 - b/a``.
-        Set to ``None`` to disable.
-    :param use_flags: If True, reject objects with nonzero flags.
-    :param fwhm_range: Passed through to :func:`estimate_fwhm`.
-    :param min_candidates: Passed through to :func:`estimate_fwhm`.
-    :returns: Scalar FWHM estimate (pixels), or ``np.nan`` on failure.
+    Parameters
+    ----------
+    obj : `~astropy.table.Table` or structured ndarray
+        Detection results. Recognized FWHM columns (checked in order):
+        ``fwhm``, ``FWHM_IMAGE``, or derived from ``a``/``b``
+        (``A_IMAGE``/``B_IMAGE``) moments.
+    snr_min : float or None
+        Minimum S/N for candidate selection (via ``magerr``).
+        Set to None to disable.
+    max_ellipticity : float or None
+        Maximum ellipticity ``1 - b/a``. Set to None to disable.
+    use_flags : bool
+        If True, reject objects with nonzero flags.
+    fwhm_range : tuple of float
+        Passed through to :func:`estimate_fwhm`.
+    min_candidates : int
+        Passed through to :func:`estimate_fwhm`.
+
+    Returns
+    -------
+    float
+        Scalar FWHM estimate in pixels, or ``np.nan`` on failure.
     """
 
     names = obj.dtype.names if hasattr(obj, 'dtype') else obj.colnames
@@ -223,82 +245,122 @@ def get_objects_sep(
     verbose=True,
     **kwargs,
 ):
-    """Object detection and aperture/optimal photometry using `SEP <https://github.com/kbarbary/sep>`_ routines, with the signature as similar as possible to :func:`~stdpipe.photometry.get_objects_sextractor` function.
+    """Object detection and aperture/optimal photometry using
+    `SEP <https://github.com/kbarbary/sep>`_.
 
-    **Algorithm Overview:**
+    Signature is as similar as possible to
+    :func:`~stdpipe.photometry.get_objects_sextractor`.
 
-    1. **Background estimation**: Builds 2D background model using sep.Background() with sigma-clipping
-    2. **Object detection**: Runs sep.extract() with optional smoothing kernel and deblending (watershed by default)
-    3. **Centroiding** (optional): Refines positions using windowed centroiding (sep.winpos)
-    4. **Edge rejection**: Filters objects too close to image edges
-    5. **FWHM estimation**: Estimates FWHM per-object (always) or globally (if requested) using flux radius
-    6. **Photometry**: Performs aperture photometry (sep.sum_circle) or optimal extraction (sep.sum_circle_optimal with Gaussian PSF)
-    7. **Quality cuts**: Applies S/N threshold and sorts by flux
+    Algorithm: background estimation → object detection with optional
+    smoothing and deblending (watershed by default) → optional windowed
+    centroiding → edge rejection → per-object FWHM estimation → aperture
+    or optimal extraction photometry → S/N quality cut.
 
-    Detection flags are documented at https://sep.readthedocs.io/en/v1.1.x/reference.html - they are different from SExtractor ones!
+    Detection flags are documented at
+    https://sep.readthedocs.io/en/v1.1.x/reference.html —
+    they differ from SExtractor flags.
 
-    :param image: Input image as a NumPy array
-    :param header: Image header, optional
-    :param mask: Image mask as a boolean array (True values will be masked), optional. Used for background estimation and photometry. Objects whose detection footprint overlaps this mask are flagged with 0x100 but not excluded from detection.
-    :param mask_detect: Optional detection mask as a boolean array (True = exclude from detection). If provided, it is combined (OR) with non-finite pixel mask and used for object detection/deblending. Use this to exclude entire regions (e.g. bad columns, satellite trails) from detection. If None, only non-finite pixels are masked during detection.
-    :param err: Image noise map as a NumPy array, optional
-    :param thresh: Detection threshold in sigmas above local background
-    :param aper: Circular aperture radius in pixels (or in units of FWHM if fwhm parameter is provided/estimated), to be used for flux measurement
-    :param bkgann: Background annulus (tuple with inner and outer radii, in pixels or FWHM units if fwhm parameter is provided/estimated) to be used for local background estimation. Inside the annulus, simple arithmetic mean of unmasked pixels is used for computing the background, and thus it is subject to some bias in crowded stellar fields. If not set, global background model is used instead.
-    :param r0: Smoothing kernel size (sigma) to be used for improving object detection
-    :param gain: Image gain, e/ADU
-    :param edge: Reject all detected objects closer to image edge than this parameter
-    :param minnthresh: Minumal number of pixels above the threshold to be considered a detection
-    :param minarea: Minimal number of pixels in the object to be considered a detection
-    :param relfluxradius:
-    :param wcs: Astrometric solution to be used for assigning sky coordinates (`ra`/`dec`) to detected objects
-    :param bg_size: Background grid size in pixels
-    :param fwhm: FWHM handling. If False (default), FWHM is estimated per-object for output but not used for photometry. If True, FWHM is estimated from detected objects and both aper and bkgann are scaled by FWHM (interpreted as being in FWHM units). If numeric, this FWHM value is used directly and aper/bkgann are scaled accordingly.
-    :param optimal: If True, use optimal extraction photometry (sep.sum_circle_optimal) instead of aperture photometry. Requires FWHM to be provided or estimated. Only available in SEP 1.4+.
-    :param group_sources: If True and optimal=True, use grouped optimal extraction for overlapping sources. Fits nearby sources simultaneously for better accuracy in crowded fields. Default is True (recommended). Only available in SEP 1.4+.
-    :param centroid: If True, refine object positions using windowed centroiding (sep.winpos). Default is False as windowed positions can be biased in crowded fields. When SEP 1.4+ is available, uses maxstep=0.2*FWHM to cap position shift per iteration and avoid excessive drift in degenerate cases.
-    :param use_mask_large: If True, filter out large objects (with footprints larger than `npix_large` pixels)
-    :param npix_large: Threshold for rejecting large objects (if `use_mask_large` is set)
-    :param subtract_bg: Whether to subtract the background (default) or not
-    :param sn: Minimal S/N ratio for the object to be considered a detection
-    :param get_segmentation: If set, segmentation map will also be returned. The output table will include 'seg_id' column with segmentation map IDs (sequential object number + 1).
-    :param deblend_fwhm: If > 0, use a fixed circular Gaussian with this FWHM (in pixels) when assigning ambiguous pixels during deblending. This uses a deterministic max-weight assignment and is less sensitive to moment estimates in crowded fields. Default is 0.0 (use adaptive shapes and stochastic assignment). When deblend_method='watershed', this also enforces a minimum peak separation of 0.5*FWHM. Only available in SEP 1.4+.
-    :param deblend_method: Deblending algorithm. 'watershed' (default) seeds local maxima and applies watershed assignment within each detection footprint. 'threshold' uses the traditional multi-threshold method. Only available in SEP 1.4+.
-    :param clip_sigma: Sigma value for sigma-clipping when ``bkgann`` is provided. Default is 3.0. Only used in SEP 1.4+.
-    :param clip_iters: Maximum number of sigma-clipping iterations when ``bkgann`` is provided. Default is 5. Set to 0 to disable clipping. Only used in SEP 1.4+.
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :returns: astropy.table.Table object with detected objects, or tuple of (table, segmentation_map) if get_segmentation=True
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Input 2-D image.
+    header : astropy.io.fits.Header, optional
+        Image header.
+    mask : numpy.ndarray of bool, optional
+        Pixel mask (True = masked). Used for background estimation and
+        photometry. Objects whose detection footprint overlaps this mask
+        are flagged with 0x100 but not excluded from detection.
+    mask_detect : numpy.ndarray of bool, optional
+        Detection mask (True = exclude from detection). Combined (OR) with
+        non-finite pixel mask. Use this to exclude entire regions (e.g. bad
+        columns, satellite trails). If None, only non-finite pixels are
+        masked during detection.
+    err : numpy.ndarray, optional
+        Noise map.
+    thresh : float
+        Detection threshold in sigmas above local background.
+    aper : float
+        Aperture radius in pixels, or in FWHM units when *fwhm* is
+        provided/estimated.
+    bkgann : tuple of float, optional
+        Background annulus ``(r_in, r_out)`` in pixels (or FWHM units).
+        Uses arithmetic mean of unmasked pixels inside the annulus.
+        If None, the global background model is used.
+    r0 : float
+        Smoothing kernel sigma (pixels) for detection.
+    gain : float
+        Detector gain, e-/ADU.
+    edge : int
+        Reject objects closer to image edge than this many pixels.
+    minnthresh : int
+        Minimum number of pixels above threshold per detection.
+    minarea : int
+        Minimum number of pixels in an object footprint.
+    relfluxradius : float
+        Multiplier for rough FWHM when computing ``flux_radius`` search
+        radius (internal use).
+    wcs : astropy.wcs.WCS, optional
+        WCS for sky coordinate assignment.
+    bg_size : int
+        Background grid cell size in pixels.
+    fwhm : bool or float
+        FWHM handling. ``False`` (default) — per-object FWHM for output
+        only. ``True`` — estimate global FWHM and scale *aper*/*bkgann*
+        (interpreted as FWHM units). Numeric — use this value directly
+        and scale *aper*/*bkgann*.
+    optimal : bool
+        Use optimal extraction (``sep.sum_circle_optimal``) instead of
+        aperture photometry. Requires FWHM. SEP 1.4+ only.
+    group_sources : bool
+        Grouped optimal extraction for overlapping sources.
+        Default True (recommended). SEP 1.4+ only.
+    centroid : bool
+        Refine positions via ``sep.winpos``. Default False (windowed
+        positions can be biased in crowded fields). With SEP 1.4+, uses
+        ``maxstep = 0.2 * FWHM``.
+    use_mask_large : bool
+        Filter out objects with footprints larger than *npix_large*.
+    npix_large : int
+        Pixel-count threshold for large-object rejection.
+    subtract_bg : bool
+        Subtract background before detection (default True).
+    sn : float
+        Minimum S/N (``magerr < 1/sn``) for output.
+    get_segmentation : bool
+        Also return the segmentation map and add ``seg_id`` column.
+    deblend_fwhm : float
+        Fixed Gaussian FWHM (pixels) for deterministic deblending.
+        0 = adaptive shapes with stochastic assignment. SEP 1.4+ only.
+    deblend_method : {'watershed', 'threshold'}
+        Deblending algorithm. SEP 1.4+ only.
+    clip_sigma : float
+        Sigma-clipping threshold for annulus background. SEP 1.4+ only.
+    clip_iters : int
+        Max sigma-clipping iterations for annulus background.
+        0 = disable. SEP 1.4+ only.
+    verbose : bool or callable
+        Print progress messages.
 
-    **Returned Table Columns:**
+    Returns
+    -------
+    astropy.table.Table or tuple
+        Table of detected objects. If *get_segmentation* is True, returns
+        ``(table, segmentation_map)``.
 
-    - **x, y**: Object centroid positions (pixels)
-    - **xerr, yerr**: Positional uncertainties (pixels)
-    - **flux, fluxerr**: Measured flux and error in ADU (aperture or optimal extraction)
-    - **mag, magerr**: Instrumental magnitude and error (-2.5*log10(flux))
-    - **flags**: Detection quality flags (see SEP documentation for flag meanings)
-    - **ra, dec**: Sky coordinates in degrees (if WCS provided, otherwise zeros)
-    - **bg**: Local background level per pixel (from aperture or annulus)
-    - **fwhm**: Per-object FWHM estimate in pixels (from SEP built-in if available, else 2nd moments)
-    - **a, b**: Semi-major and semi-minor axes from 2nd moments (pixels)
-    - **theta**: Position angle from 2nd moments (radians, counter-clockwise from +x axis)
-    - **seg_id**: Segmentation map object ID (1-based, only if get_segmentation=True)
+        **Columns:** x, y, xerr, yerr, flux, fluxerr, mag, magerr,
+        flags, ra, dec, bg, fwhm, a, b, theta, and optionally seg_id.
 
-    **Table Metadata:**
+        **Metadata:** aper, bkgann, optimal, group_sources, fwhm_phot.
 
-    - **aper**: Aperture radius used for photometry (pixels)
-    - **bkgann**: Background annulus used (tuple of inner/outer radii, or None)
-    - **optimal**: Whether optimal extraction was used (bool)
-    - **group_sources**: Whether grouped optimal extraction was used (bool)
-    - **fwhm_phot**: FWHM value used for photometry (if provided or estimated for optimal extraction)
-
-    **Notes:**
-
-    - FWHM estimation prefers SEP's built-in method (ported from SExtractor). Falls back to 2nd moments (FWHM = 2*sqrt(ln(2)*(a**2+b**2))) for older SEP versions - it is exact for Gaussian PSF, approximate for others.
-    - Optimal extraction assumes Gaussian PSF. For ground-based data with Moffat PSF, bias varies with crowding.
-    - Grouped optimal extraction (enabled by default when optimal=True) fits nearby sources simultaneously for better accuracy in crowded fields. Dramatically improves flux accuracy for close pairs compared to single-source extraction.
-    - Watershed deblending (default) provides often better completeness for close pairs (<2 FWHM) compared to threshold method.
-    - Object detection is performed on background-subtracted image. Photometry includes local or global background estimation.
-    - S/N cut is applied after photometry: only objects with magerr < 1/sn are returned.
+    Notes
+    -----
+    - FWHM estimation prefers SEP's built-in method (ported from
+      SExtractor).  Falls back to 2nd moments for older SEP versions.
+    - Optimal extraction assumes a Gaussian PSF.
+    - Grouped extraction fits nearby sources simultaneously — dramatically
+      improves accuracy for close pairs.
+    - Watershed deblending often gives better completeness for pairs
+      closer than ~2 FWHM.
     """
 
     # Simple Wrapper around print for logging in verbose mode only
@@ -633,40 +695,85 @@ def get_objects_sextractor(
     _exe=None,
     verbose=False,
 ):
-    """Thin wrapper around SExtractor binary.
+    """Thin wrapper around the SExtractor binary.
 
-    It processes the image taking into account optional mask and noise map, and returns the list of detected objects and optionally a set of SExtractor-produced checkimages.
+    Processes the image with optional mask and noise map and returns the
+    list of detected objects, optionally with SExtractor checkimages.
 
-    You may check the SExtractor documentation at https://sextractor.readthedocs.io/en/latest/ for more details about possible parameters and general principles of its operation.
-    E.g. detection flags (returned in `flags` column of results table) are documented at https://sextractor.readthedocs.io/en/latest/Flagging.html#extraction-flags-flags . In addition to these flags, any object having pixels masked by the input `mask` in its footprint will have :code:`0x100` flag set.
+    See the `SExtractor documentation
+    <https://sextractor.readthedocs.io/en/latest/>`_ for details.
+    Detection flags are documented at
+    `<https://sextractor.readthedocs.io/en/latest/Flagging.html#extraction-flags-flags>`_.
+    Objects with masked pixels in their footprint additionally get flag
+    ``0x100``.
 
-    :param image: Input image as a NumPy array
-    :param header: Image header, optional
-    :param mask: Image mask as a boolean array (True values will be masked), optional. Used for SExtractor flagging (FLAG_IMAGE / IMAFLAGS_ISO). Objects whose footprint overlaps this mask get flag 0x100.
-    :param mask_detect: Optional detection mask as a boolean array (True = exclude from detection). If provided and mask_to_nans is True, these pixels (plus non-finite pixels) are set to NaN before running SExtractor, effectively excluding them from detection. Use this to exclude entire regions (e.g. bad columns, satellite trails) from detection while keeping the user mask only for flagging.
-    :param err: Image noise map as a NumPy array, optional
-    :param thresh: Detection threshold, in sigmas above local background, to be used for `DETECT_THRESH` parameter of SExtractor call
-    :param aper: Circular aperture radius in pixels, to be used for flux measurement. May also be list - then flux will be measured for all apertures from that list.
-    :param r0: Smoothing kernel size (sigma, or FWHM/2.355) to be used for improving object detection
-    :param gain: Image gain, e/ADU
-    :param edge: Reject all detected objects closer to image edge than this parameter
-    :param minarea: Minimal number of pixels in the object to be considered a detection (`DETECT_MINAREA` parameter of SExtractor)
-    :param wcs: Astrometric solution to be used for assigning sky coordinates (`ra`/`dec`) to detected objects
-    :param sn: Minimal S/N ratio for the object to be considered a detection
-    :param bg_size: Background grid size in pixels (`BACK_SIZE` SExtractor parameter)
-    :param sort: Whether to sort the detections in decreasing brightness or not
-    :param reject_negative: Whether to reject the detections with negative fluxes
-    :param mask_to_nans: Whether to replace detection-masked pixels with NaNs prior to running SExtractor. When True (default), pixels in mask_detect (if provided) plus non-finite pixels are set to NaN, excluding them from detection while keeping the user mask only for flagging. When False, no pixels are NaN-ed (original behavior).
-    :param checkimages: List of SExtractor checkimages to return along with detected objects. Any SExtractor checkimage type may be used here (e.g. `BACKGROUND`, `BACKGROUND_RMS`, `MINIBACKGROUND`,  `MINIBACK_RMS`, `-BACKGROUND`, `FILTERED`, `OBJECTS`, `-OBJECTS`, `SEGMENTATION`, `APERTURES`). Optional.
-    :param extra_params: List of extra object parameters to return for the detection. See :code:`sex -dp` for the full list.
-    :param extra: Dictionary of extra configuration parameters to be passed to SExtractor call, with keys as parameter names. See :code:`sex -dd` for the full list.
-    :param psf: Path to PSFEx-made PSF model file to be used for PSF photometry. If provided, a set of PSF-measured parameters (`FLUX_PSF`, `MAG_PSF` etc) are added to detected objects. Optional
-    :param catfile: If provided, output SExtractor catalogue file will be copied to this location, to be reused by external codes. Optional.
-    :param _workdir: If specified, all temporary files will be created in this directory, and will be kept intact after running SExtractor. May be used for debugging exact inputs and outputs of the executable. Optional
-    :param _tmpdir: If specified, all temporary files will be created in a dedicated directory (that will be deleted after running the executable) inside this path.
-    :param _exe: Full path to SExtractor executable. If not provided, the code tries to locate it automatically in your :envvar:`PATH`.
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :returns: Either the astropy.table.Table object with detected objects, or a list with table of objects (first element) and checkimages (consecutive elements), if checkimages are requested.
+    Parameters
+    ----------
+    image : numpy.ndarray
+        Input 2-D image.
+    header : astropy.io.fits.Header, optional
+        Image header.
+    mask : numpy.ndarray of bool, optional
+        Pixel mask (True = masked). Used for SExtractor flagging
+        (FLAG_IMAGE / IMAFLAGS_ISO). Objects overlapping this mask get
+        flag 0x100.
+    mask_detect : numpy.ndarray of bool, optional
+        Detection mask (True = exclude). When *mask_to_nans* is True,
+        these pixels (plus non-finite pixels) are set to NaN before
+        running SExtractor.
+    err : numpy.ndarray, optional
+        Noise map.
+    thresh : float
+        Detection threshold in sigmas (``DETECT_THRESH``).
+    aper : float or list of float
+        Aperture radius in pixels. If a list, flux is measured for
+        each aperture.
+    r0 : float
+        Smoothing kernel sigma (pixels, i.e. FWHM / 2.355).
+    gain : float
+        Detector gain, e-/ADU.
+    edge : int
+        Reject objects closer to edge than this many pixels.
+    minarea : int
+        Minimum object area (``DETECT_MINAREA``).
+    wcs : astropy.wcs.WCS, optional
+        WCS for sky coordinate assignment.
+    sn : float
+        Minimum S/N for output.
+    bg_size : int, optional
+        Background grid size (``BACK_SIZE``).
+    sort : bool
+        Sort detections by decreasing brightness.
+    reject_negative : bool
+        Reject objects with negative flux.
+    mask_to_nans : bool
+        Replace detection-masked pixels with NaN before running
+        SExtractor. Default True.
+    checkimages : list of str
+        SExtractor checkimage types to return (e.g. ``'BACKGROUND'``,
+        ``'SEGMENTATION'``).
+    extra_params : list of str
+        Extra SExtractor output parameters (see ``sex -dp``).
+    extra : dict
+        Extra SExtractor configuration parameters (see ``sex -dd``).
+    psf : str, optional
+        Path to PSFEx PSF model file for PSF photometry.
+    catfile : str, optional
+        Copy the output catalogue to this path.
+    _workdir : str, optional
+        Keep temporary files in this directory (for debugging).
+    _tmpdir : str, optional
+        Create temp directory inside this path.
+    _exe : str, optional
+        Full path to SExtractor executable.
+    verbose : bool or callable
+        Print progress messages.
+
+    Returns
+    -------
+    astropy.table.Table or list
+        Table of detected objects. If *checkimages* is non-empty,
+        returns ``[table, checkimage1, checkimage2, ...]``.
     """
 
     # Simple wrapper around print for logging in verbose mode only

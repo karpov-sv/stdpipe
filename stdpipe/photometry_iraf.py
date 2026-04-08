@@ -68,13 +68,25 @@ def _select_psf_stars(obj, fwhm, n_stars=20, isolation_radius=None, max_stars=50
     - Not saturated (if flags available)
     - Roundness (if shape parameters available)
 
-    :param obj: Object table with detected sources
-    :param fwhm: FWHM in pixels for isolation checking
-    :param n_stars: Target number of PSF stars to select
-    :param isolation_radius: Isolation radius in pixels (default: 10*fwhm)
-    :param max_stars: Maximum number of candidates to consider
-    :param verbose: Verbose output
-    :returns: Array of indices of selected PSF stars
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        Object table with detected sources.
+    fwhm : float
+        FWHM in pixels for isolation checking.
+    n_stars : int
+        Target number of PSF stars to select.
+    isolation_radius : float or None
+        Isolation radius in pixels. Default is 10*fwhm.
+    max_stars : int
+        Maximum number of candidates to consider.
+    verbose : bool or callable
+        Verbose output.
+
+    Returns
+    -------
+    numpy.ndarray
+        Array of indices of selected PSF stars.
     """
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
@@ -192,27 +204,59 @@ def measure_objects(
 
     **Note:** Requires PyRAF and IRAF to be installed and properly configured.
 
-    :param obj: astropy.table.Table with initial object detections to be measured. Must have 'x' and 'y' columns.
-    :param image: Input image as a NumPy array
-    :param aper: Circular aperture radius in pixels, to be used for flux measurement
-    :param bkgann: Background annulus (tuple with inner and outer radii) to be used for local background estimation. If not set, global background model is used instead.
-    :param fwhm: If provided, `aper` and `bkgann` will be measured in units of this value (so they will be specified in units of FWHM)
-    :param mask: Image mask as a boolean array (True values will be masked), optional
-    :param bg: If provided, use this background (NumPy array with same shape as input image) instead of automatically computed one
-    :param err: Image noise map as a NumPy array to be used instead of automatically computed one, optional
-    :param gain: Image gain, e/ADU, used for photometry error estimation
-    :param bg_size: Background grid size in pixels (used for global background estimation)
-    :param sn: Minimal S/N ratio for the object to be considered good. If set, all measurements with magnitude errors exceeding 1/SN will be discarded
-    :param centroid_iter: Number of centroiding iterations to run before photometry (currently not implemented for IRAF backend)
-    :param keep_negative: If not set, measurements with negative fluxes will be discarded
-    :param get_bg: If True, the routine will also return estimated background and background noise images
-    :param _workdir: If provided, use this directory for temporary files. If None, create a temporary directory.
-    :param _tmpdir: Parent directory for temporary directory creation if _workdir is None
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :returns: The copy of original table with `flux`, `fluxerr`, `mag` and `magerr` columns replaced with the values measured in the routine. If :code:`get_bg=True`, also returns the background and background error images.
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        Initial object detections to be measured. Must have 'x' and 'y' columns.
+    image : numpy.ndarray
+        Input image as a 2D NumPy array.
+    aper : float
+        Circular aperture radius in pixels for flux measurement.
+    bkgann : tuple of float or None
+        Background annulus as (inner_radius, outer_radius) for local background
+        estimation. If not set, global background model is used instead.
+    fwhm : float or None
+        If provided, `aper` and `bkgann` are measured in units of FWHM.
+    mask : numpy.ndarray or None
+        Boolean image mask (True values will be masked).
+    bg : numpy.ndarray or None
+        Background image to subtract instead of automatically computed one.
+    err : numpy.ndarray or None
+        Image noise map to use instead of automatically computed one.
+    gain : float or None
+        Image gain in e/ADU, used for photometry error estimation.
+    bg_size : int
+        Background grid size in pixels for global background estimation.
+    sn : float or None
+        Minimal S/N ratio. If set, measurements with magnitude errors
+        exceeding 1/sn will be discarded.
+    centroid_iter : int
+        Number of centroiding iterations before photometry (not implemented
+        for IRAF backend).
+    keep_negative : bool
+        If False, measurements with negative fluxes will be discarded.
+    get_bg : bool
+        If True, also return estimated background and background noise images.
+    _workdir : str or None
+        Directory for temporary files. If None, a temporary directory is created.
+    _tmpdir : str or None
+        Parent directory for temporary directory creation if _workdir is None.
+    verbose : bool or callable
+        Whether to show verbose messages. May be boolean or a print-like function.
 
-    :raises ImportError: If PyRAF is not available
-    :raises RuntimeError: If DAOPHOT task fails
+    Returns
+    -------
+    astropy.table.Table
+        Copy of original table with `flux`, `fluxerr`, `mag` and `magerr` columns
+        replaced with measured values. If ``get_bg=True``, returns a tuple of
+        (table, background, background_error).
+
+    Raises
+    ------
+    ImportError
+        If PyRAF is not available.
+    RuntimeError
+        If DAOPHOT task fails.
     """
 
     if not PYRAF_AVAILABLE:
@@ -498,35 +542,73 @@ def measure_objects_psf(
     4. Return results in stdpipe format with quality metrics
 
     The PSF model is built automatically from bright, isolated stars in the image.
-    If psf_stars is provided, those specific stars will be used instead of automatic selection.
+    If psf_stars is provided, those specific stars will be used instead of automatic
+    selection.
 
     **Note:** Requires PyRAF and IRAF to be installed and properly configured.
 
-    :param obj: astropy.table.Table with initial object detections. Must have 'x' and 'y' columns. Should also have 'flux' or 'mag' for PSF star selection.
-    :param image: Input image as a NumPy array
-    :param fwhm: FWHM in pixels (required for PSF building and fitting)
-    :param psf_stars: Indices of objects to use as PSF stars. If None, stars will be selected automatically.
-    :param n_psf_stars: Number of PSF stars to select automatically (default: 20)
-    :param mask: Image mask as a boolean array (True values will be masked), optional
-    :param bg: If provided, use this background (NumPy array) instead of automatically computed one
-    :param err: Image noise map as a NumPy array, optional
-    :param gain: Image gain, e/ADU
-    :param bg_size: Background grid size in pixels (default: 64)
-    :param sn: Minimal S/N ratio for output filtering
-    :param psfrad: PSF radius in pixels (default: 3*fwhm). Sets how far the PSF extends.
-    :param fitrad: Fitting radius in pixels (default: fwhm). Sets how many pixels to use for fitting each star.
-    :param psf_function: PSF function type: 'auto', 'gauss', 'moffat15', 'moffat25', 'lorentz', 'penny1', 'penny2' (default: 'auto')
-    :param psf_varorder: PSF variability order: 0=constant, 1=linear, 2=quadratic (default: 0)
-    :param keep_negative: If False, discard measurements with negative fluxes
-    :param get_bg: If True, also return background and error images
-    :param _workdir: Working directory for temporary files
-    :param _tmpdir: Parent directory for temporary directory creation
-    :param verbose: Verbose output
-    :returns: Table with PSF photometry results including flux, mag, x_psf, y_psf, qfit_psf, cfit_psf, flags_psf columns. If get_bg=True, also returns background and error images.
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        Initial object detections. Must have 'x' and 'y' columns. Should also
+        have 'flux' or 'mag' for PSF star selection.
+    image : numpy.ndarray
+        Input image as a 2D NumPy array.
+    fwhm : float
+        FWHM in pixels (required for PSF building and fitting).
+    psf_stars : array-like or None
+        Indices of objects to use as PSF stars. If None, stars are selected
+        automatically.
+    n_psf_stars : int
+        Number of PSF stars to select automatically.
+    mask : numpy.ndarray or None
+        Boolean image mask (True values will be masked).
+    bg : numpy.ndarray or None
+        Background image to subtract instead of automatically computed one.
+    err : numpy.ndarray or None
+        Image noise map.
+    gain : float or None
+        Image gain in e/ADU.
+    bg_size : int
+        Background grid size in pixels.
+    sn : float or None
+        Minimal S/N ratio for output filtering.
+    psfrad : float or None
+        PSF radius in pixels (default: 3*fwhm). Sets how far the PSF extends.
+    fitrad : float or None
+        Fitting radius in pixels (default: fwhm). Sets how many pixels to use
+        for fitting each star.
+    psf_function : str
+        PSF function type: 'auto', 'gauss', 'moffat15', 'moffat25', 'lorentz',
+        'penny1', or 'penny2'.
+    psf_varorder : int
+        PSF variability order: 0=constant, 1=linear, 2=quadratic.
+    keep_negative : bool
+        If False, discard measurements with negative fluxes.
+    get_bg : bool
+        If True, also return background and error images.
+    _workdir : str or None
+        Working directory for temporary files.
+    _tmpdir : str or None
+        Parent directory for temporary directory creation.
+    verbose : bool or callable
+        Verbose output.
 
-    :raises ImportError: If PyRAF is not available
-    :raises ValueError: If required parameters are missing
-    :raises RuntimeError: If DAOPHOT tasks fail
+    Returns
+    -------
+    astropy.table.Table
+        Table with PSF photometry results including flux, mag, x_psf, y_psf,
+        qfit_psf, cfit_psf, flags_psf columns. If ``get_bg=True``, returns a
+        tuple of (table, background, background_error).
+
+    Raises
+    ------
+    ImportError
+        If PyRAF is not available.
+    ValueError
+        If required parameters are missing.
+    RuntimeError
+        If DAOPHOT tasks fail.
     """
 
     if not PYRAF_AVAILABLE:

@@ -29,8 +29,19 @@ def _extract_valid_positions(obj):
 
     Handles MaskedColumn inputs by filling masked values with NaN.
 
-    :param obj: Table with 'x' and 'y' columns
-    :returns: (x_vals, y_vals, valid_pos) where valid_pos is boolean array
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        Table with 'x' and 'y' columns.
+
+    Returns
+    -------
+    x_vals : ndarray
+        X positions with masked values filled as NaN.
+    y_vals : ndarray
+        Y positions with masked values filled as NaN.
+    valid_pos : ndarray of bool
+        True where both x and y are finite.
     """
     x_vals = np.ma.filled(np.asarray(obj['x']), fill_value=np.nan)
     y_vals = np.ma.filled(np.asarray(obj['y']), fill_value=np.nan)
@@ -41,10 +52,21 @@ def _extract_valid_positions(obj):
 def _prepare_image_and_mask(image, mask):
     """Sanitize image and mask for photometry.
 
-    :param image: Input image array
-    :param mask: Optional boolean mask (True = masked), or None
-    :returns: (image1, mask0, mask) where image1 is float64 copy,
-              mask0 is non-finite pixel mask, mask is boolean array
+    Parameters
+    ----------
+    image : ndarray
+        Input image array.
+    mask : ndarray of bool or None
+        Optional boolean mask (True = masked).
+
+    Returns
+    -------
+    image1 : ndarray
+        Float64 copy of the image.
+    mask0 : ndarray of bool
+        Mask of non-finite pixels.
+    mask : ndarray of bool
+        Boolean mask array (zeros if input was None).
     """
     image1 = image.astype(np.double)
     mask0 = ~np.isfinite(image1)
@@ -63,11 +85,21 @@ def _compute_magnitudes_and_filter(obj, sn, keep_negative, log):
     Modifies obj in-place to add 'mag' and 'magerr' columns, then
     optionally returns a filtered subset.
 
-    :param obj: Table with 'flux' and 'fluxerr' columns
-    :param sn: Minimum S/N ratio, or None to skip filtering
-    :param keep_negative: If False, discard negative-flux measurements
-    :param log: Logging function
-    :returns: obj (possibly filtered) with 'mag' and 'magerr' columns set
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        Table with 'flux' and 'fluxerr' columns.
+    sn : float or None
+        Minimum S/N ratio. None to skip filtering.
+    keep_negative : bool
+        If False, discard negative-flux measurements.
+    log : callable
+        Logging function.
+
+    Returns
+    -------
+    obj : astropy.table.Table
+        Possibly filtered table with 'mag' and 'magerr' columns set.
     """
     for col in ['mag', 'magerr']:
         obj[col] = np.nan
@@ -91,15 +123,14 @@ def _compute_magnitudes_and_filter(obj, sn, keep_negative, log):
 
 
 def _get_psf_stamp_at_position(psf, x, y, stamp_size=None):
-    """
-    Get normalized PSF stamp at a given position with automatic sub-pixel alignment.
+    """Get normalized PSF stamp at a given position with automatic sub-pixel alignment.
 
     For Gaussian PSF: Creates pixel-integrated PSF using the error function (erf)
     to properly integrate Gaussian flux over each pixel's area. This eliminates
     the FWHM-dependent systematic bias caused by point sampling at pixel centers:
-      - FWHM = 1.5 pix: +11.6% bias → ~0%
-      - FWHM = 3.0 pix: +2.7% bias → ~0%
-      - FWHM = 6.0 pix: +0.8% bias → ~0%
+      - FWHM = 1.5 pix: +11.6% bias -> ~0%
+      - FWHM = 3.0 pix: +2.7% bias -> ~0%
+      - FWHM = 6.0 pix: +0.8% bias -> ~0%
 
     The stamp is shifted by the sub-pixel offset (x - round(x), y - round(y))
     to align with the actual source position.
@@ -108,16 +139,30 @@ def _get_psf_stamp_at_position(psf, x, y, stamp_size=None):
     the same sub-pixel shift internally, so no additional correction is needed here.
     Both methods produce identically aligned PSF stamps.
 
-    Technical details:
+    Parameters
+    ----------
+    psf : dict or float
+        PSF model (dict from PSFEx/ePSF, or Gaussian FWHM as float).
+    x : float
+        Object x position.
+    y : float
+        Object y position.
+    stamp_size : int or None
+        Optional fixed stamp size (odd integer).
+
+    Returns
+    -------
+    psf_stamp : ndarray
+        Normalized PSF stamp aligned to sub-pixel position (x, y).
+
+    Notes
+    -----
+    Technical details of pixel-integrated Gaussian:
+
     - Uses erf (error function = CDF of Gaussian) to integrate over pixel boundaries
     - Each pixel spans from (i-0.5, i+0.5) in both x and y
-    - Flux in pixel (i,j) = ∫∫ Gaussian(x,y) dx dy over pixel area
-    - This is computed as: [CDF(x+0.5) - CDF(x-0.5)] × [CDF(y+0.5) - CDF(y-0.5)]
-
-    :param psf: PSF model (dict from PSFEx/ePSF, or Gaussian FWHM as float)
-    :param x, y: Object position (float)
-    :param stamp_size: Optional fixed stamp size (odd integer)
-    :returns: Normalized PSF stamp aligned to sub-pixel position (x, y)
+    - Flux in pixel (i,j) = integral of Gaussian(x,y) dx dy over pixel area
+    - This is computed as: [CDF(x+0.5) - CDF(x-0.5)] * [CDF(y+0.5) - CDF(y-0.5)]
     """
     if isinstance(psf, dict):
         # PSFEx or ePSF model - lazy import to avoid circular dependency
@@ -171,8 +216,7 @@ def _get_psf_stamp_at_position(psf, x, y, stamp_size=None):
 
 
 def _psf_centroid(image, x, y, psf, mask=None, box_size=None, maxiter=16, tol=1e-4):
-    """
-    Compute PSF-weighted centroid at a given position.
+    """Compute PSF-weighted centroid at a given position.
 
     Uses PSF weighting analogous to optimal extraction (Naylor 1998),
     which naturally emphasizes high-S/N pixels in the PSF core.
@@ -180,18 +224,35 @@ def _psf_centroid(image, x, y, psf, mask=None, box_size=None, maxiter=16, tol=1e
     especially for crowded fields and faint sources.
 
     Iterates internally until convergence (position shift < tol) or maxiter
-    is reached. Due to the I×P weighting, each iteration only recovers half
+    is reached. Due to the I*P weighting, each iteration only recovers half
     the remaining offset, so ~10-16 iterations are needed for sub-0.01 pix
     accuracy from a cold start.
 
-    :param image: Background-subtracted image
-    :param x, y: Initial position estimate (float)
-    :param psf: PSF model (dict from PSFEx/ePSF, or Gaussian FWHM as float)
-    :param mask: Optional mask (True = masked)
-    :param box_size: Minimum cutout size in pixels (actual size will be max of this and PSF stamp size)
-    :param maxiter: Maximum number of internal iterations (default 16)
-    :param tol: Convergence tolerance in pixels (default 1e-4)
-    :returns: (x_new, y_new) or (np.nan, np.nan) on failure
+    Parameters
+    ----------
+    image : ndarray
+        Background-subtracted image.
+    x : float
+        Initial x position estimate.
+    y : float
+        Initial y position estimate.
+    psf : dict or float
+        PSF model (dict from PSFEx/ePSF, or Gaussian FWHM as float).
+    mask : ndarray of bool or None
+        Optional mask (True = masked).
+    box_size : int or None
+        Minimum cutout size in pixels (actual size is max of this and PSF stamp size).
+    maxiter : int
+        Maximum number of internal iterations.
+    tol : float
+        Convergence tolerance in pixels.
+
+    Returns
+    -------
+    x_new : float
+        Refined x position, or np.nan on failure.
+    y_new : float
+        Refined y position, or np.nan on failure.
     """
 
     # Determine box_size from PSF stamp size on the first call
@@ -271,13 +332,23 @@ def _psf_centroid(image, x, y, psf, mask=None, box_size=None, maxiter=16, tol=1e
 
 
 def _solve_weighted_leastsq(A, D, W):
-    """
-    Solve weighted least squares: (A^T W A)x = A^T W D
+    """Solve weighted least squares: (A^T W A)x = A^T W D.
 
-    :param A: Design matrix (npix, K) where K is number of sources
-    :param D: Data vector (npix,)
-    :param W: Weight vector (npix,) - inverse variance weights
-    :returns: (x, cov) - solution vector and covariance matrix, or (None, None) on failure
+    Parameters
+    ----------
+    A : ndarray
+        Design matrix, shape (npix, K) where K is number of sources.
+    D : ndarray
+        Data vector, shape (npix,).
+    W : ndarray
+        Weight vector, shape (npix,), inverse variance weights.
+
+    Returns
+    -------
+    x : ndarray or None
+        Solution vector, or None on failure.
+    cov : ndarray or None
+        Covariance matrix, or None on failure.
     """
     # A^T W A and A^T W D using weight vector
     # Near-singular systems (e.g. overlapping sources) can produce
@@ -303,22 +374,33 @@ def _solve_weighted_leastsq(A, D, W):
 
 
 def _grouped_optimal_extraction(image, err, positions, psf, bg_local=None, mask=None, radius=None):
-    """
-    Perform grouped optimal extraction for multiple overlapping sources.
+    """Perform grouped optimal extraction for multiple overlapping sources.
 
-    Solves: D = Σ_k F_k × P_k + B via weighted least squares (A^T W A)x = A^T W D
+    Solves D = sum_k F_k * P_k + B via weighted least squares (A^T W A)x = A^T W D.
+    Simultaneously fits the fluxes of all sources in a group, properly
+    accounting for flux sharing between overlapping PSFs.
 
-    This function simultaneously fits the fluxes of all sources in a group,
-    properly accounting for flux sharing between overlapping PSFs.
+    Parameters
+    ----------
+    image : ndarray
+        Background-subtracted image.
+    err : ndarray
+        Error/noise map (sqrt of variance).
+    positions : list of tuple
+        List of (x, y) positions for sources in group.
+    psf : dict or float
+        PSF model (dict from PSFEx/ePSF, or Gaussian FWHM as float).
+    bg_local : list, ndarray, float, or None
+        Local background values for each source, or single value for all.
+    mask : ndarray of bool or None
+        Optional mask (True = masked).
+    radius : float or None
+        Extraction radius in pixels around each source.
 
-    :param image: Background-subtracted image
-    :param err: Error/noise map (sqrt of variance)
-    :param positions: List of (x, y) positions for sources in group
-    :param psf: PSF model (dict from PSFEx/ePSF, or Gaussian FWHM as float)
-    :param bg_local: List of local background values for each source, or single value for all
-    :param mask: Optional mask (True = masked)
-    :param radius: Extraction radius in pixels around each source
-    :returns: List of (flux, fluxerr, npix, norm, reduced_chi2) for each source
+    Returns
+    -------
+    results : list of tuple
+        List of (flux, fluxerr, npix, norm, reduced_chi2) for each source.
     """
     K = len(positions)
     if K == 0:
@@ -504,23 +586,46 @@ def _grouped_optimal_extraction(image, err, positions, psf, bg_local=None, mask=
 
 
 def _optimal_extraction(image, err, x, y, psf, bg_local=None, mask=None, radius=None):
-    """
-    Perform optimal extraction photometry at a single position.
+    """Perform optimal extraction photometry at a single position.
 
     Algorithm from Naylor (1998, MNRAS 296, 339) based on Horne (1986),
     using simplified weighting for robustness to PSF errors.
 
-    flux = Σ(P × D) / Σ(P²)
-    variance = Σ(P² × V) / (Σ(P²))²
+    flux = sum(P * D) / sum(P^2)
+    variance = sum(P^2 * V) / (sum(P^2))^2
 
-    :param image: Background-subtracted image
-    :param err: Error/noise map (sqrt of variance)
-    :param x, y: Object position (float)
-    :param psf: PSF model (dict from PSFEx/ePSF, or Gaussian FWHM as float)
-    :param bg_local: Optional local background value on top of already subtracted background, to be additionally subtracted prior to measurement
-    :param mask: Optional mask (True = masked)
-    :param radius: Extraction radius in pixels (default: use full PSF stamp)
-    :returns: (flux, fluxerr, npix, reduced_chi2)
+    Parameters
+    ----------
+    image : ndarray
+        Background-subtracted image.
+    err : ndarray
+        Error/noise map (sqrt of variance).
+    x : float
+        Object x position.
+    y : float
+        Object y position.
+    psf : dict or float
+        PSF model (dict from PSFEx/ePSF, or Gaussian FWHM as float).
+    bg_local : float or None
+        Optional local background value to be additionally subtracted
+        prior to measurement.
+    mask : ndarray of bool or None
+        Optional mask (True = masked).
+    radius : float or None
+        Extraction radius in pixels (default: use full PSF stamp).
+
+    Returns
+    -------
+    flux : float
+        Extracted flux.
+    fluxerr : float
+        Flux uncertainty.
+    npix : int
+        Number of pixels used.
+    norm : float
+        PSF normalization factor.
+    reduced_chi2 : float
+        Reduced chi-squared of the fit.
     """
     # Get PSF stamp at object position (automatically includes sub-pixel shift)
     psf_stamp = _get_psf_stamp_at_position(psf, x, y)
@@ -621,41 +726,99 @@ def measure_objects(
 ):
     """Photometry at the positions of already detected objects.
 
-    Supports both standard aperture photometry and optimal extraction that provides ~10% S/N improvement for point sources (Naylor 1998).
+    Supports both standard aperture photometry and optimal extraction that
+    provides ~10% S/N improvement for point sources (Naylor 1998).
 
-    It will estimate and subtract the background unless external background estimation (`bg`) is provided, and use user-provided noise map (`err`) if requested.
+    It will estimate and subtract the background unless external background
+    estimation (``bg``) is provided, and use user-provided noise map (``err``)
+    if requested.
 
-    Quality flags are set in the `flags` column to indicate measurement issues:
-      - 0x200: At least one aperture pixel is masked (if `mask` is provided)
-      - 0x400: Invalid position or local background estimation failed
-      - 0x800: Optimal extraction failed (NaN result)
-      - 0x1000: Poor fit quality (chi2 > 1000, typically from numerical instability in crowded groups)
+    The results may optionally be filtered to drop detections with low signal
+    to noise ratio if ``sn`` is set and positive. It will also filter out
+    events with negative flux unless ``keep_negative`` is True.
 
-    The results may optionally filtered to drop the detections with low signal to noise ratio if `sn` parameter is set and positive. It will also filter out the events with negative flux.
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        Table with initial object detections to be measured.
+    image : ndarray
+        Input image as a NumPy array.
+    aper : float
+        Circular aperture radius in pixels for flux measurement. For optimal
+        extraction, this is the clipping radius.
+    bkgann : tuple of float or None
+        Background annulus (inner, outer radii) for local background
+        estimation. If None, global background model is used instead.
+    bkg_order : int
+        Polynomial order for local background fitting. 0 = constant (mean),
+        1 = plane (linear gradient, recommended), 2 = quadratic surface.
+        Only used if ``bkgann`` is set.
+    fwhm : float or None
+        If provided, ``aper`` and ``bkgann`` are measured in units of FWHM.
+        Also used to define Gaussian PSF for optimal extraction if ``psf``
+        is not provided.
+    psf : dict or None
+        PSF model for optimal extraction and PSF-weighted centroiding. Can be
+        a dict from ``psf.run_psfex()``, ``psf.load_psf()``, or
+        ``psf.create_psf_model()``. If None, a Gaussian PSF is created from
+        the ``fwhm`` parameter.
+    optimal : bool
+        If True, use optimal extraction instead of aperture photometry.
+        Requires either ``psf`` or ``fwhm`` to define the PSF profile.
+    group_sources : bool
+        If True and ``optimal=True``, use grouped optimal extraction for
+        overlapping sources. Fits nearby sources simultaneously for better
+        accuracy in crowded fields.
+    grouper_radius : float or None
+        Radius in pixels for grouping nearby sources. Sources within this
+        distance are fitted simultaneously. If None, defaults to 2*aper.
+        Only used if ``group_sources=True``.
+    mask : ndarray of bool or None
+        Image mask (True values are masked).
+    bg : ndarray or None
+        If provided, use this background instead of automatically computed
+        one. Must have the same shape as input image.
+    err : ndarray or None
+        Image noise map to use instead of automatically computed one.
+    gain : float or None
+        Image gain in e-/ADU, used to build image noise model.
+    bg_size : int
+        Background grid size in pixels.
+    sn : float or None
+        Minimal S/N ratio. If set, measurements with magnitude errors
+        exceeding 1/sn will be discarded.
+    centroid_iter : int
+        Number of centroiding iterations to run before photometry.
+    centroid_method : str
+        Centroiding method: 'com' (center-of-mass) or 'psf' (PSF-weighted).
+        PSF-weighted is more accurate but degrades with heavy random masking
+        (>20%). Requires ``psf`` or ``fwhm`` parameter.
+    keep_negative : bool
+        If False, measurements with negative fluxes will be discarded.
+    get_bg : bool
+        If True, also return estimated background and background noise images.
+    verbose : bool or callable
+        Whether to show verbose messages. May be boolean or a print-like
+        function.
 
+    Returns
+    -------
+    obj : astropy.table.Table
+        Copy of original table with ``flux``, ``fluxerr``, ``mag`` and
+        ``magerr`` columns replaced with measured values.
+    bg_image : ndarray
+        Background image (only returned if ``get_bg=True``).
+    err_image : ndarray
+        Error image (only returned if ``get_bg=True``).
 
-    :param obj: astropy.table.Table with initial object detections to be measured
-    :param image: Input image as a NumPy array
-    :param aper: Circular aperture radius in pixels, to be used for flux measurement. For optimal extraction, this is the clipping radius.
-    :param bkgann: Background annulus (tuple with inner and outer radii) to be used for local background estimation. If not set, global background model is used instead.
-    :param bkg_order: Polynomial order for local background fitting. 0 = constant (mean), 1 = plane (linear gradient, recommended), 2 = quadratic surface. Only used if bkgann is set. Default is 1.
-    :param fwhm: If provided, `aper` and `bkgann` will be measured in units of this value (so they will be specified in units of FWHM). Also used to define Gaussian PSF for optimal extraction if `psf` is not provided.
-    :param psf: PSF model for optimal extraction and PSF-weighted centroiding. Can be a dict from psf.run_psfex(), psf.load_psf(), or psf.create_psf_model(). If None, a Gaussian PSF will be created from the `fwhm` parameter.
-    :param optimal: If True, use optimal extraction instead of aperture photometry. Requires either `psf` or `fwhm` to define the PSF profile.
-    :param group_sources: If True and optimal=True, use grouped optimal extraction for overlapping sources. Fits nearby sources simultaneously for better accuracy in crowded fields. Default is True (recommended).
-    :param grouper_radius: Radius in pixels for grouping nearby sources. Sources within this distance are fitted simultaneously. If None, defaults to 2*aper. Only used if group_sources=True.
-    :param mask: Image mask as a boolean array (True values will be masked), optional
-    :param bg: If provided, use this background (NumPy array with same shape as input image) instead of automatically computed one
-    :param err: Image noise map as a NumPy array to be used instead of automatically computed one, optional
-    :param gain: Image gain, e/ADU, used to build image noise model
-    :param bg_size: Background grid size in pixels
-    :param sn: Minimal S/N ratio for the object to be considered good. If set, all measurements with magnitude errors exceeding 1/SN will be discarded
-    :param centroid_iter: Number of centroiding iterations to run before photometry. If non-zero, will try to improve the aperture placement by finding the centroid of pixels inside the aperture.
-    :param centroid_method: Centroiding method: 'com' (center-of-mass) or 'psf' (PSF-weighted). PSF-weighted is more accurate but degrades with heavy random masking (>20%). Requires psf or fwhm parameter. Default is 'com'.
-    :param keep_negative: If not set, measurements with negative fluxes will be discarded
-    :param get_bg: If True, the routine will also return estimated background and background noise images
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :returns: The copy of original table with `flux`, `fluxerr`, `mag` and `magerr` columns replaced with the values measured in the routine. If :code:`get_bg=True`, also returns the background and background error images.
+    Notes
+    -----
+    Quality flags set in the ``flags`` column:
+
+    - 0x200: At least one aperture pixel is masked
+    - 0x400: Invalid position or local background estimation failed
+    - 0x800: Optimal extraction failed (NaN result)
+    - 0x1000: Poor fit quality (chi2 > 1000, numerical instability)
     """
 
     # Simple wrapper around print for logging in verbose mode only
@@ -1061,14 +1224,22 @@ def measure_objects(
 def _get_sep_psf(psf, fwhm, log):
     """Convert a PSF model to sep.PSF object for use with sep.psf_fit().
 
-    Accepts:
-    - sep.PSF object (returned as-is)
-    - PSFEx dict from stdpipe.psf.run_psfex() / load_psf()
+    Accepts sep.PSF objects (returned as-is) or PSFEx dicts from
+    ``stdpipe.psf.run_psfex()`` / ``load_psf()``.
 
-    :param psf: PSF model (sep.PSF or PSFEx dict)
-    :param fwhm: FWHM in pixels (unused, reserved for future use)
-    :param log: Logging function
-    :returns: sep.PSF object
+    Parameters
+    ----------
+    psf : sep.PSF or dict
+        PSF model (sep.PSF or PSFEx dict).
+    fwhm : float
+        FWHM in pixels (unused, reserved for future use).
+    log : callable
+        Logging function.
+
+    Returns
+    -------
+    sep_psf : sep.PSF
+        SEP PSF object.
     """
     import sep
 
@@ -1127,56 +1298,103 @@ def measure_objects_sep(
 ):
     """Photometry at the positions of already detected objects using SEP routines.
 
-    This function uses SEP's built-in features for optimal extraction with sigma-clipped
-    background (via bkgann parameter in sum_circle_optimal), PSF fitting photometry
-    (via sep.psf_fit), and iterative centroiding (via winpos with maxstep parameter).
+    Uses SEP's built-in features for optimal extraction with sigma-clipped
+    background (via ``sum_circle_optimal``), PSF fitting photometry (via
+    ``sep.psf_fit``), and iterative centroiding (via ``winpos``).
 
     Only available if SEP version 1.4+ with these features is installed.
 
-    Quality flags are set in the `flags` column to indicate measurement issues:
-      - 0x200: At least one aperture pixel is masked (if `mask` is provided)
-      - 0x400: Invalid position
-      - 0x800: Optimal extraction failed (NaN result)
-      - 0x1000: PSF fit failed (NaN result)
-      - 0x2000: Large centroid shift during PSF fit (>1 pixel)
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        Table with initial object detections to be measured.
+    image : ndarray
+        Input image as a NumPy array.
+    aper : float
+        Circular aperture radius in pixels for flux measurement.
+    bkgann : tuple of float or None
+        Background annulus (inner, outer radii) for local background.
+        For optimal extraction, SEP handles this internally with
+        sigma-clipping. For aperture photometry, ``sep.stats_circann()``
+        is used.
+    fwhm : float or None
+        If provided, ``aper`` and ``bkgann`` are measured in units of FWHM.
+        Also used for Gaussian PSF in optimal extraction, PSF fitting,
+        and centroiding.
+    psf : dict, sep.PSF, or None
+        PSF model for PSF fitting photometry. When provided, PSF fitting is
+        used instead of aperture or optimal extraction. Can be a PSFEx dict
+        from ``stdpipe.psf.run_psfex()`` or a ``sep.PSF`` object.
+    optimal : bool
+        If True, use optimal extraction via ``sep.sum_circle_optimal()``.
+        Requires ``fwhm``. Ignored when ``psf`` is provided.
+    group_sources : bool
+        If True, use grouped fitting for optimal or PSF photometry.
+    group_factor : float
+        Grouping radius factor for PSF fitting. Only used for PSF fitting
+        when ``group_sources=True``.
+    maxiter : int
+        Maximum number of PSF fitting iterations.
+    fit_positions : bool
+        If True, fit source positions during PSF fitting.
+    fit_radius : float
+        If > 0, only pixels within this radius (in pixels) of the source
+        center participate in PSF fitting. 0 means use the full PSF stamp.
+        Values of 2-3x FWHM reduce scatter in crowded fields.
+    damp_snthresh : float
+        S/N threshold for damping PSF fit updates.
+    mask : ndarray of bool or None
+        Image mask (True values are masked).
+    bg : ndarray or None
+        If provided, use this background instead of automatically computed
+        one.
+    err : ndarray or None
+        Image noise map.
+    gain : float or None
+        Image gain in e-/ADU, used to build image noise model.
+    bg_size : int
+        Background grid size in pixels.
+    sn : float or None
+        Minimal S/N ratio for filtering.
+    centroid_iter : int
+        Number of centroiding iterations (uses SEP's built-in iteration).
+    centroid_psf : dict, sep.PSF, or None
+        PSF model for centroiding. If None, uses ``psf`` if available,
+        otherwise Gaussian windowed centroiding.
+    keep_negative : bool
+        If False, measurements with negative fluxes will be discarded.
+    get_bg : bool
+        If True, also return estimated background and noise images.
+    clip_sigma : float
+        Sigma value for clipping when ``bkgann`` is provided.
+    clip_iters : int
+        Maximum number of clipping iterations when ``bkgann`` is provided.
+        Set to 0 to disable clipping.
+    verbose : bool or callable
+        Whether to show verbose messages. May be boolean or print-like
+        function.
 
-    :param obj: astropy.table.Table with initial object detections to be measured
-    :param image: Input image as a NumPy array
-    :param aper: Circular aperture radius in pixels, to be used for flux measurement
-    :param bkgann: Background annulus (tuple with inner and outer radii) for local background.
-                   For optimal extraction, SEP handles this internally with sigma-clipping.
-                   For aperture photometry, we use sep.stats_circann().
-    :param fwhm: If provided, `aper` and `bkgann` will be measured in units of this value.
-                 Also used for Gaussian PSF in optimal extraction, PSF fitting, and centroiding.
-    :param psf: PSF model for PSF fitting photometry. When provided, PSF fitting is used
-                instead of aperture or optimal extraction. Can be:
-        - PSFEx PSF structure from :func:`stdpipe.psf.run_psfex` (dict with 'data', 'sampling', etc.)
-        - sep.PSF object (used directly)
-    :param optimal: If True, use optimal extraction via sep.sum_circle_optimal().
-                    Requires `fwhm` parameter. Ignored when `psf` is provided.
-    :param group_sources: If True, use grouped fitting for optimal or PSF photometry.
-    :param group_factor: Grouping radius factor for PSF fitting (default 2.0).
-                         Only used for PSF fitting when group_sources=True.
-    :param maxiter: Maximum number of PSF fitting iterations (default 20).
-    :param fit_positions: If True, fit source positions during PSF fitting (default True).
-    :param fit_radius: If > 0, only pixels within this radius (in pixels) of the source
-                       center participate in PSF fitting. 0 means use the full PSF stamp.
-                       Values of 2-3x FWHM reduce scatter in crowded fields.
-    :param mask: Image mask as a boolean array (True values will be masked), optional
-    :param bg: If provided, use this background instead of automatically computed one
-    :param err: Image noise map as a NumPy array, optional
-    :param gain: Image gain, e/ADU, used to build image noise model
-    :param bg_size: Background grid size in pixels
-    :param sn: Minimal S/N ratio for filtering
-    :param centroid_iter: Number of centroiding iterations (uses SEP's built-in iteration)
-    :param keep_negative: If not set, measurements with negative fluxes will be discarded
-    :param get_bg: If True, also return estimated background and noise images
-    :param clip_sigma: Sigma value for clipping when ``bkgann`` is provided. Default is 3.0.
-    :param clip_iters: Maximum number of clipping iterations when ``bkgann`` is provided.
-                       Default is 5. Set to 0 to disable clipping.
-    :param verbose: Whether to show verbose messages. May be boolean or print-like function.
-    :returns: Copy of table with flux/mag columns from SEP measurements. When `psf` is
-              provided, also includes `x_psf`, `y_psf` (fitted positions), and `flags_psf` columns.
+    Returns
+    -------
+    obj : astropy.table.Table
+        Copy of table with ``flux``, ``fluxerr``, ``mag`` and ``magerr``
+        columns from SEP measurements. When ``psf`` is provided, also
+        includes ``x_psf``, ``y_psf`` (fitted positions), ``chi2_psf``,
+        ``niter_psf``, and ``flags_psf`` columns.
+    bg_image : ndarray
+        Background image (only returned if ``get_bg=True``).
+    err_image : ndarray
+        Error image (only returned if ``get_bg=True``).
+
+    Notes
+    -----
+    Quality flags set in the ``flags`` column:
+
+    - 0x200: At least one aperture pixel is masked
+    - 0x400: Invalid position
+    - 0x800: Optimal extraction failed (NaN result)
+    - 0x1000: PSF fit failed (NaN result)
+    - 0x2000: Large centroid shift during PSF fit (>1 pixel)
     """
     import sep
 

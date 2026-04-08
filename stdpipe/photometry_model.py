@@ -109,60 +109,138 @@ def match(
 ):
     """Low-level photometric matching routine.
 
-    It tries to build the photometric model for objects detected on the image that includes catalogue magnitude, positionally-dependent zero point, linear color term, optional additive flux term, and also takes into account possible intrinsic magnitude scatter on top of measurement errors.
+    Builds a photometric model for objects detected on the image that includes
+    catalogue magnitude, positionally-dependent zero point, linear color term,
+    optional additive flux term, and also takes into account possible intrinsic
+    magnitude scatter on top of measurement errors.
 
-    :param obj_ra: Array of Right Ascension values for the objects
-    :param obj_dec: Array of Declination values for the objects
-    :param obj_mag: Array of instrumental magnitude values for the objects
-    :param obj_magerr: Array of instrumental magnitude errors for the objects
-    :param obj_flags: Array of flags for the objects
-    :param cat_ra: Array of catalogue Right Ascension values
-    :param cat_dec: Array of catalogue Declination values
-    :param cat_mag: Array of catalogue magnitudes
-    :param cat_magerr: Array of catalogue magnitude errors
-    :param cat_color: Array of catalogue color values, optional
-    :param sr: Matching radius, degrees
-    :param obj_x: Array of `x` coordinates of objects on the image, optional
-    :param obj_y: Array of `y` coordinates of objects on the image, optional
-    :param spatial_order: Order of zero point spatial polynomial (0 for constant).
-    :param bg_order: Order of additive flux term spatial polynomial (None to disable this term in the model)
-    :param nonlin: Whether to fit for simple non-linearity, optional
-    :param threshold: Rejection threshold (relative to magnitude errors) for object-catalogue pair to be rejected from the fit
-    :param niter: Number of iterations for the fitting
-    :param accept_flags: Bitmask for acceptable object flags. Objects having any other bits set will be excluded from the model
-    :param cat_saturation: Saturation level for the catalogue - stars brighter than this magnitude will be excluded from the fit
-    :param max_intrinsic_rms: Maximal intrinsic RMS to use during the fitting. If set to 0, no intrinsic scatter is included in the noise model.
-    :param sn: Minimal acceptable signal to noise ratio (1/obj_magerr) for the objects to be included in the fit
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :param robust: Whether to use robust least squares fitting routine instead of weighted least squares
-    :param scale_noise: Whether to re-scale the noise model (object and catalogue magnitude errors) to match actual scatter of the data points or not. Intrinsic scatter term is not being scaled this way.
-    :param use_color: Whether to use catalogue color for deriving the color term. If integer, it determines the color term order.
-    :param force_color_term: Do not fit for the color term, but use this fixed value instead.
-    :returns: The dictionary with photometric results, as described below.
+    Parameters
+    ----------
+    obj_ra : array-like
+        Right Ascension values for the objects.
+    obj_dec : array-like
+        Declination values for the objects.
+    obj_mag : array-like
+        Instrumental magnitude values for the objects.
+    obj_magerr : array-like
+        Instrumental magnitude errors for the objects.
+    obj_flags : array-like
+        Flags for the objects.
+    cat_ra : array-like
+        Catalogue Right Ascension values.
+    cat_dec : array-like
+        Catalogue Declination values.
+    cat_mag : array-like
+        Catalogue magnitudes.
+    cat_magerr : array-like, optional
+        Catalogue magnitude errors.
+    cat_color : array-like, optional
+        Catalogue color values.
+    sr : float
+        Matching radius in degrees.
+    obj_x : array-like, optional
+        X coordinates of objects on the image.
+    obj_y : array-like, optional
+        Y coordinates of objects on the image.
+    spatial_order : int
+        Order of zero point spatial polynomial (0 for constant).
+    bg_order : int or None
+        Order of additive flux term spatial polynomial. None to disable this
+        term in the model.
+    nonlin : bool
+        Whether to fit for simple non-linearity.
+    threshold : float
+        Rejection threshold (relative to magnitude errors) for
+        object-catalogue pair to be rejected from the fit.
+    niter : int
+        Number of iterations for the fitting.
+    accept_flags : int
+        Bitmask for acceptable object flags. Objects having any other bits
+        set will be excluded from the model.
+    cat_saturation : float or None
+        Saturation level for the catalogue. Stars brighter than this
+        magnitude will be excluded from the fit.
+    max_intrinsic_rms : float
+        Maximal intrinsic RMS to use during the fitting. If set to 0, no
+        intrinsic scatter is included in the noise model.
+    sn : float or None
+        Minimal acceptable signal to noise ratio (1/obj_magerr) for the
+        objects to be included in the fit.
+    verbose : bool or callable
+        Whether to show verbose messages during the run. May be either
+        boolean, or a ``print``-like function.
+    robust : bool
+        Whether to use robust least squares fitting instead of weighted
+        least squares.
+    scale_noise : bool
+        Whether to re-scale the noise model (object and catalogue magnitude
+        errors) to match actual scatter of the data points. Intrinsic
+        scatter term is not scaled this way.
+    use_color : bool or int
+        Whether to use catalogue color for deriving the color term. If
+        integer, it determines the color term order.
+    force_color_term : float or None
+        Do not fit for the color term, but use this fixed value instead.
 
-    The results of photometric matching are returned in a dictionary with the following fields:
+    Returns
+    -------
+    dict or None
+        Dictionary with photometric results, or None if the fit failed.
+        Contains the following keys:
 
-    -  `oidx`, `cidx`, `dist` - indices of positionally matched objects and catalogue stars, as well as their pairwise distances in degrees
-    -  `omag`, `omagerr`, `cmag`, `cmagerr` - arrays of object instrumental magnitudes of matched objects, corresponding catalogue magnitudes, and their errors. Array lengths are equal to the number of positional matches.
-    -  `color` - catalogue colors corresponding to the matches, or zeros if no color term fitting is requested
-    -  `ox`, `oy`, `oflags` - coordinates of matched objects on the image, and their flags
-    -  `zero`, `zero_err` - empirical zero points (catalogue - instrumental magnitudes) for every matched object, as well as its errors, derived as a hypotenuse of their corresponding errors.
-    -  `zero_model`, `zero_model_err` - modeled "full" zero points (including color terms) for matched objects, and their corresponding errors from the fit
-    -  `color_term` - fitted color term. Instrumental photometric system is defined as :code:`obj_mag = cat_mag - color*color_term`
-    -  `zero_fn` - function to compute the zero point (without color term) at a given position and for a given instrumental magnitude of object, and optionally its error.
-    -  `obj_zero` - zero points for all input objects (not necessarily matched to the catalogue) computed through aforementioned function, i.e. without color term
-    -  `params` - Internal parameters of the fittting polynomial
-    -  `intrinsic_rms`, `error_scale` - fitted values of intrinsic scatter and noise scaling
-    -  `idx` - boolean index of matched objects/catalogue stars used in the final fit (i.e. not rejected during iterative thresholding, and passing initial quality cuts
-    -  `idx0` - the same but with just initial quality cuts taken into account
+        - ``oidx``, ``cidx``, ``dist`` -- indices of positionally matched
+          objects and catalogue stars, and their pairwise distances in degrees.
+        - ``omag``, ``omag_err``, ``cmag``, ``cmag_err`` -- instrumental
+          magnitudes of matched objects, corresponding catalogue magnitudes,
+          and their errors. Array lengths equal the number of positional
+          matches.
+        - ``color`` -- catalogue colors corresponding to the matches, or
+          zeros if no color term fitting is requested.
+        - ``ox``, ``oy``, ``oflags`` -- coordinates of matched objects on the
+          image, and their flags.
+        - ``zero``, ``zero_err`` -- empirical zero points (catalogue minus
+          instrumental magnitudes) for every matched object, and errors
+          derived as a hypotenuse of their corresponding errors.
+        - ``zero_model``, ``zero_model_err`` -- modeled "full" zero points
+          (including color terms) for matched objects, and their errors from
+          the fit.
+        - ``color_term`` -- fitted color term. Instrumental photometric system
+          is defined as ``obj_mag = cat_mag - color * color_term``.
+        - ``zero_fn`` -- function to compute the zero point (without color
+          term) at a given position and for a given instrumental magnitude,
+          and optionally its error.
+        - ``obj_zero`` -- zero points for all input objects (not necessarily
+          matched to the catalogue) computed via ``zero_fn``, without color
+          term.
+        - ``params`` -- internal parameters of the fitting polynomial.
+        - ``intrinsic_rms``, ``error_scale`` -- fitted values of intrinsic
+          scatter and noise scaling.
+        - ``idx`` -- boolean index of matched objects/catalogue stars used in
+          the final fit (not rejected during iterative thresholding, and
+          passing initial quality cuts).
+        - ``idx0`` -- same as ``idx`` but with only initial quality cuts
+          applied.
 
-    Returned zero point computation function has the following signature:
+    Notes
+    -----
+    The returned zero point function ``zero_fn`` has the signature::
 
-    :obj:`zero_fn(xx, yy, mag=None, get_err=False, add_intrinsic_rms=False)`
+        zero_fn(xx, yy, mag=None, get_err=False, add_intrinsic_rms=False)
 
-    where `xx` and `yy` are coordinates on the image, `mag` is object instrumental magnitude (needed to compute additive flux term). If :code:`get_err=True`, the function returns estimated zero point error instead of zero point, and `add_intrinsic_rms` controls whether this error estimation should also include intrinsic scatter term or not.
+    where ``xx`` and ``yy`` are coordinates on the image, ``mag`` is the
+    object instrumental magnitude (needed to compute the additive flux term).
+    If ``get_err=True``, the function returns estimated zero point error
+    instead of zero point, and ``add_intrinsic_rms`` controls whether this
+    error estimation should also include the intrinsic scatter term.
 
-    The zero point returned by this function does not include the contribution of color term. Therefore, in order to derive the final calibrated magnitude for the object, you will need to manually add the color contribution: :code:`mag_calibrated = mag_instrumental + color*color_term`, where `color` is a true object color, and `color_term` is reported in the photometric results.
+    The zero point returned by this function does not include the contribution
+    of the color term. To derive the final calibrated magnitude for an object,
+    manually add the color contribution::
+
+        mag_calibrated = mag_instrumental + color * color_term
+
+    where ``color`` is the true object color, and ``color_term`` is reported
+    in the photometric results.
 
     """
 
@@ -420,13 +498,28 @@ def match(
 
 
 def make_sn_model(mag, sn):
-    """
-    Build a model for signal to noise (S/N) ratio versus magnitude.
-    Assumes the noise comes from constant background noise plus Poissonian noise with constant gain.
+    """Build a model for signal to noise (S/N) ratio versus magnitude.
 
-    :param mag: Array of calibrated magnitudes
-    :param sn: Array of S/N values corresponding to them
-    :returns: The function that accepts the array of magnitudes and returns the S/N model values for them
+    Assumes the noise comes from constant background noise plus Poissonian
+    noise with constant gain.
+
+    Parameters
+    ----------
+    mag : array-like
+        Calibrated magnitudes.
+    sn : array-like
+        S/N values corresponding to the magnitudes.
+
+    Returns
+    -------
+    callable
+        Function that accepts an array of magnitudes and returns the S/N
+        model values for them.
+
+    Raises
+    ------
+    ValueError
+        If no finite positive S/N values are available to build the model.
     """
     idx = np.isfinite(mag) & np.isfinite(sn) & (sn > 0)
     mag = mag[idx]
@@ -456,15 +549,30 @@ def make_sn_model(mag, sn):
 
 
 def get_detection_limit_sn(mag, mag_sn, sn=5, get_model=False, verbose=True):
-    """
-    Estimate the detection limit using S/N vs magnitude method.
+    """Estimate the detection limit using S/N vs magnitude method.
 
-    :param mag: Array of calibrated magnitudes
-    :param mag_sn: Array of S/N values corresponding to these magnitudes
-    :param sn: S/N level for the detection limit
-    :param get_model: If True, also returns the S/N model function
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function
-    :returns: The magnitude corresponding to the detection limit on a given S/N level. If :code:`get_model=True`, also returns the function for S/N vs magnitude model
+    Parameters
+    ----------
+    mag : array-like
+        Calibrated magnitudes.
+    mag_sn : array-like
+        S/N values corresponding to these magnitudes.
+    sn : float
+        S/N level for the detection limit.
+    get_model : bool
+        If True, also return the S/N model function.
+    verbose : bool or callable
+        Whether to show verbose messages during the run. May be either
+        boolean, or a ``print``-like function.
+
+    Returns
+    -------
+    float or None
+        Magnitude corresponding to the detection limit at the given S/N
+        level. None if the model cannot be built or the root is not found.
+    callable or None
+        S/N model function (only returned when ``get_model=True``). None
+        if the model cannot be built.
     """
 
     # Simple wrapper around print for logging in verbose mode only
