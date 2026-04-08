@@ -620,31 +620,50 @@ def get_cat_vizier(
 ):
     """Download any catalogue from Vizier.
 
-    The catalogue may be anything recognizable by Vizier. For some most popular ones, we have additional support - we try to augment them with photometric measurements not originally present there, based on some analytical magnitude conversion formulae. These catalogues are:
+    The catalogue may be any Vizier identifier. For a number of popular catalogues,
+    additional photometric bands are computed from analytical conversion formulae:
 
-    -  ps1 - Pan-STARRS DR1. We augment it with Johnson-Cousins B, V, R and I magnitudes
-    -  gaiadr2 - Gaia DR2. We augment it  with Johnson-Cousins B, V, R and I magnitudes, as well as Pan-STARRS and SDSS ones
-    -  gaiaedr3 - Gaia eDR3
-    -  gaiadr3syn - Gaia DR3 synthetic photometry based on XP spectra
-    -  skymapper - SkyMapper DR1.1
-    -  vsx - AAVSO Variable Stars Index
-    -  apass - AAVSO APASS DR9
-    -  sdss - SDSS DR16
-    -  atlas - ATLAS-RefCat2, compilative all-sky reference catalogue with uniform zero-points in Pan-STARRS-like bands. We augment it with Johnson-Cousins B, V, R and I magnitudes the same way as Pan-STARRS.
-    -  usnob1 - USNO-B1
-    -  gsc - Guide Star Catalogue 2.2
+    - ``ps1`` — Pan-STARRS DR1, augmented with Johnson-Cousins B, V, R, I
+    - ``gaiadr2`` — Gaia DR2, augmented with Johnson-Cousins B, V, R, I, Pan-STARRS and SDSS
+    - ``gaiaedr3`` — Gaia eDR3
+    - ``gaiadr3syn`` — Gaia DR3 synthetic photometry from XP spectra
+    - ``skymapper`` — SkyMapper DR1.1
+    - ``vsx`` — AAVSO Variable Stars Index
+    - ``apass`` — AAVSO APASS DR9
+    - ``sdss`` — SDSS DR16
+    - ``atlas`` — ATLAS-RefCat2, augmented with Johnson-Cousins B, V, R, I
+    - ``usnob1`` — USNO-B1
+    - ``gsc`` — Guide Star Catalogue 2.2
 
-    :param ra0: Right Ascension of the field center, degrees
-    :param dec0: Declination of the field center, degrees
-    :param sr0: Field radius, degrees
-    :param catalog: Any Vizier catalogue identifier, or a catalogue short name (see above)
-    :param limit: Limit for the number of returned rows, optional
-    :param filters: Dictionary with column filters to be applied on Vizier side. Dictionary key is the column name, value - filter expression as documented at https://vizier.u-strasbg.fr/vizier/vizHelp/cst.htx
-    :param extra: List of extra column names to return in addition to default ones.
-    :param get_distance: If set, the distance from the field center will be returned in `_r` column.
-    :param augment_bands: If set (default), will augment the photometry in bands not originally present there using conversion formulae.
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :returns: astropy.table.Table with catalogue as returned by Vizier, with some additional columns added for supported catalogues.
+    Parameters
+    ----------
+    ra0 : float
+        Right Ascension of the field center in degrees.
+    dec0 : float
+        Declination of the field center in degrees.
+    sr0 : float
+        Field radius in degrees.
+    catalog : str, optional
+        Any Vizier catalogue identifier or a short name from the list above.
+    limit : int, optional
+        Maximum number of rows to return (``-1`` for unlimited).
+    filters : dict, optional
+        Column filters applied server-side. Keys are column names; values are
+        Vizier filter expressions.
+    extra : list of str, optional
+        Additional column names to include beyond the defaults.
+    get_distance : bool, optional
+        If True, include a ``_r`` column with angular distance from field center.
+    augment_bands : bool, optional
+        If True (default), augment photometry with derived bands where supported.
+    verbose : bool or callable, optional
+        Whether to show verbose messages. May be boolean or a ``print``-like callable.
+
+    Returns
+    -------
+    astropy.table.Table or None
+        Catalogue as returned by Vizier, with additional columns for supported
+        catalogues, or None if the query fails.
     """
 
     # Simple Wrapper around print for logging in verbose mode only
@@ -710,17 +729,27 @@ def get_cat_vizier(
 
 
 def xmatch_objects(obj, catalog='ps1', sr=3 / 3600, col_ra='ra', col_dec='dec', augment_bands=True):
-    """Cross-match object list with Vizier catalogue using CDS XMatch service.
+    """Cross-match object list with a Vizier catalogue using the CDS XMatch service.
 
-    Any Vizier catalogue may be used for cross-matching.
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        Table of objects to cross-match.
+    catalog : str, optional
+        Any Vizier catalogue identifier or a short name recognized by :func:`get_cat_vizier`.
+    sr : float, optional
+        Cross-matching radius in degrees.
+    col_ra : str, optional
+        Column name in ``obj`` containing Right Ascension values.
+    col_dec : str, optional
+        Column name in ``obj`` containing Declination values.
+    augment_bands : bool, optional
+        If True (default), augment photometry with derived bands where supported.
 
-    :param obj: astropy.table.Table with objects
-    :param catalog: Any Vizier catalogue identifier, or a catalogue short name
-    :param sr: Cross-matching radius in degrees
-    :param col_ra: Column name in `obj` table containing Right Ascension values
-    :param col_dec: Column name in `obj` table containing Declination values
-    :param augment_bands: If set (default), will augment the photometry in bands not originally present there using conversion formulae.
-    :returns: The table of matched objects augmented with some fields from the Vizier catalogue.
+    Returns
+    -------
+    astropy.table.Table
+        Table of matched objects augmented with columns from the Vizier catalogue.
     """
 
     if catalog in catalogs:
@@ -744,20 +773,32 @@ def xmatch_objects(obj, catalog='ps1', sr=3 / 3600, col_ra='ra', col_dec='dec', 
 
 
 def xmatch_skybot(obj, sr=10 / 3600, time=None, col_ra='ra', col_dec='dec', col_id='id'):
-    """Cross-match object list with positions of Solar System objects using SkyBoT service
+    """Cross-match object list with Solar System object positions using SkyBoT.
 
-    The routine works by requesting the list of all solar system objects in a cone containing all
-    input objects, and then cross-matching them using the radius defined by `sr` parameter. Then it
-    returns the table of solar system objects plus a column of unique identifiers corresponding
-    to user objects.
+    Queries SkyBoT for all Solar System objects in a cone covering the input
+    field at the specified time, then cross-matches them against the input list
+    within ``sr``.
 
-    :param obj: astropy.table.Table with objects
-    :param sr: Cross-matching radius in degrees
-    :param time: Time of the observation corresponding to the objects
-    :param col_ra: Column name in `obj` table containing Right Ascension values
-    :param col_dec: Column name in `obj` table containing Declination values
-    :param col_id: Column name in `obj` table containing some unique object identifier
-    :returns: The table of solar system objects augmented with `col_id` column of matched objects.
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        Table of objects to cross-match.
+    sr : float, optional
+        Cross-matching radius in degrees.
+    time : astropy.time.Time or datetime or str
+        Observation time.
+    col_ra : str, optional
+        Column name in ``obj`` containing Right Ascension values.
+    col_dec : str, optional
+        Column name in ``obj`` containing Declination values.
+    col_id : str, optional
+        Column name in ``obj`` containing unique object identifiers.
+
+    Returns
+    -------
+    astropy.table.Table or None
+        Table of matched Solar System objects with a ``col_id`` column referencing
+        the matched input objects, or None if no matches are found.
     """
 
     ra0, dec0, sr0 = astrometry.get_objects_center(obj)
@@ -789,17 +830,29 @@ def xmatch_skybot(obj, sr=10 / 3600, time=None, col_ra='ra', col_dec='dec', col_
 
 
 def xmatch_ned(obj, sr=3 / 3600, col_ra='ra', col_dec='dec', col_id='id'):
-    """Cross-match object list with NED database entries
+    """Cross-match object list with NED database entries.
 
-    The routine is extremely inefficient as it has to query the objects one by one!
+    .. note::
+        Queries NED one object at a time, so this is slow for large lists.
 
-    :param obj: astropy.table.Table with objects
-    :param sr: Cross-matching radius in degrees
-    :param col_ra: Column name in `obj` table containing Right Ascension values
-    :param col_dec: Column name in `obj` table containing Declination values
-    :param col_id: Column name in `obj` table containing some unique object identifier
-    :returns: The table of NED objects augmented with `id` column containing the identifiers from `col_id` columns of matched objects.
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        Table of objects to cross-match.
+    sr : float, optional
+        Cross-matching radius in degrees.
+    col_ra : str, optional
+        Column name in ``obj`` containing Right Ascension values.
+    col_dec : str, optional
+        Column name in ``obj`` containing Declination values.
+    col_id : str, optional
+        Column name in ``obj`` containing unique object identifiers.
 
+    Returns
+    -------
+    astropy.table.Table or list
+        Table of NED objects with an ``id`` column referencing the matched input
+        objects, or an empty list if no matches are found.
     """
 
     xcat = []

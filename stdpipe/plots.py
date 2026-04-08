@@ -59,22 +59,40 @@ def imshow(
     ylim=None,
     **kwargs,
 ):
-    """Simple wrapper around pyplot.imshow with percentile-based intensity scaling, optional colorbar, etc.
+    """Display a 2D image with percentile-based intensity scaling.
 
-    :param image: Numpy 2d array to display
-    :param qq: two-element tuple (or list) with quantiles that define lower and upper limits for image intensity normalization. Default is `[0.5, 99.5]`. Will be superseded by manually provided `vmin` and `vmax` arguments.
-    :param mask: Mask to exclude image regions from intensity normalization, optional
-    :param show_colorbar: Whether to show a colorbar alongside the image
-    :param show_axis: Whether to show the axes around the image
-    :param stretch: Image intensity stretching mode - e.g. `linear`, `log`, `asinh`, `histeq` or anything else supported by Astropy visualization layer
-    :param r0: Smoothing kernel size (sigma) to be applied, optional
-    :param ax: Matplotlib Axes object to be used for plotting, optional
-    :param max_plot_size: Maximum image dimension for display. Images larger than this will be downscaled for faster rendering while preserving coordinate system. Set to None to disable. Default: 4096
-    :param fast: Use faster approximate methods for large images (default: True). When enabled, uses subsampling for percentile calculation, float32 precision, FFT convolution, and optimized finite checks.
-    :param xlim: Tuple (xmin, xmax) to select x region in original image coordinates (pixel centers, inclusive). Region is extracted before downscaling to preserve quality.
-    :param ylim: Tuple (ymin, ymax) to select y region in original image coordinates (pixel centers, inclusive). Region is extracted before downscaling to preserve quality.
-    :param \\**kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.imshow`
-
+    Parameters
+    ----------
+    image : ndarray
+        2D array to display.
+    qq : list of float, optional
+        Two-element ``[low, high]`` percentile range for intensity normalization.
+        Default is ``[0.5, 99.5]``. Overridden by explicit ``vmin`` / ``vmax``.
+    mask : ndarray of bool, optional
+        Boolean mask; masked pixels are excluded from intensity normalization.
+    show_colorbar : bool, optional
+        If True, display a colorbar alongside the image.
+    show_axis : bool, optional
+        If True, display axis ticks and labels.
+    stretch : str, optional
+        Intensity stretch: ``'linear'``, ``'log'``, ``'asinh'``, ``'histeq'``,
+        or any stretch supported by Astropy visualization.
+    r0 : float, optional
+        Gaussian smoothing sigma in pixels applied before display.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on; defaults to the current axes.
+    max_plot_size : int or None, optional
+        Images larger than this (in pixels) are downscaled for rendering.
+        Set to None to disable. Default is 4096.
+    fast : bool, optional
+        If True, use faster approximate methods for large images (subsampled
+        percentiles, float32, FFT convolution).
+    xlim : tuple of float, optional
+        ``(xmin, xmax)`` region selection in original image coordinates.
+    ylim : tuple of float, optional
+        ``(ymin, ymax)`` region selection in original image coordinates.
+    **kwargs
+        Additional keyword arguments passed to :func:`matplotlib.pyplot.imshow`.
     """
     if ax is None:
         ax = plt.gca()
@@ -252,23 +270,37 @@ def binned_map(
     range=None,
     **kwargs,
 ):
-    """Plots various statistical estimators binned onto regular grid from the set of irregular data points (`x`, `y`, `value`).
+    """Plot statistical estimators binned onto a regular grid.
 
-    :param x: Abscissae of the data points
-    :param y: Ordinates of the data points
-    :param value: Values of the data points
-    :param bins: Number of bins per axis
-    :param statistic: Statistical estimator to plot, may be `mean`, `median`, or a function
-    :param qq: two-element tuple (or list) with quantiles that define lower and upper limits for image intensity normalization. Default is `[0.5, 97.5]`. Will be superseded by manually provided `vmin` and `vmax` arguments.
-    :param color: Color to use for plotting the positions of data points, optional
-    :param show_colorbar: Whether to show a colorbar alongside the image
-    :param show_axis: Whether to show the axes around the image
-    :param show_dots: Whether to overlay the positions of data points onto the plot
-    :param range: Data range as [[xmin, xmax], [ymin, ymax]]
-    :param ax: Matplotlib Axes object to be used for plotting, optional
-    :param \\**kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.imshow`
-    :returns: None
-
+    Parameters
+    ----------
+    x : array_like
+        Abscissae of the data points.
+    y : array_like
+        Ordinates of the data points.
+    value : array_like
+        Values to aggregate.
+    bins : int, optional
+        Number of bins per axis.
+    statistic : str or callable, optional
+        Aggregation statistic: ``'mean'``, ``'median'``, or a callable.
+    qq : list of float, optional
+        ``[low, high]`` percentile range for color scaling. Default ``[0.5, 97.5]``.
+        Overridden by explicit ``vmin`` / ``vmax``.
+    color : color, optional
+        Color used for the data-point overlay (requires ``show_dots=True``).
+    show_colorbar : bool, optional
+        If True, display a colorbar.
+    show_axis : bool, optional
+        If True, display axis ticks and labels.
+    show_dots : bool, optional
+        If True, overlay the raw data point positions.
+    range : list of list, optional
+        Data range ``[[xmin, xmax], [ymin, ymax]]``.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on; defaults to the current axes.
+    **kwargs
+        Additional keyword arguments passed to :func:`matplotlib.pyplot.imshow`.
     """
     gmag0, xe, ye, binnumbers = binned_statistic_2d(
         x, y, value, bins=bins, statistic=statistic, range=range
@@ -482,32 +514,50 @@ def adaptive_binned_map(
     verbose=False,
     **kwargs,
 ):
-    """Plots statistical estimators with adaptive binning based on data density.
+    """Plot statistical estimators with adaptive (density-based) binning.
 
-    Creates bins with variable sizes: sparse regions get larger bins, dense
-    regions get finer resolution. Bins are sized to contain approximately
-    `target_count` points each, or achieve `target_sn` signal-to-noise ratio.
+    Bins have variable sizes: sparse regions get larger bins, dense regions
+    get finer resolution.  Bins target approximately ``target_count`` points
+    each, or a specified ``target_sn`` S/N ratio.
 
-    :param x: Abscissae of the data points
-    :param y: Ordinates of the data points
-    :param value: Values of the data points
-    :param target_count: Target number of points per bin (default 50)
-    :param target_sn: Target signal-to-noise per bin (alternative to target_count)
-    :param err: Value error values for S/N calculation (required if target_sn is set)
-    :param statistic: Statistical estimator - 'mean', 'median', 'std', 'count', or callable
-    :param method: Binning method - 'auto', 'powerbin', or 'kdtree'
-    :param qq: Quantile range for color scaling, default [0.5, 97.5]
-    :param color: Color for data point overlay
-    :param show_colorbar: Whether to show colorbar
-    :param show_axis: Whether to show axes
-    :param show_dots: Whether to overlay data points
-    :param show_edges: Whether to show bin boundaries
-    :param ax: Matplotlib axes object
-    :param range: Data range as [[xmin, xmax], [ymin, ymax]]
-    :param verbose: Enable verbose output from adaptive binning backends
-    :param \\**kwargs: Additional arguments passed to matplotlib
-    :returns: None
-
+    Parameters
+    ----------
+    x : array_like
+        Abscissae of the data points.
+    y : array_like
+        Ordinates of the data points.
+    value : array_like
+        Values to aggregate.
+    target_count : int, optional
+        Target number of points per bin.
+    target_sn : float, optional
+        Target S/N per bin (alternative to ``target_count``).
+    err : array_like, optional
+        Per-point value errors; required when ``target_sn`` is set.
+    statistic : str or callable, optional
+        Aggregation: ``'mean'``, ``'median'``, ``'std'``, ``'count'``, or callable.
+    method : str, optional
+        Binning algorithm: ``'auto'``, ``'powerbin'``, or ``'kdtree'``.
+    qq : list of float, optional
+        ``[low, high]`` percentile range for color scaling. Default ``[0.5, 97.5]``.
+    color : color, optional
+        Color for the data-point overlay (requires ``show_dots=True``).
+    show_colorbar : bool, optional
+        If True, display a colorbar.
+    show_axis : bool, optional
+        If True, display axis ticks and labels.
+    show_dots : bool, optional
+        If True, overlay the raw data point positions.
+    show_edges : bool, optional
+        If True, draw bin boundaries.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on; defaults to the current axes.
+    range : list of list, optional
+        Data range ``[[xmin, xmax], [ymin, ymax]]``.
+    verbose : bool, optional
+        If True, enable verbose output from the binning backend.
+    **kwargs
+        Additional keyword arguments passed to matplotlib.
     """
     x = np.asarray(x)
     y = np.asarray(y)
@@ -776,27 +826,46 @@ def plot_cutout(
     additional_title=None,
     **kwargs,
 ):
-    """Routine for displaying various image planes from the cutout structure returned by :func:`stdpipe.cutouts.get_cutout`.
+    """Display image planes from a cutout structure in a single row.
 
-    The cutout planes are displayed in a single row, in the order defined by `planes` paremeters. Optionally, circular mark may be overlayed over the planes at the specified pixel position inside the cutout.
-
-    :param cutout: Cutout structure as returned by :func:`stdpipe.cutouts.get_cutout`
-    :param planes: List of names of cutout planes to show
-    :param fig: Matplotlib figure where to plot, optional
-    :param axs: Matplotlib axes same length as planes, optional
-    :param mark_x: `x` coordinate of the overlay mark in cutout coordinates, optional
-    :param mark_y: `y` coordinate of the overlay mark in cutout coordinates, optional
-    :param mark_r: Radius of the overlay mark in cutout coordinates in pixels, optional
-    :param mark_color: Color of the overlay mark, optional
-    :param mark_lw: Line width of the overlay mark, optional
-    :param mark_ra: Sky coordinate of the overlay mark, overrides `mark_x` and `mark_y`, optional
-    :param mark_dec: Sky coordinate of the overlay mark, overrides `mark_x` and `mark_y`, optional
-    :param r0: Smoothing kernel size (sigma) to be applied to the image and template planes, optional
-    :param show_title: Show title over cutout. Defaults to True.
-    :param title: The title to show above the cutouts, optional. If not provided, the title will be constructed from various pieces of cutout metadata, plus the contents of `additoonal_title` field, if provided
-    :param additional_title: Additional text to append to automatically generated title of the cutout figure.
-    :param \\**kwargs: All additional parameters will be directly passed to :func:`stdpipe.plots.imshow` calls on individual images
-
+    Parameters
+    ----------
+    cutout : dict
+        Cutout structure as returned by :func:`stdpipe.cutouts.get_cutout`.
+    planes : list of str, optional
+        Names of cutout planes to show (in order).
+    fig : matplotlib.figure.Figure, optional
+        Figure to draw into; a new figure is created if not provided.
+    axs : list of matplotlib.axes.Axes, optional
+        Axes to draw into; must be the same length as ``planes``.
+    mark_x : float, optional
+        X coordinate (in cutout pixels) of the circular overlay mark.
+    mark_y : float, optional
+        Y coordinate (in cutout pixels) of the circular overlay mark.
+    mark_r : float, optional
+        Radius of the overlay mark in pixels.
+    mark_r2 : float, optional
+        Radius of a secondary dashed overlay circle.
+    mark_r3 : float, optional
+        Radius of a tertiary dashed overlay circle.
+    mark_color : color, optional
+        Color of the overlay mark.
+    mark_lw : float, optional
+        Line width of the overlay mark.
+    mark_ra : float, optional
+        RA of the overlay mark; overrides ``mark_x`` / ``mark_y``.
+    mark_dec : float, optional
+        Dec of the overlay mark; overrides ``mark_x`` / ``mark_y``.
+    r0 : float, optional
+        Gaussian smoothing sigma applied to ``image``, ``template``, and ``diff`` planes.
+    show_title : bool, optional
+        If True (default), display a title above the cutout row.
+    title : str, optional
+        Title text. Auto-generated from cutout metadata if not provided.
+    additional_title : str, optional
+        Text appended to the auto-generated title.
+    **kwargs
+        Additional keyword arguments passed to :func:`imshow` for each plane.
     """
 
     curplot = 1
@@ -897,28 +966,35 @@ def plot_cutout(
 
 
 def plot_photometric_match(m, ax=None, mode='mag', show_masked=True, show_final=True, **kwargs):
-    """Convenience plotting routine for photometric match results.
+    """Plot photometric match diagnostics.
 
-    It plots various representations of the photometric match results returned by :func:`stdpipe.photometry.match` or :func:`stdpipe.pipeline.calibrate_photometry`, depending on the `mode` parameter:
+    Displays various representations of the results returned by
+    :func:`stdpipe.photometry.match` or :func:`stdpipe.pipeline.calibrate_photometry`.
 
-    -  `mag` - displays photometric residuals as a function of catalogue magnitude
-    -  `normed` - displays normalized (i.e. divided by errors) photometric residuals as a function of catalogue magnitude
-    -  `color` - displays photometric residuals as a function of catalogue color
-    -  `zero` - displays the map of empirical zero point, i.e. difference of catalogue and instrumental magnitudes for all matched objects
-    -  `model` - displays the map of zero point model
-    -  `residuals` - displays fitting residuals between zero point and its model
-    -  `dist` - displays the map of angular separation between matched objects and stars, in arcseconds
+    Available modes:
 
-    The parameter `show_dots` controls whether to overlay the positions of the matched objects onto the maps, when applicable.
+    - ``'mag'`` — photometric residuals vs catalogue magnitude
+    - ``'normed'`` — residuals divided by errors vs catalogue magnitude
+    - ``'color'`` — residuals vs catalogue color
+    - ``'zero'`` — spatial map of the empirical zero point
+    - ``'model'`` — spatial map of the zero-point model
+    - ``'residuals'`` — spatial map of zero-point fitting residuals
+    - ``'dist'`` — spatial map of angular separation (arcsec)
 
-    :param m: Dictionary with photometric match results
-    :param ax: Matplotlib Axes object to be used for plotting, optional
-    :param mode: plotting mode - one of `mag`, `color`, `zero`, `model`, `residuals`, or `dist`
-    :param show_masked: Whether to show masked objects
-    :param show_final: Whether to additionally highlight the objects used for the final fit, i.e. not rejected during iterative thresholding
-    :param \\**kwargs: the rest of parameters will be directly passed to :func:`stdpipe.plots.binned_map` when applicable.
-    :returns: None
-
+    Parameters
+    ----------
+    m : dict
+        Photometric match results dictionary.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on; defaults to the current axes.
+    mode : str, optional
+        Plotting mode (see above).
+    show_masked : bool, optional
+        If True, include masked objects in the plot.
+    show_final : bool, optional
+        If True, highlight objects used in the final fit.
+    **kwargs
+        Additional keyword arguments passed to :func:`binned_map` where applicable.
     """
     if ax is None:
         ax = plt.gca()
@@ -1137,15 +1213,24 @@ def plot_detection_limit(
     show_local=True,
     ax=None,
 ):
-    """
-    Plot the details of detection limit estimation
+    """Plot S/N vs magnitude with detection limit model.
 
-    :param obj: astropy.table.Table with calibrated object detections.
-    :param sn: S/N value corresponding to the detection limit.
-    :param mag_name: User-readable name for the magnitude.
-    :param show_local: If set, also shows the distribution of local detection limits
-    :param ax: Matplotlib Axes object to be used for plotting, optional.
-    :returns: None
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        Table with calibrated object detections.
+    sn : float, optional
+        S/N threshold defining the detection limit.
+    mag_name : str, optional
+        Axis label for the magnitude.
+    obj_col_mag : str, optional
+        Column name for calibrated magnitude.
+    obj_col_mag_err : str, optional
+        Column name for magnitude error.
+    show_local : bool, optional
+        If True, overlay local per-object detection limits from ``bg_fluxerr``.
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on; defaults to the current axes.
     """
     if ax is None:
         ax = plt.gca()
@@ -1200,17 +1285,27 @@ def plot_mag_histogram(
     accept_flags=0,
     ax=None,
 ):
-    """
-    Plot the histogram of calibrated magnitudes for detected objects,
-    and optionally the catalogue.
+    """Plot a histogram of calibrated magnitudes.
 
-    :param obj: astropy.table.Table with calibrated object detections
-    :param cat: astropy.table.Table with catalogue stars
-    :param cat_col_mag: Column name of a magnitude inside `cat`
-    :param sn: If set - S/N value corresponding to the detection limit to overplot
-    :param accept_flags: Bitmask for acceptable object flags to be shown as unflagged
-    :param ax: Matplotlib Axes object to be used for plotting, optional
-    :returns: None
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        Table with calibrated object detections.
+    cat : astropy.table.Table, optional
+        Reference catalogue; its magnitudes are overlaid as a separate histogram.
+    cat_col_mag : str, optional
+        Column name for catalogue magnitudes.
+    sn : float, optional
+        If set, overplot the S/N detection limit as a vertical line.
+    obj_col_mag : str, optional
+        Column name for object calibrated magnitude.
+    obj_col_mag_err : str, optional
+        Column name for object magnitude error.
+    accept_flags : int, optional
+        Bitmask of acceptable object flags (objects matching this mask are shown
+        as unflagged).
+    ax : matplotlib.axes.Axes, optional
+        Axes to draw on; defaults to the current axes.
     """
     if ax is None:
         ax = plt.gca()
@@ -1285,22 +1380,24 @@ from contextlib import contextmanager
 
 @contextmanager
 def figure_saver(filename=None, show=False, tight_layout=True, **kwargs):
-    """Simple matplotlib Figure() wrapper, implemented as a context manager.
-    It stores the figure to specified file, and optionally displays it interactively if run inside Jupyter.
+    """Context manager that creates a Figure, saves it, and optionally displays it.
 
-    Intended to be used as:
-
-    .. code-block:: python
+    Example::
 
         with figure_saver('/tmp/figure.png', show=True, figsize=(10, 6)) as fig:
             ax = fig.add_subplot(111)
             ax.plot(x, y, '.-')
 
-    :param filename: Name of a file where to store the image. May be in any format supported by Matplotlib
-    :param show: Whether to also display the figure inside Jupuyter notebook
-    :param tight_layout: Whether to call :code:`fig.tight_layout()` on the figure before saving/displaying it
-    :param \\**kwargs: The rest of parameters will be directly passed to :func:`matplotlib.pyplot.Figure`
-
+    Parameters
+    ----------
+    filename : str, optional
+        Output file path.  Any format supported by Matplotlib is accepted.
+    show : bool, optional
+        If True, display the figure in a Jupyter notebook after saving.
+    tight_layout : bool, optional
+        If True, call ``fig.tight_layout()`` before saving.
+    **kwargs
+        Additional keyword arguments passed to :class:`matplotlib.pyplot.Figure`.
     """
 
     fig = plt.Figure(**kwargs)

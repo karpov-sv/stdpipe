@@ -95,18 +95,29 @@ def download(url, filename=None, overwrite=False, verbose=False):
 
 
 def get_obs_time(header=None, filename=None, string=None, get_datetime=False, verbose=False):
-    """
-    Extract date and time of observations from FITS headers of common formats, or from a string.
+    """Extract date and time of observations from a FITS header or string.
 
-    Will try various FITS keywords that may contain the time information - `DATE_OBS`, `DATE`, `TIME_OBS`, `UT`, 'MJD', 'JD'.
+    Tries the following FITS keywords in order: ``DATE-OBS``, ``DATEOBS``,
+    ``DATE``, ``TIME-OBS``, ``TIMEOBS``, ``UT``, ``MJD``, ``JD``.
 
-    :param header: FITS header containing the information on time of observations
-    :param filename: If `header` is not set, the FITS header will be loaded from the file with this name
-    :param string: If provided, the time will be parsed from the string instead of FITS header
-    :param get_datetime: Whether to return the time as a standard Python :class:`datetime.datetime` object instead of Astropy Time
-    :param verbose: Whether to show verbose messages during the run of the function or not. May be either boolean, or a `print`-like function.
-    :returns: :class:`astropy.time.Time` object corresponding to the time of observations, or a :class:`datetime.datetime` object if :code:`get_datetime=True`
+    Parameters
+    ----------
+    header : astropy.io.fits.Header, optional
+        FITS header containing observation time keywords.
+    filename : str, optional
+        Path to a FITS file; its header is loaded if ``header`` is not provided.
+    string : str, optional
+        Time string to parse directly instead of using a FITS header.
+    get_datetime : bool, optional
+        If True, return a :class:`datetime.datetime` instead of
+        :class:`astropy.time.Time`.
+    verbose : bool or callable, optional
+        Whether to show verbose messages. May be boolean or a ``print``-like callable.
 
+    Returns
+    -------
+    astropy.time.Time or datetime.datetime or None
+        Parsed observation time, or None if parsing fails.
     """
 
     # Simple wrapper around print for logging in verbose mode only
