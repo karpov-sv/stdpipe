@@ -368,7 +368,9 @@ def match(
             C = sm.WLS(zero[idx], X[idx], weights=1 / total_err[idx] ** 2).fit()
 
         zero_model = np.sum(X * C.params, axis=1)
-        zero_model_err = np.sqrt(C.cov_params(X).diagonal())
+        # Compute diagonal of X @ cov @ X.T efficiently: O(N*P^2) instead of O(N^2)
+        cov_p = C.cov_params()
+        zero_model_err = np.sqrt(np.sum((X @ cov_p) * X, axis=1))
 
         intrinsic_rms = (
             get_intrinsic_scatter((zero - zero_model)[idx], total_err[idx], max=max_intrinsic_rms)
@@ -440,16 +442,9 @@ def match(
         X = np.vstack(X).T
 
         if get_err:
-            # It follows the implementation from https://github.com/statsmodels/statsmodels/blob/081fc6e85868308aa7489ae1b23f6e72f5662799/statsmodels/base/model.py#L1383
-            # FIXME: crashes on large numbers of stars?..
-            if len(x) < 5000:
-                err = np.sqrt(
-                    np.dot(
-                        X, np.dot(C.cov_params()[0 : X.shape[1], 0 : X.shape[1]], np.transpose(X))
-                    ).diagonal()
-                )
-            else:
-                err = np.zeros_like(x)
+            # Compute diagonal of X @ cov @ X.T efficiently: O(N*P^2) instead of O(N^2)
+            cov_p = C.cov_params()[0 : X.shape[1], 0 : X.shape[1]]
+            err = np.sqrt(np.sum((X @ cov_p) * X, axis=1))
             if add_intrinsic_rms:
                 err = np.hypot(err, intrinsic_rms)
             return err

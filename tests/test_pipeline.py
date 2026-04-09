@@ -963,13 +963,13 @@ class TestCalibratePhotometryZeroFn:
         x_test = np.random.uniform(0, 256, n)
         y_test = np.random.uniform(0, 256, n)
 
-        # Get errors - should return zeros for large input (performance limitation)
+        # Get errors - should return valid errors for any input size
         zero_errors = zero_fn(x_test, y_test, get_err=True)
 
-        # Should return array of zeros (per implementation in photometry_model.py line 369)
         assert isinstance(zero_errors, np.ndarray)
         assert len(zero_errors) == n
-        assert np.all(zero_errors == 0)
+        assert np.all(np.isfinite(zero_errors))
+        assert np.all(zero_errors >= 0)
 
     # Magnitude Dependence Tests
 
