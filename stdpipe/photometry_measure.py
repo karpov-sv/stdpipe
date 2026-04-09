@@ -1390,10 +1390,10 @@ def measure_objects_sep(
     -----
     Quality flags set in the ``flags`` column:
 
-    - 0x200: At least one aperture pixel is masked
+    - 0x200: At least one aperture pixel is masked (aperture/optimal paths)
     - 0x400: Invalid position
     - 0x800: Optimal extraction failed (NaN result)
-    - 0x1000: PSF fit failed (NaN result)
+    - 0x1000: PSF fit returned non-zero quality flag, or PSF fit failed (NaN result)
     - 0x2000: Large centroid shift during PSF fit (>1 pixel)
     """
     import sep
@@ -1601,7 +1601,7 @@ def measure_objects_sep(
             obj['flags_psf'][valid_pos] = flag
 
             # Flag sources where PSF fit returned non-zero flag
-            obj['flags'][np.where(valid_pos)[0][flag > 0]] |= 0x200
+            obj['flags'][np.where(valid_pos)[0][flag > 0]] |= 0x1000
 
             # Flag large centroid shifts (>1 pixel)
             if fit_positions:

@@ -25,6 +25,7 @@ SEP defines the following flag constants (exact hex values may depend on the SEP
 
 - `0x0001` - ``sep.OBJ_MERGED`` - Object is result of deblending
 - `0x0002` - ``sep.OBJ_TRUNC`` - Object is truncated at image boundary
+- `0x0004` - ``sep.OBJ_DOVERFLOW`` - Deblending memory overflow (object may be incorrectly deblended)
 - `0x0008` - ``sep.OBJ_SINGU`` - x, y fully correlated in object
 - `0x0010` - ``sep.APER_TRUNC`` - Aperture truncated at image boundary
 - `0x0020` - ``sep.APER_HASMASKED`` - Aperture contains one or more masked pixels
@@ -59,6 +60,7 @@ Set by :func:`~stdpipe.photometry.measure_objects` during aperture photometry me
 Set by :func:`~stdpipe.photometry.measure_objects` when using optimal extraction (Naylor 1998 algorithm).
 
 - `0x0800` - Optimal extraction failed (NaN or non-finite flux result)
+- `0x1000` - Poor fit quality (reduced chi-squared > 1000, indicating numerical instability or severe crowding)
 
 PSF Photometry Flags
 --------------------
