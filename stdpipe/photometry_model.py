@@ -372,13 +372,14 @@ def match(
         cov_p = C.cov_params()
         zero_model_err = np.sqrt(np.sum((X @ cov_p) * X, axis=1))
 
+        scale_err = 1 if not scale_noise else np.sqrt(C.scale)  # rms
+
         intrinsic_rms = (
-            get_intrinsic_scatter((zero - zero_model)[idx], total_err[idx], max=max_intrinsic_rms)
+            get_intrinsic_scatter((zero - zero_model)[idx], (zero_err * scale_err)[idx], max=max_intrinsic_rms)
             if max_intrinsic_rms > 0
             else 0
         )
 
-        scale_err = 1 if not scale_noise else np.sqrt(C.scale)  # rms
         total_err = np.hypot(zero_err * scale_err, intrinsic_rms)
 
         if threshold:
