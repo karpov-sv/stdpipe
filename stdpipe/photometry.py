@@ -665,7 +665,8 @@ def get_objects_sep(
                 # Default to 1.0 pixel if FWHM not available
                 winpos_kwargs['maxstep'] = 1.0
 
-        xwin, ywin, flag_win = sep.winpos(image1, obj0['x'], obj0['y'], 0.5, **winpos_kwargs)
+        sig = fwhm_value / 2.355 if fwhm_value is not None else 0.5
+        xwin, ywin, flag_win = sep.winpos(image1, obj0['x'], obj0['y'], sig, **winpos_kwargs)
     else:
         # Use initial positions from extraction
         xwin, ywin = obj0['x'], obj0['y']
