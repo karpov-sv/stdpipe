@@ -584,7 +584,7 @@ def blind_match_astrometrynet(
     return None
 
 
-def refine_wcs(
+def refine_wcs_simple(
     obj,
     cat,
     order=2,

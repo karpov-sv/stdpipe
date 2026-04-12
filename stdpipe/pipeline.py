@@ -282,7 +282,7 @@ def refine_astrometry(
                     % (iter, np.sum(m['idx']), np.std(3600 * m['dist'][m['idx']]))
                 )
 
-            wcs = astrometry.refine_wcs(
+            wcs = astrometry.refine_wcs_simple(
                 obj[m['oidx']][m['idx']],
                 cat[m['cidx']][m['idx']],
                 order=order,
@@ -292,7 +292,7 @@ def refine_astrometry(
             )
         else:
             # Simple positional matching
-            wcs = astrometry.refine_wcs(
+            wcs = astrometry.refine_wcs_simple(
                 obj, cat, order=order, sr=sr, match=True, method=method, verbose=verbose, **kwargs
             )
 

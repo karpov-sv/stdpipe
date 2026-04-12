@@ -85,13 +85,21 @@ Example of using the code for solving the astrometry if not set in the header:
 Astrometric refinement
 ----------------------
 
-Existing approximate astrometric solution may be further improved to better represent image distortions. *STDPipe* provides several methods, accessible through the higher-level wrapper :func:`stdpipe.pipeline.refine_astrometry`:
+Existing approximate astrometric solution may be further improved to better represent image distortions. *STDPipe* provides several methods, all accessible through the higher-level wrapper :func:`stdpipe.pipeline.refine_astrometry`:
+
+- ``method='quadhash'`` (default, recommended) - pure Python quad-hash pattern matching via :func:`stdpipe.astrometry_quad.refine_wcs_quadhash`
+- ``method='scamp'`` - external `SCAMP <https://github.com/astromatic/scamp>`_ binary via :func:`stdpipe.astrometry.refine_wcs_scamp`
+- ``method='astropy'`` - simple SIP fitting via AstroPy's ``fit_wcs_from_points``, through :func:`stdpipe.astrometry.refine_wcs_simple`
+- ``method='astrometrynet'`` - SIP fitting via Astrometry.Net's ``fit-wcs`` binary, through :func:`stdpipe.astrometry.refine_wcs_simple`
+
+.. autofunction:: stdpipe.pipeline.refine_astrometry
+   :noindex:
 
 
 Quad-hash refinement (recommended)
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-The default and recommended method is quad-hash pattern matching, implemented in :func:`stdpipe.astrometry.refine_wcs_quadhash`. It is a pure Python implementation with no external dependencies (only numpy, scipy, astropy).
+The default and recommended method is quad-hash pattern matching, implemented in :func:`stdpipe.astrometry_quad.refine_wcs_quadhash`. It is a pure Python implementation with no external dependencies (only numpy, scipy, astropy).
 
 Key features:
 
@@ -143,10 +151,20 @@ Alternatively, you may use `SCAMP <https://github.com/astromatic/scamp>`_ throug
    :noindex:
 
 
-Other methods
-^^^^^^^^^^^^^
+Simple SIP fitting (astropy / astrometrynet)
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
-We also have a less tested routine :func:`stdpipe.astrometry.refine_wcs` that will operate with SIP distortions, and do so either in pure Python, or using `fit-wcs` executable from Astrometry.Net installation.
+:func:`stdpipe.astrometry.refine_wcs_simple` provides basic SIP distortion fitting using either AstroPy's ``fit_wcs_from_points`` (``method='astropy'``) or Astrometry.Net's ``fit-wcs`` binary (``method='astrometrynet'``). These methods perform a straightforward polynomial fit to pre-matched object/catalogue positions without the robust pattern matching of quad-hash or the full astrometric model of SCAMP.
 
-.. autofunction:: stdpipe.pipeline.refine_astrometry
+.. code-block:: python
+
+   # AstroPy-based SIP fitting
+   wcs = pipeline.refine_astrometry(obj, cat, 5*pixscale, wcs=wcs,
+                method='astropy', order=2, cat_col_mag='rmag', verbose=True)
+
+   # Using Astrometry.Net's fit-wcs binary (requires local installation)
+   wcs = pipeline.refine_astrometry(obj, cat, 5*pixscale, wcs=wcs,
+                method='astrometrynet', order=2, cat_col_mag='rmag', verbose=True)
+
+.. autofunction:: stdpipe.astrometry.refine_wcs_simple
    :noindex:
