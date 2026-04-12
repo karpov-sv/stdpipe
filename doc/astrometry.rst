@@ -107,7 +107,8 @@ Key features:
 - **Robust pattern matching** - uses geometric hashing of star quadrilaterals for reliable matching even with large initial WCS errors
 - **High accuracy** - typically 2-7x more accurate than SCAMP, with sub-arcsecond residuals
 - **SIP distortion fitting** - supports polynomial distortion orders 1-3
-- **Projection-independent** - works with any WCS projection (TAN, ZEA, SIN, etc.), not just TAN
+- **Projection-independent** - works with any WCS projection (TAN, ZEA, SIN, STG, ARC, etc.), not just TAN
+- **ZPN projection for wide fields** - for images with FoV > 5°, the zenithal polynomial (ZPN) projection with PV radial terms plus optional SIP corrections gives lower residuals than TAN-SIP
 - **Iterative refinement** - affine re-matching and progressive sigma-clipping for robust outlier rejection
 
 .. code-block:: python
@@ -120,6 +121,11 @@ Key features:
    from stdpipe.astrometry_quad import refine_wcs_quadhash
    wcs = refine_wcs_quadhash(obj, cat, wcs=wcs, sr=10/3600,
                 order=2, sn=5, verbose=True)
+
+   # Wide-field images (FoV > 5 degrees): use ZPN projection
+   wcs = refine_wcs_quadhash(obj, cat, wcs=wcs, sr=30/3600,
+                order=2, projection='ZPN', pv_deg=5,
+                sn=5, verbose=True)
 
    if wcs is not None:
        # Update WCS info in the header

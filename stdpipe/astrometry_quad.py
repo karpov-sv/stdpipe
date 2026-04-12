@@ -998,7 +998,14 @@ class QuadHashAstrometry:
 
         return pairs, top_hyp, best
 
-    def refine(self, obj: Table, cat: Table, wcs_init: WCS) -> Tuple[WCS, Table, dict]:
+    def refine(
+        self,
+        obj: Table,
+        cat: Table,
+        wcs_init: WCS,
+        fit_projection: Optional[WCS] = None,
+        pv_deg: int = 5,
+    ) -> Tuple[WCS, Table, dict]:
         if not all(k in obj.colnames for k in ("x", "y")):
             raise ValueError("obj must contain 'x' and 'y'")
         if not all(k in cat.colnames for k in ("ra", "dec", "mag")):
@@ -1212,6 +1219,10 @@ class QuadHashAstrometry:
         refined_wcs = None
         keep = np.ones(xy.shape[1], dtype=bool)
 
+        # Projection template for WCS fitting (may differ from wcs_init
+        # which is used only for the matching phase)
+        wcs_fit_proj = fit_projection if fit_projection is not None else wcs_init
+
         # Progressive clipping: interpolate from start to end sigma
         clip_start = self.cfg.refine_clip_sigma_start
         clip_end = self.cfg.refine_clip_sigma
@@ -1232,8 +1243,9 @@ class QuadHashAstrometry:
             refined_wcs = fit_wcs_from_points(
                 xy_use,
                 sky_use,
-                projection=wcs_init,
+                projection=wcs_fit_proj,
                 sip_degree=int(self.cfg.sip_degree),
+                pv_deg=pv_deg,
             )
 
             # Residuals via spherical distance (projection-independent)
@@ -1315,6 +1327,8 @@ def refine_wcs_quadhash(
     header=None,
     sr: float = 10 / 3600,
     order: int = 2,
+    projection: str = None,
+    pv_deg: int = 5,
     cat_col_ra: str = 'RAJ2000',
     cat_col_dec: str = 'DEJ2000',
     cat_col_mag: str = 'rmag',
@@ -1357,7 +1371,30 @@ def refine_wcs_quadhash(
     sr : float, optional
         Matching radius in degrees for stage 2 matching.
     order : int, optional
-        SIP polynomial order for the distortion solution (1–3).
+        SIP polynomial order for the distortion solution (0–5).
+        For TAN projection, controls the SIP polynomial degree.
+        For ZPN projection, controls additional SIP corrections on top
+        of the PV radial model (0 means ZPN-only, 2 is recommended for
+        wide-field images).  Ignored for other projections.
+    projection : str or None, optional
+        Target projection type for the output WCS.  If ``None`` (default),
+        uses the same projection as the input WCS.  Supported values:
+
+        - ``'TAN'`` — gnomonic (TAN) with SIP distortion polynomials
+        - ``'ZPN'`` — zenithal polynomial with PV radial terms (+ optional
+          SIP for non-radial corrections).  Best for wide-field images
+          (FoV > 5°) as ZPN naturally handles radial distortion that
+          TAN-SIP struggles with.
+        - Any other FITS WCS projection code supported by astropy
+          (``'STG'``, ``'ARC'``, ``'ZEA'``, ``'SIN'``, etc.) — linear
+          WCS fit only (no distortion polynomials).
+
+        The initial WCS (``wcs``) is always used for the pattern matching
+        phase; the projection conversion only affects the final WCS fit.
+    pv_deg : int, optional
+        ZPN PV polynomial degree (``PV2_0`` … ``PV2_pv_deg``).  Only used
+        when ``projection='ZPN'``.  Default is 5, which is sufficient for
+        most optical systems.
     cat_col_ra : str, optional
         Catalogue column name for Right Ascension. Default is ``'RAJ2000'``.
     cat_col_dec : str, optional
@@ -1414,6 +1451,18 @@ def refine_wcs_quadhash(
     ...     sr=10/3600,  # 10 arcsec matching radius
     ...     order=2,     # quadratic SIP distortion
     ...     sn=5,        # use only S/N > 5 objects
+    ...     verbose=True
+    ... )
+
+    For wide-field images (FoV > 5 degrees), ZPN projection with SIP
+    corrections typically gives lower systematic residuals at field edges:
+
+    >>> wcs_refined = refine_wcs_quadhash(
+    ...     obj, cat, wcs_init,
+    ...     sr=30/3600,
+    ...     order=2,           # SIP order on top of ZPN radial model
+    ...     projection='ZPN',  # zenithal polynomial projection
+    ...     pv_deg=5,          # PV radial polynomial degree
     ...     verbose=True
     ... )
     """
@@ -1541,6 +1590,20 @@ def refine_wcs_quadhash(
     log(f"  Source counts: n_det={scaled_n_det}, n_ref={scaled_n_ref}")
     log(f"  SIP order: {order}")
 
+    # Build projection template for the WCS fitting phase
+    fit_projection = None
+    if projection is not None:
+        from stdpipe.astrometry_wcs import convert_wcs_projection
+
+        proj_code = projection.upper().strip()
+        fit_projection = convert_wcs_projection(wcs, proj_code, pv_deg=pv_deg)
+        log(f"  Output projection: {proj_code} (fit CTYPE: {fit_projection.wcs.ctype})")
+
+        if proj_code == 'ZPN':
+            log(f"  ZPN PV degree: {pv_deg}")
+        elif proj_code != 'TAN' and order > 0:
+            log(f"  Note: SIP order={order} ignored for {proj_code} projection (linear fit only)")
+
     config = AstrometryConfig(
         n_det=scaled_n_det,
         n_ref=scaled_n_ref,
@@ -1575,7 +1638,10 @@ def refine_wcs_quadhash(
 
     try:
         solver = QuadHashAstrometry(config=config)
-        wcs_refined, match, diagnostics = solver.refine(obj=obj_std, cat=cat_std, wcs_init=wcs)
+        wcs_refined, match, diagnostics = solver.refine(
+            obj=obj_std, cat=cat_std, wcs_init=wcs,
+            fit_projection=fit_projection, pv_deg=pv_deg,
+        )
 
         log(f"Refinement successful:")
         log(f"  Pattern matches: {diagnostics['pattern_inliers_stage2']}")

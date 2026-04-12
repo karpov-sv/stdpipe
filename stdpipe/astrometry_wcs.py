@@ -53,6 +53,48 @@ def _unpack_params_to_wcs(base: WCS, p: np.ndarray, pv_deg: int) -> WCS:
     return w
 
 
+def _normalize_zpn_pv1(w: WCS) -> WCS:
+    """Normalize a ZPN WCS so that PV2_1 = 1, absorbing the scale into CD.
+
+    The ZPN projection R = Σ PV2_m·θ^m has a degeneracy: scaling all PV
+    by ``c`` and CD by ``c`` gives an identical pixel→sky mapping.  This
+    function normalizes PV2_1 to 1 (the FITS standard convention), moving
+    any absorbed plate-scale factor into the CD matrix.
+
+    Parameters
+    ----------
+    w : WCS
+        ZPN WCS (modified in place).
+
+    Returns
+    -------
+    WCS
+        The same object, normalized.
+    """
+    pv_dict = {}
+    for i, m, val in w.wcs.get_pv():
+        if i == 2:
+            pv_dict[m] = val
+
+    pv1 = pv_dict.get(1, 1.0)
+    if not np.isfinite(pv1) or abs(pv1) < 1e-15 or abs(pv1 - 1.0) < 1e-12:
+        return w  # already normalized or can't normalize
+
+    scale = 1.0 / pv1
+
+    # CD' = CD/pv1 so that intermediate coords scale together with PV.
+    cd = np.array(w.wcs.cd, dtype=float)
+    w.wcs.cd = cd / pv1
+
+    # Scale all PV2 coefficients
+    pv_list = [(i, m, val) for (i, m, val) in w.wcs.get_pv() if i != 2]
+    for m, val in pv_dict.items():
+        pv_list.append((2, m, float(val * scale)))
+    w.wcs.set_pv(pv_list)
+
+    return w
+
+
 def fit_zpn_wcs_from_points(
     xy: np.ndarray,
     sky: SkyCoord,
@@ -185,16 +227,12 @@ def fit_zpn_wcs_from_points(
             lb[free_idx] = pv0 - pv0_abs
             ub[free_idx] = pv0 + pv0_abs
 
-        # PV2_1 positive scale, near initial value
+        # PV2_1 (linear): allow moderate range, keep positive
         full_idx = 8 + 1
         if mask[full_idx]:
             free_idx = np.flatnonzero(mask).tolist().index(full_idx)
-            if np.isfinite(pv1) and pv1 > 0:
-                lb[free_idx] = max(0.0, pv1 * 0.5)
-                ub[free_idx] = pv1 * 2.0
-            else:
-                lb[free_idx] = 0.0
-                ub[free_idx] = np.inf
+            lb[free_idx] = max(0.1, pv1 * 0.2)
+            ub[free_idx] = pv1 * 5.0
 
         # Higher-order PV terms: limit contribution at field edge
         pv_frac = 0.3  # allow ~30% of linear term at the edge
@@ -229,6 +267,10 @@ def fit_zpn_wcs_from_points(
             mask[4:8] = False
         if not allow_pv:
             mask[8:] = False
+        elif pv_deg >= 1:
+            # PV2_1 (linear scale) is degenerate with CD — let it float.
+            # Caller normalizes after fit via _normalize_zpn_pv1().
+            pass
 
         if not np.any(mask):
             return base, None
@@ -280,6 +322,11 @@ def fit_zpn_wcs_from_points(
         w_curr, res_last = _fit_with_mask(w_curr, allow_pv=False)
 
     w_curr, res_last = _fit_with_mask(w_curr, allow_pv=fit_pv)
+
+    # Normalize so PV2_1 = 1 (breaks the CD/PV degeneracy)
+    if fit_pv:
+        w_curr = _normalize_zpn_pv1(w_curr)
+
     return w_curr, res_last
 
 
@@ -289,7 +336,7 @@ def _fit_zpn_sip(
     sky,
     sip_degree=2,
     pv_deg=5,
-    n_iter=3,
+    n_iter=15,
     robust_loss="soft_l1",
     f_scale_arcsec=2.0,
     max_nfev=200,
@@ -336,6 +383,7 @@ def _fit_zpn_sip(
             pq.append((total - q, q))
 
     crpix = np.array(w.wcs.crpix, dtype=float)  # 1-based
+    prev_med_dist = np.inf
 
     for iteration in range(n_iter):
         # Strip SIP to get the base ZPN-only WCS
@@ -375,19 +423,28 @@ def _fit_zpn_sip(
         du_fit = du[good]
         dv_fit = dv[good]
 
-        # Build SIP basis matrix
-        basis = np.column_stack([u_fit**p * v_fit**q for p, q in pq])
+        # Normalize coordinates to prevent ill-conditioning for high
+        # SIP degrees.  Without this, u^5 ~ 2000^5 ~ 3e16 creates a
+        # design matrix with condition number > 1e14.
+        u_scale = max(np.abs(u_fit).max(), 1.0)
+        v_scale = max(np.abs(v_fit).max(), 1.0)
+        u_norm = u_fit / u_scale
+        v_norm = v_fit / v_scale
 
-        # Fit A and B coefficients via least squares
-        ca, _, _, _ = np.linalg.lstsq(basis, du_fit, rcond=None)
-        cb, _, _, _ = np.linalg.lstsq(basis, dv_fit, rcond=None)
+        # Build SIP basis matrix in normalized coordinates
+        basis = np.column_stack([u_norm**p * v_norm**q for p, q in pq])
 
-        # Build SIP arrays
+        # Fit A and B coefficients via least squares (normalized)
+        ca_norm, _, _, _ = np.linalg.lstsq(basis, du_fit, rcond=None)
+        cb_norm, _, _, _ = np.linalg.lstsq(basis, dv_fit, rcond=None)
+
+        # Convert back to original (unnormalized) SIP coefficients
         a_vals = np.zeros((sip_degree + 1, sip_degree + 1))
         b_vals = np.zeros((sip_degree + 1, sip_degree + 1))
         for k, (p, q) in enumerate(pq):
-            a_vals[p, q] = ca[k]
-            b_vals[p, q] = cb[k]
+            scale_pq = u_scale**p * v_scale**q
+            a_vals[p, q] = ca_norm[k] / scale_pq
+            b_vals[p, q] = cb_norm[k] / scale_pq
 
         # Apply SIP to the WCS
         if '-SIP' not in w.wcs.ctype[0]:
@@ -400,6 +457,16 @@ def _fit_zpn_sip(
             np.zeros((sip_degree + 1, sip_degree + 1)),
             crpix,
         )
+
+        # Check convergence: stop when SIP corrections stabilize.
+        # Use 90th percentile (sensitive to outer-field + center) rather
+        # than median which converges before the center is corrected.
+        curr_q90 = np.percentile(dist[good], 90)
+        if iteration > 4 and prev_med_dist < np.inf:
+            rel_change = abs(curr_q90 - prev_med_dist) / max(prev_med_dist, 1e-6)
+            if rel_change < 0.005:
+                break
+        prev_med_dist = curr_q90
 
         # Re-fit PV with SIP now applied (last iteration skip PV refit)
         if iteration < n_iter - 1:
@@ -572,6 +639,113 @@ def tan_wcs_to_zpn(
     return w
 
 
+def convert_wcs_projection(
+    wcs_input: WCS,
+    target_projection: str,
+    pv_deg: int = 5,
+) -> WCS:
+    """Convert a celestial WCS to a different projection type.
+
+    Parameters
+    ----------
+    wcs_input : WCS
+        Input WCS (any celestial projection).
+    target_projection : str
+        Target projection code, e.g. ``'TAN'``, ``'ZPN'``, ``'STG'``,
+        ``'ARC'``, ``'ZEA'``, ``'SIN'``, etc.
+    pv_deg : int, optional
+        ZPN PV polynomial degree (only used when *target_projection* is
+        ``'ZPN'``).  Default 5.
+
+    Returns
+    -------
+    WCS
+        New WCS with the target projection.  For ZPN the PV coefficients
+        are initialised to approximate the input projection's radial law.
+        For other projections CRPIX/CRVAL/CD are copied and CTYPE is
+        replaced.
+    """
+    target = target_projection.upper().strip()
+
+    # Detect current projection code (last 3 chars of CTYPE after the dash)
+    try:
+        cur_proj = wcs_input.wcs.ctype[0].split('-')[-1]
+        # Strip trailing SIP suffix if present
+        if cur_proj == 'SIP':
+            parts = wcs_input.wcs.ctype[0].replace('-SIP', '').split('-')
+            cur_proj = parts[-1]
+    except Exception:
+        cur_proj = ''
+
+    if cur_proj == target:
+        return wcs_input.deepcopy()
+
+    # ZPN needs special initialisation (PV coefficients)
+    if target == 'ZPN':
+        # tan_wcs_to_zpn works from TAN (with or without SIP)
+        # For non-TAN input, we first need a TAN-like WCS base
+        if 'TAN' in cur_proj:
+            return tan_wcs_to_zpn(wcs_input, pv_deg=pv_deg)
+        else:
+            # Build a minimal TAN WCS from the input's linear terms,
+            # then convert to ZPN
+            w_tan = _wcs_to_linear(wcs_input, 'TAN')
+            return tan_wcs_to_zpn(w_tan, pv_deg=pv_deg)
+
+    # For all other projections: copy linear WCS with new CTYPE
+    return _wcs_to_linear(wcs_input, target)
+
+
+def _wcs_to_linear(wcs_input: WCS, proj_code: str) -> WCS:
+    """Create a clean linear WCS with the same pointing but a new projection.
+
+    Copies CRPIX, CRVAL, CD (or derives CD from PC+CDELT), metadata, and
+    pixel_shape.  Strips SIP distortion and PV parameters.
+    """
+    w = WCS(naxis=2)
+
+    # CD matrix
+    if wcs_input.wcs.has_cd():
+        cd = np.array(wcs_input.wcs.cd, dtype=float)
+    elif wcs_input.wcs.has_pc():
+        pc = np.array(wcs_input.wcs.pc, dtype=float)
+        cdelt = np.array(wcs_input.wcs.cdelt, dtype=float)
+        cd = pc * cdelt[None, :]
+    else:
+        cdelt = np.array(wcs_input.wcs.cdelt, dtype=float)
+        cd = np.diag(cdelt)
+
+    w.wcs.crpix = np.array(wcs_input.wcs.crpix, dtype=float)
+    w.wcs.crval = np.array(wcs_input.wcs.crval, dtype=float)
+    w.wcs.cd = cd
+
+    # Build CTYPE: preserve axis names (e.g. 'RA---' / 'DEC--')
+    ctype1, ctype2 = wcs_input.wcs.ctype
+    # Strip any existing projection + SIP suffix
+    base1 = ctype1.replace('-SIP', '')[:5]
+    base2 = ctype2.replace('-SIP', '')[:5]
+    w.wcs.ctype = (base1 + proj_code, base2 + proj_code)
+
+    # Copy metadata
+    for attr in ('cunit', 'radesys', 'equinox'):
+        try:
+            setattr(w.wcs, attr, getattr(wcs_input.wcs, attr))
+        except Exception:
+            pass
+    for attr in ('lonpole', 'latpole'):
+        try:
+            val = getattr(wcs_input.wcs, attr)
+            if np.isfinite(val):
+                setattr(w.wcs, attr, float(val))
+        except Exception:
+            pass
+
+    if wcs_input.pixel_shape is not None:
+        w.pixel_shape = wcs_input.pixel_shape
+
+    return w
+
+
 def _fit_tan_sip_robust(
     xy,
     world_coords,
@@ -723,11 +897,38 @@ def _fit_tan_sip_robust(
         )
     )
 
+    # Compute parameter scales for the optimizer.
+    # SIP coefficients A_{p,q} multiply (u-crpix)^p * (v-crpix)^q where
+    # pixel offsets can be ~U pixels.  Expected coefficient magnitude is
+    # ~1/U^(p+q), which spans many orders of magnitude for high SIP orders.
+    # Without proper scaling the optimizer cannot find meaningful SIP≥4
+    # coefficients on wide-field images.
+    U = max(
+        abs(xpmax - wcs.wcs.crpix[0]),
+        abs(xpmin - wcs.wcs.crpix[0]),
+        abs(ypmax - wcs.wcs.crpix[1]),
+        abs(ypmin - wcs.wcs.crpix[1]),
+        1.0,
+    )
+    sip_x_scale = np.ones(len(p0_sip))
+    # CRPIX: O(pixels) → scale 1
+    # CD: O(deg/pixel) → use current magnitude
+    cd_scale = max(np.abs(wcs.wcs.cd).max(), 1e-10)
+    sip_x_scale[2:6] = cd_scale
+    # SIP coefficients: O(1/U^(p+q))
+    for k, coef_name in enumerate(coef_names):
+        p_deg, q_deg = int(coef_name[0]), int(coef_name[2])
+        order = p_deg + q_deg
+        scale = 1.0 / U**order
+        sip_x_scale[6 + k] = scale
+        sip_x_scale[6 + len(coef_names) + k] = scale
+
     fit = least_squares(
         _sip_fit,
         p0_sip,
         args=sip_args,
         bounds=sip_bounds,
+        x_scale=sip_x_scale,
     )
 
     # Pass 2: robust re-fit starting from L2 solution
@@ -746,6 +947,7 @@ def _fit_tan_sip_robust(
         loss=robust_loss,
         f_scale=sip_f_scale,
         method="trf",
+        x_scale=sip_x_scale,
     )
 
     coef_fit = (

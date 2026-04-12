@@ -938,6 +938,105 @@ class TestWCSRefinementInterface:
         # Should have logged something
         assert len(messages) > 0
 
+    @pytest.mark.unit
+    @pytest.mark.parametrize("proj", ['TAN', 'ZPN', 'STG'])
+    def test_projection_parameter(self, detections_from_catalog, catalog_with_wcs,
+                                  wcs_with_error, proj):
+        """Test projection= parameter with different projection types."""
+        obj = detections_from_catalog
+        cat = catalog_with_wcs
+
+        order = 2 if proj in ('TAN', 'ZPN') else 0
+
+        wcs_refined = refine_wcs_quadhash(
+            obj, cat,
+            wcs=wcs_with_error,
+            order=order,
+            projection=proj,
+            pv_deg=5,
+            **_test_refinement_params(),
+            verbose=False
+        )
+
+        assert wcs_refined is not None, f"projection='{proj}' failed"
+
+        # Verify the output projection type matches what was requested
+        out_ctype = wcs_refined.wcs.ctype[0]
+        if proj == 'ZPN' and order > 0:
+            assert 'ZPN-SIP' in out_ctype or 'ZPN' in out_ctype
+        elif proj == 'ZPN':
+            assert 'ZPN' in out_ctype
+        elif proj == 'TAN':
+            assert 'TAN' in out_ctype
+        else:
+            assert proj in out_ctype
+
+    @pytest.mark.unit
+    def test_projection_none_preserves_input(self, detections_from_catalog,
+                                             catalog_with_wcs, wcs_with_error):
+        """Test that projection=None preserves the input projection type."""
+        obj = detections_from_catalog
+        cat = catalog_with_wcs
+
+        wcs_refined = refine_wcs_quadhash(
+            obj, cat,
+            wcs=wcs_with_error,
+            projection=None,  # should keep original (TAN)
+            **_test_refinement_params(),
+            verbose=False
+        )
+
+        assert wcs_refined is not None
+        assert 'TAN' in wcs_refined.wcs.ctype[0]
+
+
+class TestConvertWcsProjection:
+    """Test the convert_wcs_projection helper."""
+
+    @pytest.fixture
+    def tan_wcs(self):
+        w = WCS(naxis=2)
+        w.wcs.crpix = [512, 512]
+        w.wcs.crval = [180, 45]
+        w.wcs.cd = np.array([[-0.001, 0], [0, 0.001]])
+        w.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+        w.pixel_shape = (1024, 1024)
+        return w
+
+    @pytest.mark.unit
+    def test_same_projection_is_copy(self, tan_wcs):
+        from stdpipe.astrometry_wcs import convert_wcs_projection
+        w2 = convert_wcs_projection(tan_wcs, 'TAN')
+        assert 'TAN' in w2.wcs.ctype[0]
+        assert np.allclose(w2.wcs.crval, tan_wcs.wcs.crval)
+
+    @pytest.mark.unit
+    def test_tan_to_zpn(self, tan_wcs):
+        from stdpipe.astrometry_wcs import convert_wcs_projection
+        w = convert_wcs_projection(tan_wcs, 'ZPN', pv_deg=5)
+        assert 'ZPN' in w.wcs.ctype[0]
+        pv = dict((m, v) for i, m, v in w.wcs.get_pv() if i == 2)
+        assert len(pv) > 0, "ZPN should have PV terms"
+        assert pv.get(1, 0) != 0, "PV2_1 should be non-zero"
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("proj", ['STG', 'ARC', 'ZEA', 'SIN'])
+    def test_tan_to_zenithal(self, tan_wcs, proj):
+        from stdpipe.astrometry_wcs import convert_wcs_projection
+        w = convert_wcs_projection(tan_wcs, proj)
+        assert proj in w.wcs.ctype[0]
+        assert np.allclose(w.wcs.crval, tan_wcs.wcs.crval)
+        assert np.allclose(w.wcs.crpix, tan_wcs.wcs.crpix)
+
+    @pytest.mark.unit
+    def test_sip_stripped_for_non_tan(self, tan_wcs):
+        """SIP should be stripped when converting TAN-SIP to another projection."""
+        from stdpipe.astrometry_wcs import convert_wcs_projection
+        tan_wcs.wcs.ctype = ['RA---TAN-SIP', 'DEC--TAN-SIP']
+        w = convert_wcs_projection(tan_wcs, 'STG')
+        assert 'SIP' not in w.wcs.ctype[0]
+        assert w.sip is None
+
 
 class TestErrorHandling:
     """Test error handling and edge cases."""
