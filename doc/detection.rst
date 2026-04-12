@@ -1,6 +1,8 @@
 Object detection and measurement
 ================================
 
+This page covers object detection and flux measurement (aperture, optimal extraction, SEP-based, and PSF photometry). For photometric *calibration* (zero points, color terms) see :doc:`photometry`, for PSF model construction see :doc:`psf`, and for detection flag definitions see :doc:`flags`.
+
 Detecting objects on the image
 ------------------------------
 
@@ -119,6 +121,33 @@ The segmentation method with deblending is particularly useful for crowded field
    :noindex:
 
 
+FWHM estimation
+----------------
+
+After detection, you typically need a robust estimate of the image FWHM for aperture sizing, optimal extraction, PSF photometry, and matching radius selection. *STDPipe* provides two functions for this:
+
+- :func:`~stdpipe.photometry.estimate_fwhm_from_objects` — higher-level, works directly on detection tables with automatic quality filtering (S/N, flags, ellipticity)
+- :func:`~stdpipe.photometry.estimate_fwhm` — lower-level, operates on a raw array of FWHM values
+
+Both use a sliding-window mode estimator that is resistant to outliers from galaxies and blends. When ``flux_radius`` is available (from :func:`~stdpipe.photometry.get_objects_sep`), it is preferred as it is 2-3x more stable than Gaussian-core FWHM.
+
+.. code-block:: python
+
+   # Higher-level: automatic quality filtering
+   fwhm = photometry.estimate_fwhm_from_objects(obj, verbose=True)
+   print('FWHM: %.2f pixels' % fwhm)
+
+   # Lower-level: manual filtering + raw array
+   good = (obj['flags'] == 0) & (obj['magerr'] < 0.1)
+   fwhm = photometry.estimate_fwhm(obj['fwhm'], good=good)
+
+.. autofunction:: stdpipe.photometry.estimate_fwhm_from_objects
+   :noindex:
+
+.. autofunction:: stdpipe.photometry.estimate_fwhm
+   :noindex:
+
+
 More accurate photometric measurements
 --------------------------------------
 
@@ -231,15 +260,24 @@ The :func:`stdpipe.photometry_measure.measure_objects_sep` function provides an 
 PSF photometry
 ^^^^^^^^^^^^^^
 
-For the most accurate flux measurements, especially in crowded fields, PSF fitting photometry is available through :func:`stdpipe.photometry_psf.measure_objects_psf` (photutils backend) or :func:`stdpipe.photometry_iraf.measure_objects_psf` (DAOPHOT backend). See the :doc:`API documentation <api/stdpipe.photometry_psf>` for details.
+For the most accurate flux measurements, especially in crowded fields, PSF fitting photometry is available through two backends:
+
+- :func:`stdpipe.photometry_psf.measure_objects_psf` — photutils backend (pure Python, flexible PSF models)
+- :func:`stdpipe.photometry_iraf.measure_objects_psf` — DAOPHOT backend (classic IRAF, requires PyRAF)
+
+Both support grouped fitting for crowded fields and return fitted positions alongside fluxes. See :doc:`psf` for detailed documentation on PSF model construction, position-dependent PSF, grouped fitting, and empirical ePSF models.
 
 .. code-block:: python
 
    from stdpipe import photometry_psf
 
-   # PSF photometry with automatic Gaussian PSF
+   # PSF photometry with automatic Gaussian PSF (photutils backend)
    result = photometry_psf.measure_objects_psf(obj, image, fwhm=fwhm)
 
    # With PSFEx model and grouped fitting
    result = photometry_psf.measure_objects_psf(obj, image, psf=psf_model,
                 group_sources=True, grouper_radius=10.0)
+
+   # DAOPHOT backend (requires PyRAF/IRAF)
+   from stdpipe import photometry_iraf
+   result = photometry_iraf.measure_objects_psf(obj, image, fwhm=fwhm)

@@ -1,6 +1,8 @@
 Photometric calibration
 =======================
 
+This page covers photometric *calibration* — matching detected objects to reference catalogues and fitting zero-point models. For object detection see :doc:`detection`, for flux measurement methods (aperture, optimal extraction, PSF photometry) see the measurement sections in :doc:`detection` and :doc:`psf`, and for detection flags see :doc:`flags`.
+
 Photometric calibration is performed by positionally matching detected objects with catalogue stars, and then building the photometric model for their instrumental magnitudes.
 
 The model includes:
@@ -97,4 +99,41 @@ Plotting photometric match results
    plt.show()
 
 .. autofunction:: stdpipe.plots.plot_photometric_match
+   :noindex:
+
+
+Detection limits and S/N modeling
+---------------------------------
+
+*STDPipe* can estimate the detection limit magnitude by fitting a model of S/N versus magnitude and finding where it crosses a given threshold. The higher-level :func:`stdpipe.pipeline.get_detection_limit` works directly on calibrated object tables, while the lower-level functions give more control.
+
+.. code-block:: python
+
+   # Higher-level: estimate 5-sigma detection limit from calibrated objects
+   mag_lim = pipeline.get_detection_limit(obj, sn=5, verbose=True)
+   print('Detection limit: %.2f mag' % mag_lim)
+
+   # Lower-level: build S/N model and find limit manually
+   sn_model = photometry.make_sn_model(obj['mag_calib'], 1/obj['magerr'])
+   mag_lim, sn_model = photometry.get_detection_limit_sn(
+       obj['mag_calib'], 1/obj['magerr'], sn=5, get_model=True)
+
+   # Plot S/N model
+   mags = np.linspace(np.min(obj['mag_calib']), mag_lim + 1, 100)
+   plt.scatter(obj['mag_calib'], 1/obj['magerr'], s=1, alpha=0.3)
+   plt.plot(mags, sn_model(mags), 'r-')
+   plt.axhline(5, ls='--', color='k', label='S/N = 5')
+   plt.axvline(mag_lim, ls='--', color='g', label='Detection limit')
+   plt.xlabel('Calibrated magnitude')
+   plt.ylabel('S/N')
+   plt.legend()
+   plt.show()
+
+.. autofunction:: stdpipe.pipeline.get_detection_limit
+   :noindex:
+
+.. autofunction:: stdpipe.photometry.make_sn_model
+   :noindex:
+
+.. autofunction:: stdpipe.photometry.get_detection_limit_sn
    :noindex:

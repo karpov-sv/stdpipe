@@ -1,6 +1,8 @@
 Point Spread Function (PSF) models
 ==================================
 
+This page covers PSF model construction and PSF fitting photometry. For object detection and aperture/optimal photometry see :doc:`detection`, and for photometric calibration see :doc:`photometry`.
+
 *STDPipe* includes basic support for point spread function (PSF) construction and analysis through the interface to `PSFEx <https://github.com/astromatic/psfex>`_ code that is able to build supersampled PSF models from the object lists created using `SExtractor <https://github.com/astromatic/sextractor>`_.
 Please consider checking `its documentation <https://psfex.readthedocs.io>`__ to better understand the concepts of PSFEx operation and its possible configuration options.
 
@@ -244,6 +246,37 @@ a PSFEx-compatible dictionary structure that works with all PSF functions.
 
 .. autofunction:: stdpipe.psf.create_psf_model
    :noindex:
+
+PSF photometry with DAOPHOT (IRAF)
+------------------------------------
+
+As an alternative to the photutils backend, *STDPipe* also provides PSF photometry through
+the classic IRAF DAOPHOT workflow (phot → psf → allstar) via :func:`stdpipe.photometry_iraf.measure_objects_psf`.
+This requires `PyRAF <https://github.com/iraf-community/pyraf>`_ and IRAF to be installed.
+
+DAOPHOT automatically selects bright, isolated stars to build a PSF model, then fits all
+sources using the ``allstar`` task. It supports multiple analytical PSF functions (Gaussian,
+Moffat, Lorentzian, Penny) and spatially variable PSF models.
+
+.. code-block:: python
+
+   from stdpipe import photometry_iraf
+
+   # Basic DAOPHOT PSF photometry (automatic PSF star selection)
+   result = photometry_iraf.measure_objects_psf(obj, image, fwhm=fwhm, gain=gain)
+
+   # Custom PSF function and fitting parameters
+   result = photometry_iraf.measure_objects_psf(obj, image, fwhm=fwhm, gain=gain,
+                psf_function='moffat25', psfrad=12.0, fitrad=4.0, sn=5)
+
+   # Provide specific PSF stars
+   bright = np.argsort(obj['flux'])[-20:]
+   result = photometry_iraf.measure_objects_psf(obj, image, fwhm=fwhm,
+                psf_stars=bright, verbose=True)
+
+.. autofunction:: stdpipe.photometry_iraf.measure_objects_psf
+   :noindex:
+
 
 PSF photometry in SExtractor (alternative)
 -------------------------------------------
