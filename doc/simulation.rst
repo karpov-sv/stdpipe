@@ -257,23 +257,22 @@ PSF Models
 Gaussian PSF
 ^^^^^^^^^^^^
 
-The default PSF model is a pixel-integrated Gaussian:
+The default PSF model is an oversampled Gaussian in PSFEx-compatible format:
 
 .. code-block:: python
 
-   from stdpipe.simulation import create_psf_stamp
+   from stdpipe import simulation, psf
 
-   # Create a Gaussian PSF stamp
-   psf = create_psf_stamp(
-       size=25,                     # Stamp size (odd number)
-       x0=12.3,                     # Center X (can be sub-pixel)
-       y0=12.7,                     # Center Y
+   # Create a Gaussian PSF model
+   psf_model = simulation.create_psf_model(
        fwhm=3.5,
        psf_type='gaussian',
-       pixel_integrated=True        # Accurate flux conservation
+       oversampling=2               # Oversampling for sub-pixel accuracy
    )
 
-   print(f"PSF sum: {psf.sum():.6f}")  # Should be 1.0
+   # Get a pixel-level stamp at a specific position
+   stamp = psf.get_psf_stamp(psf_model, x=12.3, y=12.7, normalize=True)
+   print(f"PSF sum: {stamp.sum():.6f}")  # Should be ~1.0
 
 Moffat PSF
 ^^^^^^^^^^
@@ -282,15 +281,11 @@ The Moffat PSF has broader wings than Gaussian, which is more realistic for many
 
 .. code-block:: python
 
-   # Create a Moffat PSF stamp
-   psf = create_psf_stamp(
-       size=31,
-       x0=15.0,
-       y0=15.0,
+   # Create a Moffat PSF model
+   psf_model = simulation.create_psf_model(
        fwhm=4.0,
        psf_type='moffat',
-       beta=2.5,                    # Beta parameter (DAOPHOT 'moffat25')
-       pixel_integrated=True
+       beta=2.5                     # Beta parameter (DAOPHOT 'moffat25')
    )
 
 The ``beta`` parameter controls the wing profile:
@@ -370,7 +365,7 @@ Aberrations are modeled using Zernike polynomials (Noll 1976 ordering) via Fouri
 
 1. **Wavefront**: W(ρ,θ) = Σ cⱼ·Zⱼ(ρ,θ) where cⱼ are aberration coefficients
 2. **Complex pupil**: P = aperture · exp(2πi·W/λ)
-3. **PSF intensity**: |FFT(P)|²
+3. **PSF intensity**: \|FFT(P)\|²
 4. **Seeing convolution**: PSF ⊗ Gaussian/Moffat (atmospheric effects)
 
 Aberrations combine linearly in the wavefront (not PSF intensity). The final PSF represents both diffraction effects from the aberrated optics and atmospheric seeing (controlled by ``fwhm``).
@@ -862,10 +857,7 @@ Incremental Functions
 PSF Functions
 ^^^^^^^^^^^^^
 
-.. autofunction:: stdpipe.simulation.create_psf_stamp
-   :noindex:
-
-.. autofunction:: stdpipe.simulation.create_moffat_psf
+.. autofunction:: stdpipe.simulation.create_psf_model
    :noindex:
 
 Galaxy Functions
