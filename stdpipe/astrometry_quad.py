@@ -593,6 +593,9 @@ def build_quad_hash_multiscale(
     n_scale_bins: int,
     allow_reflection: bool = True,
     bin_edges: Optional[np.ndarray] = None,
+    quad_array: Optional[np.ndarray] = None,
+    descs: Optional[np.ndarray] = None,
+    lens: Optional[np.ndarray] = None,
 ) -> Dict[Tuple[int, Tuple[int, int, int, int]], List[QuadEntry]]:
     """
     Hash key: (scale_bin_id, quantized_descriptor)
@@ -603,13 +606,24 @@ def build_quad_hash_multiscale(
 
     Phase 2 Optimization: Uses vectorized quad descriptor calculation.
     """
-    quads = make_local_quads(points, k=k)
-    if not quads:
-        return {}
+    if quad_array is None or descs is None or lens is None:
+        quads = make_local_quads(points, k=k)
+        if not quads:
+            return {}
 
-    # Phase 2: Vectorized descriptor calculation
-    quad_array = np.array(quads, dtype=np.int32)
-    descs, lens = quad_descriptor_batch(points, quad_array)
+        quad_array = np.array(quads, dtype=np.int32)
+        descs, lens = quad_descriptor_batch(points, quad_array)
+    else:
+        quad_array = np.asarray(quad_array, dtype=np.int32)
+        descs = np.asarray(descs, dtype=np.float64)
+        lens = np.asarray(lens, dtype=np.float64)
+
+        if quad_array.ndim != 2 or quad_array.shape[1] != 4:
+            raise ValueError("quad_array must be (N, 4)")
+        if descs.shape != (len(quad_array), 4):
+            raise ValueError("descs must have shape (N, 4)")
+        if lens.shape != (len(quad_array),):
+            raise ValueError("lens must have shape (N,)")
 
     # Phase 1: Use boolean indexing instead of list comprehension
     ok = np.isfinite(descs).all(axis=1) & np.isfinite(lens) & (lens > 0)
@@ -785,11 +799,14 @@ class QuadHashAstrometry:
                 expected_parity = None
 
         # --- Consistent baseline binning ---
-        ref_quads_raw = make_local_quads(ref_uv, k=cfg.neighbor_k)
+        ref_qa = None
+        ref_descs_raw = None
+        ref_lens_raw = None
         ref_bin_edges = None
+        ref_quads_raw = make_local_quads(ref_uv, k=cfg.neighbor_k)
         if ref_quads_raw:
             ref_qa = np.array(ref_quads_raw, dtype=np.int32)
-            _, ref_lens_raw = quad_descriptor_batch(ref_uv, ref_qa)
+            ref_descs_raw, ref_lens_raw = quad_descriptor_batch(ref_uv, ref_qa)
             ok_ref = np.isfinite(ref_lens_raw) & (ref_lens_raw > 0)
             if np.any(ok_ref):
                 ref_bin_edges = compute_bin_edges(ref_lens_raw[ok_ref], cfg.n_scale_bins)
@@ -803,6 +820,9 @@ class QuadHashAstrometry:
             n_scale_bins=cfg.n_scale_bins,
             allow_reflection=cfg.allow_reflection,
             bin_edges=ref_bin_edges,
+            quad_array=ref_qa,
+            descs=ref_descs_raw,
+            lens=ref_lens_raw,
         )
 
         # Detection quads
@@ -1247,6 +1267,7 @@ class QuadHashAstrometry:
                 sip_degree=int(self.cfg.sip_degree),
                 pv_deg=pv_deg,
             )
+            wcs_fit_proj = refined_wcs
 
             # Residuals via spherical distance (projection-independent)
             ra_fit, dec_fit = refined_wcs.all_pix2world(xy_use[0], xy_use[1], 0)
@@ -1268,9 +1289,9 @@ class QuadHashAstrometry:
 
             # Enforce minimum match floor (#6)
             if keep_new.sum() < min_matches:
-                # Don't clip further if we'd go below the minimum
-                if keep_new.sum() >= 8:
-                    keep = keep_new
+                # Don't clip further if we'd go below the minimum.
+                # Keep the current inlier set instead of partially applying
+                # a clip that violates the configured floor.
                 break
 
             if keep_new.sum() == keep.sum():

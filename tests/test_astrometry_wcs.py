@@ -17,6 +17,7 @@ from stdpipe.astrometry_wcs import (
     fit_zpn_wcs_from_points,
     tan_wcs_to_zpn,
     _fit_zpn_sip,
+    _fit_tan_sip_robust,
 )
 
 
@@ -272,6 +273,64 @@ class TestFitZPNSIP:
 # ============================================================================
 
 class TestFitWCSFromPoints:
+
+    def test_tan_explicit_proj_point_initializes_crpix_correctly(
+        self, tan_wcs, monkeypatch
+    ):
+        """Explicit projection points should use latitude when seeding y/CRPIX."""
+        x = np.array([100.0, 200.0, 300.0])
+        y = np.array([150.0, 600.0, 900.0])
+        ra, dec = tan_wcs.all_pix2world(x, y, 0)
+        sky = SkyCoord(ra, dec, unit='deg')
+        proj_point = SkyCoord(ra[1], dec[1], unit='deg')
+
+        def fake_least_squares(fun, x0, *args, **kwargs):
+            class Result:
+                def __init__(self, x):
+                    self.x = np.array(x, dtype=float)
+                    self.fun = np.zeros(1, dtype=float)
+
+            return Result(x0)
+
+        monkeypatch.setattr("scipy.optimize.least_squares", fake_least_squares)
+
+        wcs_fit = _fit_tan_sip_robust(
+            (x, y),
+            sky,
+            proj_point=proj_point,
+            projection=tan_wcs,
+            sip_degree=2,
+        )
+
+        np.testing.assert_allclose(wcs_fit.wcs.crpix, [x[1] + 1, y[1] + 1])
+
+    def test_tan_explicit_proj_point_transforms_frame(self, tan_wcs, monkeypatch):
+        """Explicit projection points should be transformed into the fit frame."""
+        x = np.array([100.0, 200.0, 300.0])
+        y = np.array([150.0, 600.0, 900.0])
+        ra, dec = tan_wcs.all_pix2world(x, y, 0)
+        sky = SkyCoord(ra, dec, unit='deg')
+        proj_point = sky[1].galactic
+
+        def fake_least_squares(fun, x0, *args, **kwargs):
+            class Result:
+                def __init__(self, x):
+                    self.x = np.array(x, dtype=float)
+                    self.fun = np.zeros(1, dtype=float)
+
+            return Result(x0)
+
+        monkeypatch.setattr("scipy.optimize.least_squares", fake_least_squares)
+
+        wcs_fit = _fit_tan_sip_robust(
+            (x, y),
+            sky,
+            proj_point=proj_point,
+            projection=tan_wcs,
+            sip_degree=2,
+        )
+
+        np.testing.assert_allclose(wcs_fit.wcs.crval, [ra[1], dec[1]], atol=1e-8)
 
     def test_zpn_no_sip(self, zpn_wcs):
         """Dispatcher routes ZPN without SIP correctly."""

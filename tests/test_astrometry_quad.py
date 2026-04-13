@@ -20,6 +20,7 @@ from stdpipe.astrometry_quad import (
     build_quad_hash_multiscale,
     make_local_quads,
     quad_descriptor,
+    quad_descriptor_batch,
     quantize_desc,
     reflect_desc,
     estimate_similarity_2d,
@@ -241,6 +242,34 @@ class TestGeometricOperations:
         )
         assert key in h_yes
         assert key_ref in h_yes
+
+    @pytest.mark.unit
+    def test_hash_precomputed_quads_matches_default(self, simple_quad_points):
+        """Precomputed quad descriptors should produce the same hash."""
+        pts = simple_quad_points
+        quad_array = np.array(make_local_quads(pts, k=3), dtype=np.int32)
+        descs, lens = quad_descriptor_batch(pts, quad_array)
+
+        h_default = build_quad_hash_multiscale(
+            pts, mags=None, k=3, eps=0.001, n_scale_bins=1, allow_reflection=True
+        )
+        h_precomputed = build_quad_hash_multiscale(
+            pts,
+            mags=None,
+            k=3,
+            eps=0.001,
+            n_scale_bins=1,
+            allow_reflection=True,
+            quad_array=quad_array,
+            descs=descs,
+            lens=lens,
+        )
+
+        assert set(h_default.keys()) == set(h_precomputed.keys())
+        for key in h_default:
+            idx_default = [entry.idxs for entry in h_default[key]]
+            idx_precomputed = [entry.idxs for entry in h_precomputed[key]]
+            assert idx_default == idx_precomputed
 
 
 class TestTANProjection:
@@ -750,6 +779,83 @@ def _test_refinement_params():
 
 class TestWCSRefinementInterface:
     """Test the refine_wcs_quadhash interface and functionality."""
+
+    @pytest.mark.unit
+    def test_refinement_clip_floor_is_preserved(self, monkeypatch):
+        """Clipping must not shrink the inlier set below the configured floor."""
+        n = 20
+
+        obj = Table()
+        obj['x'] = np.arange(n, dtype=float)
+        obj['y'] = np.zeros(n, dtype=float)
+        obj['mag'] = np.linspace(10.0, 12.0, n)
+
+        cat = Table()
+        cat['ra'] = obj['x'] / 3600.0
+        cat['dec'] = np.zeros(n, dtype=float)
+        cat['mag'] = np.linspace(10.0, 12.0, n)
+
+        wcs_init = WCS(naxis=2)
+        wcs_init.wcs.crpix = [1.0, 1.0]
+        wcs_init.wcs.crval = [0.0, 0.0]
+        wcs_init.wcs.cd = np.array([[1.0 / 3600.0, 0.0], [0.0, 1.0 / 3600.0]])
+        wcs_init.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+        wcs_init.pixel_shape = (64, 64)
+
+        def fake_pattern_match(
+            self, det_xy, det_mag, ref_uv, ref_mag, wcs_init, pixel_scale_arcsec, cfg=None
+        ):
+            pairs = [(i, i) for i in range(n)]
+            top_hyp = [(1.0, np.eye(2), np.zeros(2), 1.0)]
+            best = {
+                'score': 1.0,
+                'inliers': n,
+                'R': np.eye(2),
+                't': np.zeros(2),
+                's': 1.0,
+                'pairs': pairs,
+            }
+            return pairs, top_hyp, best
+
+        class FakeWCS:
+            def __init__(self):
+                self.wcs = type("FakeWCSStruct", (), {"crval": [0.0, 0.0]})()
+
+            def all_pix2world(self, x, y, origin):
+                x = np.asarray(x, dtype=float)
+                ra = x / 3600.0
+                dec = np.zeros_like(x)
+
+                # Keep only 9 finite residuals.  This is below the 50% floor
+                # (10 for 20 seed matches) but above the hard minimum of 8.
+                good = x < 9.0
+                ra[good] += np.linspace(0.01, 0.09, good.sum()) / 3600.0
+                ra[~good] = np.nan
+                dec[~good] = np.nan
+                return ra, dec
+
+        monkeypatch.setattr(QuadHashAstrometry, "_pattern_match", fake_pattern_match)
+        monkeypatch.setattr(
+            "stdpipe.astrometry_quad.fit_wcs_from_points",
+            lambda *args, **kwargs: FakeWCS(),
+        )
+
+        solver = QuadHashAstrometry(
+            AstrometryConfig(
+                n_det=n,
+                n_ref=n,
+                sip_degree=0,
+                refine_min_match_fraction=0.5,
+                refine_max_iter=1,
+                refine_rematch_iters=0,
+                auto_match_resolution=False,
+            )
+        )
+
+        _, match, diagnostics = solver.refine(obj=obj, cat=cat, wcs_init=wcs_init)
+
+        assert len(match) == n
+        assert diagnostics['final_matches'] == n
 
     @pytest.mark.unit
     def test_basic_refinement(self, detections_from_catalog, catalog_with_wcs,

@@ -834,12 +834,12 @@ def _fit_tan_sip_robust(
         wcs.wcs.crval = (midpoint_sc.data.lon.deg, midpoint_sc.data.lat.deg)
         wcs.wcs.crpix = ((xpmax + xpmin) / 2.0, (ypmax + ypmin) / 2.0)
     else:
-        proj_point.transform_to(world_coords)
+        proj_point = proj_point.transform_to(world_coords.frame)
         wcs.wcs.crval = (proj_point.data.lon.deg, proj_point.data.lat.deg)
         close = lambda l, p: p[np.argmin(np.abs(l))]
         wcs.wcs.crpix = (
             close(lon - wcs.wcs.crval[0], xp + 1),
-            close(lon - wcs.wcs.crval[1], yp + 1),
+            close(lat - wcs.wcs.crval[1], yp + 1),
         )
 
     if xpmin == xpmax:
