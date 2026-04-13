@@ -6,9 +6,15 @@ including catalog matching with spatial zero-point models, S/N modeling,
 and detection limit estimation.
 """
 
+import warnings
+
 import numpy as np
 import statsmodels.api as sm
-from scipy.optimize import minimize, least_squares, root_scalar
+from scipy import linalg
+from scipy.optimize import minimize_scalar, least_squares, root_scalar
+from statsmodels.regression import _tools as reg_tools
+from statsmodels.robust import robust_linear_model as rlm_model
+from statsmodels.tools.sm_exceptions import ConvergenceWarning
 
 from . import astrometry
 
@@ -34,22 +40,236 @@ def make_series(mul=1.0, x=1.0, y=1.0, order=1, sum=False, zero=True):
 
 
 def get_intrinsic_scatter(y, yerr, min=0, max=None):
-    def log_likelihood(theta, y, yerr):
-        a, b, c = theta
-        model = b
-        sigma2 = a * yerr**2 + c**2
-        return -0.5 * np.sum((y - model) ** 2 / sigma2 + np.log(sigma2))
+    y = np.asarray(y, dtype=float)
+    yerr = np.asarray(yerr, dtype=float)
 
-    nll = lambda *args: -log_likelihood(*args)
-    C = minimize(
+    good = np.isfinite(y) & np.isfinite(yerr) & (yerr >= 0)
+    if np.sum(good) < 2:
+        return float(np.maximum(min, 0.0))
+
+    y = y[good]
+    yerr = yerr[good]
+
+    c_min = float(np.maximum(min, 0.0))
+    if max is None or not np.isfinite(max):
+        c_max = float(np.max([np.nanstd(y), np.nanmedian(yerr), c_min + 1e-6]))
+    else:
+        c_max = float(np.maximum(max, c_min))
+
+    if c_max <= c_min + 1e-12:
+        return c_min
+
+    eps = np.finfo(float).eps
+
+    def nll(c):
+        sigma2 = np.maximum(yerr**2 + c**2, eps)
+        weight = 1.0 / sigma2
+        model = np.sum(weight * y) / np.sum(weight)
+        return 0.5 * np.sum((y - model) ** 2 * weight + np.log(sigma2))
+
+    result = minimize_scalar(
         nll,
-        [1, 0.0, 0.0],
-        args=(y, yerr),
-        bounds=[[1, 1], [None, None], [min, max]],
-        method='Powell',
+        bounds=(c_min, c_max),
+        method='bounded',
     )
 
-    return C.x[2]
+    if not result.success or not np.isfinite(result.x):
+        return c_min
+
+    return float(np.clip(result.x, c_min, c_max))
+
+
+def _normalize_spatial_coords(x, y):
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+
+    finite = np.isfinite(x) & np.isfinite(y)
+    if not np.any(finite):
+        return x, y, 1.0
+
+    scale = max(float(np.nanmax(np.abs(x[finite]))), float(np.nanmax(np.abs(y[finite]))), 1.0)
+    return x / scale, y / scale, scale
+
+
+def _prepare_parameter_covariance(cov):
+    cov = np.asarray(cov, dtype=float)
+
+    if cov.ndim != 2 or cov.shape[0] != cov.shape[1]:
+        raise ValueError("Parameter covariance must be a square matrix")
+
+    if cov.size == 0:
+        return cov
+
+    cov = np.where(np.isfinite(cov), cov, 0.0)
+    cov = 0.5 * (cov + cov.T)
+
+    try:
+        eigvals, eigvecs = np.linalg.eigh(cov)
+    except np.linalg.LinAlgError:
+        return np.diag(np.clip(np.diag(cov), 0.0, None))
+
+    eigvals = np.clip(eigvals, 0.0, None)
+    return (eigvecs * eigvals) @ eigvecs.T
+
+
+def _evaluate_parameter_covariance(X, cov):
+    X = np.asarray(X, dtype=float)
+
+    if X.ndim == 1:
+        X = X[None, :]
+
+    if X.shape[0] == 0:
+        return np.array([], dtype=float)
+
+    err2 = np.full(X.shape[0], np.nan, dtype=float)
+    valid = np.all(np.isfinite(X), axis=1)
+
+    if not np.any(valid):
+        return np.sqrt(err2)
+
+    quad = np.einsum('ij,jk,ik->i', X[valid], cov, X[valid], optimize=True)
+    quad = np.where(np.isfinite(quad), np.maximum(quad, 0.0), np.nan)
+    err2[valid] = quad
+
+    return np.sqrt(err2)
+
+
+def _stable_pinv_exog(exog):
+    exog = np.asarray(exog, dtype=float)
+
+    if exog.ndim != 2:
+        raise ValueError("Design matrix must be two-dimensional")
+
+    nobs, nparams = exog.shape
+    if nparams == 0:
+        return np.empty((0, nobs), dtype=float), np.empty((0, 0), dtype=float)
+
+    gram = exog.T @ exog
+    rank = np.linalg.matrix_rank(exog)
+
+    if rank == nparams:
+        q, r = np.linalg.qr(exog, mode='reduced')
+        pinv = np.linalg.solve(r, q.T)
+        norm_cov = np.linalg.solve(gram, np.eye(nparams, dtype=float))
+    else:
+        norm_cov = linalg.pinvh(gram)
+        pinv = norm_cov @ exog.T
+
+    norm_cov = 0.5 * (norm_cov + norm_cov.T)
+    return pinv, norm_cov
+
+
+class _StableRLM(sm.RLM):
+    def _initialize(self):
+        self.pinv_wexog, self.normalized_cov_params = _stable_pinv_exog(self.exog)
+        self.df_resid = float(self.exog.shape[0] - np.linalg.matrix_rank(self.exog))
+        self.df_model = float(np.linalg.matrix_rank(self.exog) - 1)
+        self.nobs = float(self.endog.shape[0])
+
+    def fit(
+        self,
+        maxiter=50,
+        tol=1e-8,
+        scale_est='mad',
+        init=None,
+        cov='H1',
+        update_scale=True,
+        conv='dev',
+        start_params=None,
+    ):
+        if cov.upper() not in ["H1", "H2", "H3"]:
+            raise ValueError("Covariance matrix %s not understood" % cov)
+        else:
+            self.cov = cov.upper()
+
+        conv = conv.lower()
+        if conv not in ["weights", "coefs", "dev", "sresid"]:
+            raise ValueError("Convergence argument %s not understood" % conv)
+
+        self.scale_est = scale_est
+
+        if start_params is None:
+            wls_results = reg_tools._MinimalWLS(
+                self.endog,
+                self.exog,
+                weights=np.ones_like(self.endog),
+                check_weights=False,
+            ).fit(method='qr')
+        else:
+            start_params = np.asarray(start_params, dtype=np.double).squeeze()
+            if start_params.shape[0] != self.exog.shape[1] or start_params.ndim != 1:
+                raise ValueError(
+                    'start_params must by a 1-d array with {} values'.format(
+                        self.exog.shape[1]
+                    )
+                )
+            fake_wls = reg_tools._MinimalWLS(
+                self.endog,
+                self.exog,
+                weights=np.ones_like(self.endog),
+                check_weights=False,
+            )
+            wls_results = fake_wls.results(start_params)
+
+        if not init:
+            self.scale = self._estimate_scale(wls_results.resid)
+
+        history = dict(params=[np.inf], scale=[])
+        if conv == 'coefs':
+            criterion = history['params']
+        elif conv == 'dev':
+            history.update(dict(deviance=[np.inf]))
+            criterion = history['deviance']
+        elif conv == 'sresid':
+            history.update(dict(sresid=[np.inf]))
+            criterion = history['sresid']
+        else:
+            history.update(dict(weights=[np.inf]))
+            criterion = history['weights']
+
+        history = self._update_history(wls_results, history, conv)
+        iteration = 1
+        converged = 0
+        while not converged:
+            if self.scale == 0.0:
+                warnings.warn(
+                    'Estimated scale is 0.0 indicating that the most last iteration produced '
+                    'a perfect fit of the weighted data.',
+                    ConvergenceWarning,
+                )
+                break
+
+            self.weights = self.M.weights(wls_results.resid / self.scale)
+            wls_results = reg_tools._MinimalWLS(
+                self.endog,
+                self.exog,
+                weights=self.weights,
+                check_weights=True,
+            ).fit(method='qr')
+
+            if update_scale is True:
+                self.scale = self._estimate_scale(wls_results.resid)
+
+            history = self._update_history(wls_results, history, conv)
+            iteration += 1
+            converged = rlm_model._check_convergence(criterion, iteration, tol, maxiter)
+
+        results = rlm_model.RLMResults(
+            self,
+            wls_results.params,
+            self.normalized_cov_params,
+            self.scale,
+        )
+
+        history['iteration'] = iteration
+        results.fit_history = history
+        results.fit_options = dict(
+            cov=cov.upper(),
+            scale_est=scale_est,
+            norm=self.M.__class__.__name__,
+            conv=conv,
+        )
+        return rlm_model.RLMResultsWrapper(results)
 
 
 def format_color_term(color_term, name=None, color_name=None, fmt='.2f'):
@@ -259,25 +479,31 @@ def match(
     )
     log('Median separation is %.2f arcsec' % (np.median(dist) * 3600))
 
-    omag = np.ma.filled(obj_mag[oidx], fill_value=np.nan)
-    omag_err = np.ma.filled(obj_magerr[oidx], fill_value=np.nan)
-    oflags = obj_flags[oidx] if obj_flags is not None else np.zeros_like(omag, dtype=bool)
-    cmag = np.ma.filled(cat_mag[cidx], fill_value=np.nan)
+    omag = np.asarray(np.ma.filled(obj_mag[oidx], fill_value=np.nan), dtype=float)
+    omag_err = np.asarray(np.ma.filled(obj_magerr[oidx], fill_value=np.nan), dtype=float)
+    oflags = np.asarray(obj_flags[oidx]) if obj_flags is not None else np.zeros_like(omag, dtype=bool)
+    cmag = np.asarray(np.ma.filled(cat_mag[cidx], fill_value=np.nan), dtype=float)
     cmag_err = (
-        np.ma.filled(cat_magerr[cidx], fill_value=np.nan)
+        np.asarray(np.ma.filled(cat_magerr[cidx], fill_value=np.nan), dtype=float)
         if cat_magerr is not None
         else np.zeros_like(cmag)
     )
 
     if obj_x is not None and obj_y is not None:
-        x0, y0 = np.mean(obj_x[oidx]), np.mean(obj_y[oidx])
-        ox, oy = obj_x[oidx], obj_y[oidx]
-        x, y = obj_x[oidx] - x0, obj_y[oidx] - y0
-        x, y = [np.ma.filled(_, fill_value=np.nan) for _ in (x, y)]
+        ox = np.asarray(np.ma.filled(obj_x[oidx], fill_value=np.nan), dtype=float)
+        oy = np.asarray(np.ma.filled(obj_y[oidx], fill_value=np.nan), dtype=float)
+        x0 = float(np.nanmean(ox)) if np.any(np.isfinite(ox)) else 0.0
+        y0 = float(np.nanmean(oy)) if np.any(np.isfinite(oy)) else 0.0
+        x = ox - x0
+        y = oy - y0
     else:
         x0, y0 = 0, 0
         ox, oy = np.zeros_like(omag), np.zeros_like(omag)
         x, y = np.zeros_like(omag), np.zeros_like(omag)
+
+    x, y, xy_scale = _normalize_spatial_coords(x, y)
+    if spatial_order > 0 and xy_scale > 1.0:
+        log('Normalizing spatial coordinates by %.1f pixels' % xy_scale)
 
     # Regressor
     X = make_series(1.0, x, y, order=spatial_order)
@@ -310,7 +536,7 @@ def match(
         fit_color_term = False
 
     if cat_color is not None:
-        ccolor = np.ma.filled(cat_color[cidx], fill_value=np.nan)
+        ccolor = np.asarray(np.ma.filled(cat_color[cidx], fill_value=np.nan), dtype=float)
         if fit_color_term:
             pos_color = len(X)
             for _ in range(int(fit_color_term)):
@@ -363,14 +589,11 @@ def match(
 
         if robust:
             # Rescale the arguments with weights
-            C = sm.RLM(zero[idx] / total_err[idx], (X[idx].T / total_err[idx]).T).fit()
+            C = _StableRLM(zero[idx] / total_err[idx], (X[idx].T / total_err[idx]).T).fit()
         else:
             C = sm.WLS(zero[idx], X[idx], weights=1 / total_err[idx] ** 2).fit()
 
         zero_model = np.sum(X * C.params, axis=1)
-        # Compute diagonal of X @ cov @ X.T efficiently: O(N*P^2) instead of O(N^2)
-        cov_p = C.cov_params()
-        zero_model_err = np.sqrt(np.sum((X @ cov_p) * X, axis=1))
 
         scale_err = 1 if not scale_noise else np.sqrt(C.scale)  # rms
 
@@ -418,6 +641,9 @@ def match(
     if nonlin:
         log('Non-linearity term is %.3f' % C.params[pos_nonlin])
 
+    cov_p = _prepare_parameter_covariance(C.cov_params())
+    zero_model_err = _evaluate_parameter_covariance(X, cov_p)
+
     # Export the model
     def zero_fn(xx, yy, mag=None, get_err=False, add_intrinsic_rms=False):
         if mag is not None:
@@ -430,7 +656,12 @@ def match(
             x, y = np.zeros(n), np.zeros(n)
 
         # Ensure we do not have MaskedColumns
-        x, y = [np.atleast_1d(np.ma.filled(_, fill_value=np.nan)) for _ in (x, y)]
+        x, y = [
+            np.asarray(np.atleast_1d(np.ma.filled(_, fill_value=np.nan)), dtype=float)
+            for _ in (x, y)
+        ]
+        x /= xy_scale
+        y /= xy_scale
 
         X = make_series(1.0, x, y, order=spatial_order)
 
@@ -443,9 +674,7 @@ def match(
         X = np.vstack(X).T
 
         if get_err:
-            # Compute diagonal of X @ cov @ X.T efficiently: O(N*P^2) instead of O(N^2)
-            cov_p = C.cov_params()[0 : X.shape[1], 0 : X.shape[1]]
-            err = np.sqrt(np.sum((X @ cov_p) * X, axis=1))
+            err = _evaluate_parameter_covariance(X, cov_p[0 : X.shape[1], 0 : X.shape[1]])
             if add_intrinsic_rms:
                 err = np.hypot(err, intrinsic_rms)
             return err

@@ -2,6 +2,8 @@
 Unit tests for stdpipe.photometry_model module.
 """
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -70,6 +72,46 @@ class TestMakeSeries:
 
         assert len(series) == 6
         np.testing.assert_allclose(series_sum, np.sum(series, axis=0))
+
+
+class TestIntrinsicScatter:
+    @pytest.mark.unit
+    def test_get_intrinsic_scatter_recovers_signal(self):
+        rng = np.random.default_rng(42)
+
+        yerr = rng.uniform(0.01, 0.03, 400)
+        true_scatter = 0.05
+        y = rng.normal(0.0, np.sqrt(yerr**2 + true_scatter**2))
+
+        scatter = photometry_model.get_intrinsic_scatter(y, yerr, min=0.0, max=0.2)
+
+        assert np.isfinite(scatter)
+        assert np.isclose(scatter, true_scatter, atol=0.01)
+
+
+class TestStablePinv:
+    @pytest.mark.unit
+    def test_stable_pinv_exog_matches_pseudoinverse_properties(self):
+        rng = np.random.default_rng(123)
+        exog = rng.normal(size=(500, 7))
+        exog[:, 0] = 1.0
+        exog *= np.linspace(0.5, 3.0, exog.shape[0])[:, None]
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            pinv, norm_cov = photometry_model._stable_pinv_exog(exog)
+
+        assert pinv.shape == (exog.shape[1], exog.shape[0])
+        assert norm_cov.shape == (exog.shape[1], exog.shape[1])
+        assert np.all(np.isfinite(pinv))
+        assert np.all(np.isfinite(norm_cov))
+
+        gram = exog.T @ exog
+        rhs = rng.normal(size=exog.shape[0])
+        expected = np.linalg.solve(gram, exog.T @ rhs)
+
+        np.testing.assert_allclose(pinv @ rhs, expected, rtol=1e-10, atol=1e-10)
+        np.testing.assert_allclose(norm_cov @ gram, np.eye(exog.shape[1]), rtol=1e-10, atol=1e-10)
 
 
 class TestMatch:
@@ -169,6 +211,42 @@ class TestMatch:
 
         zero_eval = result["zero_fn"](data["obj_x"], data["obj_y"])
         np.testing.assert_allclose(zero_eval, data["zero_point"], atol=1e-4)
+
+    @pytest.mark.unit
+    def test_match_error_propagation_ignores_invalid_rows(self):
+        data = _build_match_data(include_color=True, n=30)
+        data["cat_color"][::7] = np.nan
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+
+            result = photometry_model.match(
+                data["obj_ra"],
+                data["obj_dec"],
+                data["obj_mag"],
+                data["obj_magerr"],
+                data["obj_flags"],
+                data["cat_ra"],
+                data["cat_dec"],
+                data["cat_mag"],
+                cat_magerr=data["cat_magerr"],
+                cat_color=data["cat_color"],
+                sr=1 / 3600,
+                obj_x=data["obj_x"],
+                obj_y=data["obj_y"],
+                spatial_order=2,
+                robust=False,
+                use_color=1,
+                verbose=False,
+            )
+
+        assert result is not None
+        assert np.all(np.isfinite(result["zero_model_err"][result["idx0"]]))
+        assert np.all(np.isnan(result["zero_model_err"][~result["idx0"]]))
+
+        zero_err = result["zero_fn"](data["obj_x"][:5], data["obj_y"][:5], get_err=True)
+        assert np.all(np.isfinite(zero_err))
+        assert np.all(zero_err >= 0)
 
 
 class TestSnModel:
