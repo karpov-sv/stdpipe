@@ -343,6 +343,8 @@ def get_objects_sep(
     optimal=False,
     group_sources=True,
     centroid=False,
+    centroid_sigma_scale=1.0,
+    centroid_maxstep_scale=1.0,
     use_mask_large=False,
     subtract_bg=True,
     npix_large=100,
@@ -428,6 +430,16 @@ def get_objects_sep(
         Refine positions via ``sep.winpos``. Default False (windowed
         positions can be biased in crowded fields). With SEP 1.4+, uses
         ``maxstep = 0.2 * FWHM``.
+    centroid_sigma_scale : float
+        Multiplicative scale applied to the Gaussian sigma passed to
+        ``sep.winpos``. The default 1.0 keeps the historical behavior
+        ``sigma = FWHM / 2.355``. Values below 1 use a tighter window;
+        values above 1 use a broader window.
+    centroid_maxstep_scale : float
+        Multiplicative scale applied to the SEP 1.4+ ``maxstep`` limit
+        used by ``sep.winpos``. The default 1.0 keeps the historical
+        cap ``maxstep = 0.2 * FWHM``. Values below 1 restrict the allowed
+        centroid motion more strongly; values above 1 loosen it.
     use_mask_large : bool
         Filter out objects with footprints larger than *npix_large*.
     npix_large : int
@@ -660,12 +672,18 @@ def get_objects_sep(
             # SEP 1.4+ has maxstep parameter to cap position shift per iteration
             # Set to 0.2 * FWHM to avoid excessive drift in degenerate cases
             if fwhm_value is not None:
-                winpos_kwargs['maxstep'] = 0.2 * fwhm_value
+                maxstep = 0.2 * fwhm_value * float(centroid_maxstep_scale)
             else:
                 # Default to 1.0 pixel if FWHM not available
-                winpos_kwargs['maxstep'] = 1.0
+                maxstep = 1.0 * float(centroid_maxstep_scale)
+            if not np.isfinite(maxstep) or maxstep <= 0:
+                raise ValueError("centroid_maxstep_scale should produce a positive finite maxstep")
+            winpos_kwargs['maxstep'] = maxstep
 
         sig = fwhm_value / 2.355 if fwhm_value is not None else 0.5
+        sig *= float(centroid_sigma_scale)
+        if not np.isfinite(sig) or sig <= 0:
+            raise ValueError("centroid_sigma_scale should produce a positive finite sigma")
         xwin, ywin, flag_win = sep.winpos(image1, obj0['x'], obj0['y'], sig, **winpos_kwargs)
     else:
         # Use initial positions from extraction

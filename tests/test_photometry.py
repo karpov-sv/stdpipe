@@ -318,6 +318,80 @@ class TestSEPPhotometry:
         assert len(obj_fine) > 0
         assert len(obj_coarse) > 0
 
+    @pytest.mark.unit
+    def test_get_objects_sep_centroid_sigma_scale_affects_positions(self):
+        """Windowed-centroid sigma scaling should change biased blended centroids."""
+        rng = np.random.default_rng(123)
+        image = rng.normal(100.0, 2.0, (128, 128))
+        yy, xx = np.mgrid[:128, :128]
+        sigma = 3.0 / 2.3548
+
+        image += 2000.0 * np.exp(-((xx - 64.35) ** 2 + (yy - 64.40) ** 2) / (2 * sigma**2))
+        image += 900.0 * np.exp(-((xx - 67.10) ** 2 + (yy - 64.85) ** 2) / (2 * sigma**2))
+
+        obj_tight = photometry.get_objects_sep(
+            image,
+            thresh=5.0,
+            aper=1.0,
+            fwhm=3.0,
+            centroid=True,
+            centroid_sigma_scale=0.5,
+            verbose=False,
+        )
+        obj_broad = photometry.get_objects_sep(
+            image,
+            thresh=5.0,
+            aper=1.0,
+            fwhm=3.0,
+            centroid=True,
+            centroid_sigma_scale=2.0,
+            verbose=False,
+        )
+
+        idx_tight = np.argmin((np.asarray(obj_tight["x"], float) - 64.35) ** 2 + (np.asarray(obj_tight["y"], float) - 64.40) ** 2)
+        idx_broad = np.argmin((np.asarray(obj_broad["x"], float) - 64.35) ** 2 + (np.asarray(obj_broad["y"], float) - 64.40) ** 2)
+
+        dx = float(obj_broad["x"][idx_broad] - obj_tight["x"][idx_tight])
+        dy = float(obj_broad["y"][idx_broad] - obj_tight["y"][idx_tight])
+
+        assert abs(dx) > 0.01 or abs(dy) > 0.01
+
+    @pytest.mark.unit
+    def test_get_objects_sep_centroid_maxstep_scale_is_forwarded(self, monkeypatch):
+        """Windowed-centroid maxstep scaling should be forwarded to SEP."""
+        rng = np.random.default_rng(321)
+        image = rng.normal(100.0, 2.0, (64, 64))
+        yy, xx = np.mgrid[:64, :64]
+        sigma = 3.0 / 2.3548
+
+        image += 2200.0 * np.exp(-((xx - 32.20) ** 2 + (yy - 32.30) ** 2) / (2 * sigma**2))
+
+        seen = {}
+
+        def fake_winpos(data, xinit, yinit, sig, **kwargs):
+            seen["sig"] = float(sig)
+            seen["maxstep"] = float(kwargs["maxstep"])
+            xinit = np.asarray(xinit, dtype=float)
+            yinit = np.asarray(yinit, dtype=float)
+            return xinit, yinit, np.zeros(len(xinit), dtype=int)
+
+        monkeypatch.setattr(photometry.sep, "winpos", fake_winpos)
+
+        obj = photometry.get_objects_sep(
+            image,
+            thresh=5.0,
+            aper=1.0,
+            fwhm=3.0,
+            centroid=True,
+            centroid_sigma_scale=0.5,
+            centroid_maxstep_scale=2.0,
+            verbose=False,
+        )
+
+        assert len(obj) == 1
+        assert seen["sig"] == pytest.approx((3.0 / 2.355) * 0.5)
+        assert seen["maxstep"] == pytest.approx(0.2 * 3.0 * 2.0)
+
 
 class TestSExtractorIntegration:
     """Integration tests for SExtractor wrapper."""

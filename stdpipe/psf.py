@@ -657,10 +657,13 @@ def create_psf_model(
     subtract_neighbors : bool, optional
         If True (default), subtract estimated flux from neighboring stars before extracting
         cutouts. Reduces contamination in crowded fields. Only used when ``degree > 0``.
-    subtract_background : bool, optional
-        If True, subtract local background (median of edge pixels) from each stamp before
-        normalization. Only used when ``degree > 0``. Set to True when the input image has
-        NOT been background-subtracted. Default is False.
+    subtract_background : bool or {'none', 'median', 'plane'}, optional
+        Local background handling for each training stamp before normalization. ``False`` or
+        ``'none'`` leaves the current image values unchanged, ``True`` or ``'median'``
+        subtracts the median of the stamp border, and ``'plane'`` fits and subtracts a
+        tilted background plane from the border pixels. Only used when ``degree > 0``.
+        When building from the raw image instead of a background-subtracted one,
+        ``'plane'`` is usually the most robust choice.
     isolation : float, optional
         Minimum nearest-neighbor distance in FWHM units for selecting stars for ePSF building
         (default: 5.0). Stars with a neighbor closer than ``isolation * fwhm`` are excluded.
@@ -763,7 +766,11 @@ def create_psf_model(
                 'using %d most isolated instead' % (len(isolated), min_dist, len(obj))
             )
 
+    background_mode = _normalize_stamp_background_mode(subtract_background)
+
     if degree == 0:
+        if background_mode != 'none':
+            log('Ignoring local stamp background mode for position-invariant ePSF builder')
         return _create_psf_model_constant(
             image, obj, fwhm, size, mask, oversampling, get_raw, verbose, log
         )
@@ -778,7 +785,7 @@ def create_psf_model(
             degree,
             regularization,
             subtract_neighbors,
-            subtract_background,
+            background_mode,
             log,
         )
 
@@ -833,6 +840,170 @@ def _create_psf_model_constant(image, obj, fwhm, size, mask, oversampling, get_r
     return psf
 
 
+def _build_polynomial_psf_taper(reference_stamp, sampling, fwhm):
+    """Build a smooth radial taper for low-S/N outer PSF pixels."""
+
+    h, w = reference_stamp.shape
+    y, x = np.mgrid[0:h, 0:w]
+    cx = 0.5 * (w - 1)
+    cy = 0.5 * (h - 1)
+    r = np.sqrt(((x - cx) * sampling) ** 2 + ((y - cy) * sampling) ** 2)
+
+    peak = float(np.nanmax(reference_stamp))
+    half_width = 0.5 * (min(h, w) - 1) * sampling
+    taper_start = 0.75 * half_width
+    threshold = 0.02 * peak
+
+    if np.isfinite(peak) and peak > 0:
+        edges = np.arange(0, np.max(r) + sampling, sampling)
+        centers = 0.5 * (edges[:-1] + edges[1:])
+        profile = []
+        for r0, r1 in zip(edges[:-1], edges[1:]):
+            idx = (r >= r0) & (r < r1)
+            profile.append(np.nanmedian(reference_stamp[idx]) if np.any(idx) else np.nan)
+        profile = np.asarray(profile, float)
+        idx = np.where(np.isfinite(profile) & (profile <= threshold))[0]
+        if len(idx):
+            taper_start = float(centers[idx[0]])
+
+    taper_start = float(
+        np.clip(
+            taper_start,
+            max(1.25 * fwhm, sampling),
+            max(1.25 * fwhm, half_width - 2 * sampling),
+        )
+    )
+    taper_width = max(half_width - taper_start, 0.0)
+
+    if taper_width <= 0:
+        return np.ones_like(reference_stamp), taper_start, taper_width
+
+    window = np.ones_like(reference_stamp)
+    idx = r > taper_start
+    if np.any(idx):
+        phase = np.clip((r[idx] - taper_start) / taper_width, 0.0, 1.0)
+        window[idx] = 0.5 * (1.0 + np.cos(np.pi * phase))
+    window[r >= half_width] = 0.0
+
+    return window, taper_start, taper_width
+
+
+def _regularize_polynomial_psf(coeffs, stamps_array, keep, sampling, fwhm):
+    """Suppress spurious outer support and restore polynomial PSF normalization."""
+
+    reference_stamp = np.nanmedian(stamps_array[keep], axis=0)
+    window, taper_start, taper_width = _build_polynomial_psf_taper(reference_stamp, sampling, fwhm)
+    coeffs *= window[np.newaxis, :, :]
+
+    template = np.clip(reference_stamp * window, 0.0, None)
+    total = float(np.sum(template))
+    if not np.isfinite(total) or total <= 0:
+        template = window.copy()
+        total = float(np.sum(template))
+    template /= total
+
+    plane_sums = coeffs.reshape(coeffs.shape[0], -1).sum(axis=1)
+    target_sums = np.zeros_like(plane_sums)
+    target_sums[0] = 1.0
+    coeffs += (target_sums - plane_sums)[:, np.newaxis, np.newaxis] * template[np.newaxis, :, :]
+
+    return coeffs, taper_start, taper_width
+
+
+def _normalize_stamp_background_mode(mode):
+    """Normalize public stamp-background options to internal mode names."""
+
+    if mode is None:
+        return 'none'
+    if isinstance(mode, (bool, np.bool_)):
+        return 'median' if bool(mode) else 'none'
+    if isinstance(mode, str):
+        normalized = mode.strip().lower()
+        aliases = {
+            'none': 'none',
+            'median': 'median',
+            'edge': 'median',
+            'constant': 'median',
+            'plane': 'plane',
+            'tilt': 'plane',
+        }
+        if normalized in aliases:
+            return aliases[normalized]
+
+    raise ValueError(
+        "subtract_background should be False/True or one of "
+        "{'none', 'median', 'plane'}"
+    )
+
+
+def _subtract_local_stamp_background(cutout, mask_cutout=None, mode='none', border=2):
+    """Remove a local constant or tilted background from a stellar cutout."""
+
+    mode = _normalize_stamp_background_mode(mode)
+    if mode == 'none':
+        return cutout
+
+    h, w = cutout.shape
+    border = int(np.clip(border, 1, max(1, min(h, w) // 2)))
+
+    edge = np.zeros_like(cutout, dtype=bool)
+    edge[:border, :] = True
+    edge[-border:, :] = True
+    edge[:, :border] = True
+    edge[:, -border:] = True
+
+    valid = edge & np.isfinite(cutout)
+    if mask_cutout is not None:
+        valid &= ~np.asarray(mask_cutout, bool)
+
+    if not np.any(valid):
+        return cutout
+
+    values = cutout[valid]
+    if mode == 'median' or np.sum(valid) < 6:
+        cutout -= np.median(values)
+        return cutout
+
+    yy, xx = np.mgrid[0:h, 0:w]
+    xx0 = xx.astype(np.float64) - 0.5 * (w - 1)
+    yy0 = yy.astype(np.float64) - 0.5 * (h - 1)
+
+    x = xx0[valid]
+    y = yy0[valid]
+    z = values.astype(np.float64)
+    keep = np.ones(len(z), dtype=bool)
+
+    for _ in range(2):
+        if np.sum(keep) < 3:
+            break
+
+        A = np.column_stack([np.ones(np.sum(keep)), x[keep], y[keep]])
+        coeffs, _, _, _ = np.linalg.lstsq(A, z[keep], rcond=None)
+        model = coeffs[0] + coeffs[1] * x + coeffs[2] * y
+        resid = z - model
+        med = np.median(resid[keep])
+        mad = np.median(np.abs(resid[keep] - med)) * 1.4826
+
+        if not np.isfinite(mad) or mad <= 0:
+            break
+
+        new_keep = np.abs(resid - med) <= 3.0 * mad
+        if np.sum(new_keep) < 3 or np.array_equal(new_keep, keep):
+            break
+        keep = new_keep
+
+    if np.sum(keep) < 3:
+        cutout -= np.median(values)
+        return cutout
+
+    A = np.column_stack([np.ones(np.sum(keep)), x[keep], y[keep]])
+    coeffs, _, _, _ = np.linalg.lstsq(A, z[keep], rcond=None)
+    background = coeffs[0] + coeffs[1] * xx0 + coeffs[2] * yy0
+    cutout -= background
+
+    return cutout
+
+
 def _create_psf_model_polynomial(
     image,
     obj,
@@ -843,7 +1014,7 @@ def _create_psf_model_polynomial(
     degree,
     regularization,
     subtract_neighbors,
-    subtract_background,
+    background_mode,
     log,
 ):
     """Build position-dependent PSF by fitting per-pixel polynomials to star stamps.
@@ -854,6 +1025,8 @@ def _create_psf_model_polynomial(
 
     ncoeffs = (degree + 1) * (degree + 2) // 2
     log('Building position-dependent PSF model: degree=%d (%d coefficients)' % (degree, ncoeffs))
+    if background_mode != 'none':
+        log('Subtracting local stamp background using %s model' % background_mode)
 
     if len(obj) < ncoeffs:
         raise ValueError(
@@ -895,6 +1068,7 @@ def _create_psf_model_polynomial(
     stamps = []
     positions_x = []
     positions_y = []
+    stamp_fluxes = []
     half = size // 2
 
     for i in range(len(obj)):
@@ -935,29 +1109,15 @@ def _create_psf_model_polynomial(
                 cutout -= amp * np.exp(-r2 / (2 * sigma**2))
 
         # Skip if mask has too many bad pixels in this cutout
+        mask_cutout = None
         if mask is not None:
             mask_cutout = mask[y1:y2, x1:x2]
             if np.sum(mask_cutout) > 0.1 * cutout.size:
                 continue
             cutout[mask_cutout] = 0.0
 
-        # Subtract local background (median of edge pixels)
-        if subtract_background:
-            edge_pixels = np.concatenate(
-                [cutout[0, :], cutout[-1, :], cutout[1:-1, 0], cutout[1:-1, -1]]
-            )
-            if mask is not None:
-                edge_mask = np.concatenate(
-                    [
-                        mask_cutout[0, :],
-                        mask_cutout[-1, :],
-                        mask_cutout[1:-1, 0],
-                        mask_cutout[1:-1, -1],
-                    ]
-                )
-                edge_pixels = edge_pixels[~edge_mask]
-            if len(edge_pixels) > 0:
-                cutout -= np.median(edge_pixels)
+        if background_mode != 'none':
+            cutout = _subtract_local_stamp_background(cutout, mask_cutout, mode=background_mode)
 
         # Resample to oversampled grid, centering star at stamp center
         # Map each oversampled pixel back to cutout coordinates
@@ -977,6 +1137,7 @@ def _create_psf_model_polynomial(
         stamps.append(stamp)
         positions_x.append(x_star)
         positions_y.append(y_star)
+        stamp_fluxes.append(float(obj['flux'][i]) if 'flux' in obj.colnames else 1.0)
 
     nstars = len(stamps)
     log('Extracted %d valid stamps for polynomial fitting' % nstars)
@@ -990,6 +1151,7 @@ def _create_psf_model_polynomial(
     # Same term ordering as get_supersampled_psf_stamp: i2 outer, i1 inner
     x_norm = (np.array(positions_x) - x0) / sx
     y_norm = (np.array(positions_y) - y0) / sy
+    stamp_fluxes = np.asarray(stamp_fluxes, dtype=float)
 
     V = []
     for i2 in range(degree + 1):
@@ -1001,6 +1163,21 @@ def _create_psf_model_polynomial(
     stamps_array = np.array(stamps)  # [nstars, os_size, os_size]
     pixels = stamps_array.reshape(nstars, -1)  # [nstars, npixels]
 
+    # Each training stamp is normalized to unit flux, so an unweighted solve
+    # over-emphasizes low-S/N outer pixels from fainter stars and broadens the
+    # reconstructed wings. Weight by source flux as a proxy for stamp S/N.
+    weights = np.ones(nstars, dtype=np.float64)
+    valid_flux = np.isfinite(stamp_fluxes) & (stamp_fluxes > 0)
+    if np.any(valid_flux):
+        flux_ref = np.nanmedian(stamp_fluxes[valid_flux])
+        if np.isfinite(flux_ref) and flux_ref > 0:
+            weights[valid_flux] = stamp_fluxes[valid_flux] / flux_ref
+            weights = np.clip(weights, 0.3, 5.0)
+            log(
+                'Applying flux weights to polynomial PSF fit: median %.0f, range %.2f..%.2f'
+                % (flux_ref, np.min(weights), np.max(weights))
+            )
+
     # Solve per-pixel polynomial with iterative sigma-clipping.
     # Outlier stamps (from neighbor contamination or artifacts) bias
     # the mean-based least-squares fit; clipping rejects them.
@@ -1010,8 +1187,9 @@ def _create_psf_model_polynomial(
 
     with np.errstate(over='ignore', invalid='ignore', divide='ignore'):
         for clip_iter in range(max_clip_iters + 1):
-            V_k = V[keep]
-            pixels_k = pixels[keep]
+            w_k = weights[keep]
+            V_k = V[keep] * w_k[:, np.newaxis]
+            pixels_k = pixels[keep] * w_k[:, np.newaxis]
             n_keep = int(keep.sum())
 
             if n_keep < ncoeffs:
@@ -1050,8 +1228,21 @@ def _create_psf_model_polynomial(
                 % (clip_iter + 1, n_rejected, keep.sum())
             )
 
-    # Reshape to [ncoeffs, os_size, os_size]
-    psf_data = coeffs.reshape(ncoeffs, os_size, os_size)
+    # Suppress low-S/N outer support where the polynomial fit otherwise tends
+    # to create square-edge pedestals and ringing.
+    psf_data, taper_start, taper_width = _regularize_polynomial_psf(
+        coeffs.reshape(ncoeffs, os_size, os_size),
+        stamps_array,
+        keep,
+        sampling,
+        fwhm,
+    )
+    coeffs = psf_data.reshape(ncoeffs, -1)
+    if taper_width > 0:
+        log(
+            'Applied outer taper to polynomial PSF: start %.2f px, width %.2f px'
+            % (taper_start, taper_width)
+        )
 
     # Compute and report residual statistics
     with np.errstate(over='ignore', invalid='ignore', divide='ignore'):

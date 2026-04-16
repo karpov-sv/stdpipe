@@ -1110,6 +1110,143 @@ class TestPositionDependentPSF:
         assert isinstance(result, Table)
         assert len(result) == len(detected_objects)
 
+    @pytest.mark.unit
+    def test_polynomial_psf_does_not_grow_at_stamp_edge(self):
+        """Polynomial ePSF should suppress spurious square-edge support."""
+        rng = np.random.RandomState(1234)
+        size = 256
+        fwhm = 3.0
+        sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+        margin = 24
+        nstars = 80
+
+        xs = []
+        ys = []
+        while len(xs) < nstars:
+            x = rng.uniform(margin, size - margin)
+            y = rng.uniform(margin, size - margin)
+            if xs:
+                dist2 = (np.asarray(xs) - x) ** 2 + (np.asarray(ys) - y) ** 2
+                if np.any(dist2 < (5.0 * fwhm) ** 2):
+                    continue
+            xs.append(x)
+            ys.append(y)
+
+        yy, xx = np.mgrid[:size, :size]
+        image = rng.normal(0.0, 2.0, (size, size))
+        fluxes = rng.uniform(5e3, 2e4, size=nstars)
+        for x, y, flux in zip(xs, ys, fluxes):
+            amplitude = flux / (2 * np.pi * sigma**2)
+            image += amplitude * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * sigma**2))
+
+        obj = Table()
+        obj["x"] = np.asarray(xs, float)
+        obj["y"] = np.asarray(ys, float)
+        obj["flux"] = fluxes
+
+        model = psf.create_psf_model(
+            image,
+            obj=obj,
+            fwhm=fwhm,
+            size=25,
+            oversampling=2,
+            degree=1,
+            subtract_neighbors=False,
+            verbose=False,
+        )
+
+        stamp = psf.get_psf_stamp(model, x=127.3, y=128.7, normalize=True)
+        edge = np.concatenate([stamp[0, :], stamp[-1, :], stamp[1:-1, 0], stamp[1:-1, -1]])
+        assert np.median(edge) < 5e-5
+
+        cy = stamp.shape[0] // 2 + (128.7 - np.round(128.7))
+        cx = stamp.shape[1] // 2 + (127.3 - np.round(127.3))
+        yy_s, xx_s = np.mgrid[0 : stamp.shape[0], 0 : stamp.shape[1]]
+        rr = np.sqrt((xx_s - cx) ** 2 + (yy_s - cy) ** 2)
+        profile = []
+        for r0, r1 in zip(range(0, 10), range(1, 11)):
+            idx = (rr >= r0) & (rr < r1)
+            profile.append(np.median(stamp[idx]))
+        profile = np.asarray(profile, float)
+        assert np.nanmax(np.diff(profile[5:])) < 5e-5
+
+    @pytest.mark.unit
+    def test_polynomial_psf_plane_background_removes_edge_gradient(self):
+        """Plane background subtraction should suppress stamp-edge gradients."""
+        rng = np.random.RandomState(4321)
+        size = 256
+        fwhm = 3.0
+        sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+        margin = 24
+        nstars = 80
+
+        xs = []
+        ys = []
+        while len(xs) < nstars:
+            x = rng.uniform(margin, size - margin)
+            y = rng.uniform(margin, size - margin)
+            if xs:
+                dist2 = (np.asarray(xs) - x) ** 2 + (np.asarray(ys) - y) ** 2
+                if np.any(dist2 < (5.0 * fwhm) ** 2):
+                    continue
+            xs.append(x)
+            ys.append(y)
+
+        yy, xx = np.mgrid[:size, :size]
+        image = 150.0 + 0.35 * xx - 0.25 * yy + rng.normal(0.0, 0.2, (size, size))
+        fluxes = rng.uniform(5e3, 2e4, size=nstars)
+        for x, y, flux in zip(xs, ys, fluxes):
+            amplitude = flux / (2 * np.pi * sigma**2)
+            image += amplitude * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * sigma**2))
+
+        obj = Table()
+        obj["x"] = np.asarray(xs, float)
+        obj["y"] = np.asarray(ys, float)
+        obj["flux"] = fluxes
+
+        model_none = psf.create_psf_model(
+            image,
+            obj=obj,
+            fwhm=fwhm,
+            size=25,
+            oversampling=2,
+            degree=1,
+            subtract_neighbors=False,
+            subtract_background=False,
+            verbose=False,
+        )
+        model_plane = psf.create_psf_model(
+            image,
+            obj=obj,
+            fwhm=fwhm,
+            size=25,
+            oversampling=2,
+            degree=1,
+            subtract_neighbors=False,
+            subtract_background="plane",
+            verbose=False,
+        )
+
+        stamp_none = psf.get_psf_stamp(model_none, x=127.3, y=128.7, normalize=True)
+        stamp_plane = psf.get_psf_stamp(model_plane, x=127.3, y=128.7, normalize=True)
+
+        def edge_gradient(stamp):
+            border = 2
+            left = np.median(stamp[:, :border])
+            right = np.median(stamp[:, -border:])
+            top = np.median(stamp[:border, :])
+            bottom = np.median(stamp[-border:, :])
+            return abs(left - right) + abs(top - bottom)
+
+        grad_none = edge_gradient(stamp_none)
+        grad_plane = edge_gradient(stamp_plane)
+        edge_plane = np.concatenate(
+            [stamp_plane[0, :], stamp_plane[-1, :], stamp_plane[1:-1, 0], stamp_plane[1:-1, -1]]
+        )
+
+        assert grad_plane < 0.25 * grad_none
+        assert np.median(np.abs(edge_plane)) < 5e-5
+
 
 # ============================================================================
 # Property-based tests (if hypothesis is available)
