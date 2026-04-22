@@ -141,7 +141,38 @@ Both use a sliding-window mode estimator that is resistant to outliers from gala
    good = (obj['flags'] == 0) & (obj['magerr'] < 0.1)
    fwhm = photometry.estimate_fwhm(obj['fwhm'], good=good)
 
+
+Position-dependent FWHM
+^^^^^^^^^^^^^^^^^^^^^^^
+
+Wide-field images often show FWHM variation across the field from focus gradients, optical aberrations, or tracking. Passing ``spatial_order >= 1`` fits a 2-D polynomial ``FWHM(x, y)`` to the per-object values (with ``a*b`` weights and sigma-clipping) and returns a :class:`~stdpipe.photometry.FWHMMap` callable instead of a scalar. The callable evaluates the model at any position, and ``float(fwhm_map)`` gives a scalar median summary for APIs that require one.
+
+.. code-block:: python
+
+   # Fit FWHM(x, y) as a 2-D polynomial
+   fwhm_map = photometry.estimate_fwhm_from_objects(
+       obj, spatial_order=2, image_shape=image.shape, verbose=True,
+   )
+   print('median FWHM:', float(fwhm_map), 'pix')
+   print('FWHM at image centre:', fwhm_map(image.shape[1] / 2, image.shape[0] / 2))
+
+If too few high-quality candidates survive for the requested order, the function transparently falls back to the scalar path.
+
+:func:`~stdpipe.photometry.get_objects_sep` exposes the same feature via the ``fwhm_spatial_order`` parameter. When set, aperture and background-annulus radii are scaled per source and the per-source width is passed to ``sep.sum_circle_optimal`` (the windowed centroider still uses the scalar summary). The fitted model is stored in ``obj.meta['fwhm_phot_model']``:
+
+.. code-block:: python
+
+   obj = photometry.get_objects_sep(image, fwhm=True, fwhm_spatial_order=2,
+                                    optimal=True, aper=1.5, bkgann=(3, 5))
+   fmap = obj.meta['fwhm_phot_model']  # FWHMMap, or absent for scalar order=0
+
+The downstream measurement routines :func:`~stdpipe.photometry.measure_objects` and :func:`~stdpipe.photometry_measure.measure_objects_sep` also accept a callable ``fwhm``. The SEP backend broadcasts a per-source width and per-source aperture/bkgann arrays directly to SEP; the pure-Python backend uses the per-source width in ungrouped optimal extraction and falls back to the scalar median where the underlying photutils APIs require a single radius.
+
 .. autofunction:: stdpipe.photometry.estimate_fwhm_from_objects
+   :noindex:
+
+.. autoclass:: stdpipe.photometry.FWHMMap
+   :members: __call__, __float__
    :noindex:
 
 .. autofunction:: stdpipe.photometry.estimate_fwhm

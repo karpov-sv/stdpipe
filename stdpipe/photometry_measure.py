@@ -24,6 +24,45 @@ except ImportError:
     _HAS_SEP_OPTIMAL = False
 
 
+def _is_callable_fwhm(fwhm):
+    """True if ``fwhm`` is a position-dependent callable (e.g. FWHMMap)."""
+    return (
+        fwhm is not None
+        and callable(fwhm)
+        and not isinstance(fwhm, (bool, int, float, np.integer, np.floating))
+    )
+
+
+def _fwhm_scalar(fwhm):
+    """Scalar FWHM summary (median for callables via ``float()``).
+
+    Returns ``None`` when ``fwhm`` is missing, non-positive, or not convertible.
+    """
+    if fwhm is None:
+        return None
+    try:
+        s = float(fwhm)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(s) or s <= 0:
+        return None
+    return s
+
+
+def _fwhm_at(fwhm, x, y):
+    """Evaluate FWHM at positions ``x``/``y``.
+
+    Returns a scalar for numeric ``fwhm``, an array for callable ``fwhm``,
+    and ``None`` when ``fwhm`` is missing or non-positive.
+    """
+    s = _fwhm_scalar(fwhm)
+    if s is None:
+        return None
+    if _is_callable_fwhm(fwhm):
+        return np.asarray(fwhm(x, y), dtype=float)
+    return s
+
+
 def _extract_valid_positions(obj):
     """Extract object positions as plain arrays with validity mask.
 
@@ -753,10 +792,14 @@ def measure_objects(
         Polynomial order for local background fitting. 0 = constant (mean),
         1 = plane (linear gradient, recommended), 2 = quadratic surface.
         Only used if ``bkgann`` is set.
-    fwhm : float or None
+    fwhm : float, callable, or None
         If provided, ``aper`` and ``bkgann`` are measured in units of FWHM.
         Also used to define Gaussian PSF for optimal extraction if ``psf``
-        is not provided.
+        is not provided. A callable (e.g. a
+        :class:`stdpipe.photometry.FWHMMap`) is accepted and evaluated at
+        each source position for the optimal-extraction PSF width;
+        aperture/bkgann scaling, PSF-weighted centroiding, and local
+        background annuli still use the scalar summary ``float(fwhm)``.
     psf : dict or None
         PSF model for optimal extraction and PSF-weighted centroiding. Can be
         a dict from ``psf.run_psfex()``, ``psf.load_psf()``, or
@@ -873,9 +916,15 @@ def measure_objects(
     else:
         log('Using user-provided noise map: median %.1f rms %.2f' % (np.median(err), np.std(err)))
 
-    if fwhm is not None and fwhm > 0:
-        log('Scaling aperture radii with FWHM %.1f pix' % fwhm)
-        aper = aper * fwhm
+    fwhm_s = _fwhm_scalar(fwhm)
+    fwhm_is_callable = _is_callable_fwhm(fwhm)
+
+    if fwhm_s is not None:
+        if fwhm_is_callable:
+            log('Scaling aperture radii with spatial FWHM (median %.1f pix)' % fwhm_s)
+        else:
+            log('Scaling aperture radii with FWHM %.1f pix' % fwhm_s)
+        aper = aper * fwhm_s
 
     log('Using aperture radius %.1f pixels' % aper)
 
@@ -886,7 +935,7 @@ def measure_objects(
             box_size += 1
 
         # Determine centroiding method
-        use_psf_centroid = centroid_method == 'psf' and (psf is not None or fwhm is not None)
+        use_psf_centroid = centroid_method == 'psf' and (psf is not None or fwhm_s is not None)
 
         if use_psf_centroid:
             # Prepare PSF for centroiding
@@ -897,11 +946,12 @@ def measure_objects(
                     % (centroid_iter, box_size, box_size)
                 )
             else:
-                # Use original fwhm (before aper scaling) for PSF
-                psf_for_centroid = fwhm
+                # PSF-weighted centroiding uses a scalar FWHM; for a spatial
+                # model, the scalar summary (median) is a sensible proxy.
+                psf_for_centroid = fwhm_s
                 log(
                     'Using PSF-weighted centroiding (Gaussian FWHM=%.1f) with %d iterations within %dx%d box'
-                    % (fwhm, centroid_iter, box_size, box_size)
+                    % (fwhm_s, centroid_iter, box_size, box_size)
                 )
         else:
             log(
@@ -994,8 +1044,10 @@ def measure_objects(
     # Local background - it has to be computed prior to optimal photometry
     # as otherwise it is too difficult to subtract it from its (weighted) results
     if bkgann is not None and len(bkgann) == 2:
-        if fwhm is not None and fwhm > 0:
-            bkgann = [_ * fwhm for _ in bkgann]
+        if fwhm_s is not None:
+            # LocalBackground/GradientLocalBackground both take scalar radii,
+            # so we use the median of the spatial FWHM here.
+            bkgann = [_ * fwhm_s for _ in bkgann]
 
         order_names = {0: 'constant (mean)', 1: 'plane', 2: 'quadratic'}
         order_name = order_names.get(bkg_order, f'order {bkg_order}')
@@ -1066,14 +1118,22 @@ def measure_objects(
         # Optimal extraction photometry (Naylor 1998)
         log('Using optimal extraction photometry')
 
-        # Determine PSF model
+        # Determine PSF model. A callable ``fwhm`` (e.g. FWHMMap) yields a
+        # per-source Gaussian width in the ungrouped path below.
         if psf is not None:
             psf_for_extraction = psf
             log('Using provided PSF model for optimal extraction')
-        elif fwhm is not None and fwhm > 0:
-            # Use original fwhm (before aper scaling) for PSF
-            psf_for_extraction = fwhm
-            log('Using Gaussian PSF with FWHM=%.1f for optimal extraction' % fwhm)
+        elif fwhm_s is not None:
+            psf_for_extraction = fwhm if fwhm_is_callable else fwhm_s
+            if fwhm_is_callable:
+                log(
+                    'Using spatial Gaussian PSF for optimal extraction (median FWHM=%.1f)'
+                    % fwhm_s
+                )
+            else:
+                log(
+                    'Using Gaussian PSF with FWHM=%.1f for optimal extraction' % fwhm_s
+                )
         else:
             raise ValueError("Either 'psf' or 'fwhm' must be provided for optimal extraction")
 
@@ -1137,12 +1197,21 @@ def measure_objects(
                 if len(positions) == 0:
                     continue
 
-                # Perform grouped extraction
+                # Perform grouped extraction. The grouped helper shares a
+                # single PSF across the group, so for a spatial FWHM model
+                # we evaluate it at the group mean and pass the scalar.
+                if fwhm_is_callable and psf is None:
+                    xs_g = np.array([p[0] for p in positions])
+                    ys_g = np.array([p[1] for p in positions])
+                    grp_fwhm = float(np.median(_fwhm_at(fwhm, xs_g, ys_g)))
+                    psf_for_group = grp_fwhm
+                else:
+                    psf_for_group = psf_for_extraction
                 results = _grouped_optimal_extraction(
                     image1,
                     err,
                     positions,
-                    psf_for_extraction,
+                    psf_for_group,
                     bg_local=bg_locals,
                     mask=mask | mask0,
                     radius=aper,
@@ -1173,12 +1242,16 @@ def measure_objects(
             # Standard single-source optimal extraction
             for i, o in enumerate(obj):
                 if np.isfinite(o['x']) and np.isfinite(o['y']):
+                    if fwhm_is_callable and psf is None:
+                        psf_here = float(fwhm(o['x'], o['y']))
+                    else:
+                        psf_here = psf_for_extraction
                     res = _optimal_extraction(
                         image1,
                         err,
                         o['x'],
                         o['y'],
-                        psf_for_extraction,
+                        psf_here,
                         bg_local=o['bg_local'],
                         mask=mask | mask0,  # Do not count the flux from 'soft-masked' pixels
                         radius=aper,  # Use aperture radius as clipping radius
@@ -1317,10 +1390,16 @@ def measure_objects_sep(
         For optimal extraction, SEP handles this internally with
         sigma-clipping. For aperture photometry, ``sep.stats_circann()``
         is used.
-    fwhm : float or None
+    fwhm : float, callable, or None
         If provided, ``aper`` and ``bkgann`` are measured in units of FWHM.
         Also used for Gaussian PSF in optimal extraction, PSF fitting,
-        and centroiding.
+        and centroiding. A callable (e.g. a
+        :class:`stdpipe.photometry.FWHMMap`) is accepted and evaluated at
+        each source position: per-source aperture/bkgann arrays feed the
+        SEP photometry routines and the per-source width feeds
+        ``sep.sum_circle_optimal``. The scalar summary ``float(fwhm)``
+        is used for the SEP windowed centroider (which requires a scalar
+        sigma).
     psf : dict, sep.PSF, or None
         PSF model for PSF fitting photometry. When provided, PSF fitting is
         used instead of aperture or optimal extraction. Can be a PSFEx dict
@@ -1457,9 +1536,17 @@ def measure_objects_sep(
     # Ensure error map is C-contiguous
     err = np.ascontiguousarray(err)
 
-    if fwhm is not None and fwhm > 0:
-        log('Scaling aperture radii with FWHM %.1f pix' % fwhm)
-        aper_pix = aper * fwhm
+    fwhm_s = _fwhm_scalar(fwhm)
+    fwhm_is_callable = _is_callable_fwhm(fwhm)
+
+    if fwhm_s is not None:
+        if fwhm_is_callable:
+            log('Scaling aperture radii with spatial FWHM (median %.1f pix)' % fwhm_s)
+        else:
+            log('Scaling aperture radii with FWHM %.1f pix' % fwhm_s)
+        # Scalar summary is used only for log output and as a fallback; the
+        # actual per-source aperture radii are built below from fwhm_at_pos.
+        aper_pix = aper * fwhm_s
     else:
         aper_pix = aper
 
@@ -1467,7 +1554,8 @@ def measure_objects_sep(
 
     # Centroiding with SEP windowed positions (built-in iteration)
     if centroid_iter:
-        maxstep = 0.2 * fwhm if fwhm else 0.6  # Prevent excessive steps between iterations
+        # sep.winpos takes scalar sig/maxstep — use the scalar summary.
+        maxstep = 0.2 * fwhm_s if fwhm_s else 0.6
 
         # Build sep.PSF for PSF-weighted centroiding if requested
         sep_centroid_psf = None
@@ -1495,7 +1583,7 @@ def measure_objects_sep(
             if sep_centroid_psf is not None:
                 winpos_kwargs['psf'] = sep_centroid_psf
             else:
-                sigma = fwhm / 2.355 if fwhm else 1.0
+                sigma = fwhm_s / 2.355 if fwhm_s else 1.0
                 winpos_kwargs['sig'] = sigma
 
             xwin, ywin, flag = sep.winpos(
@@ -1507,7 +1595,7 @@ def measure_objects_sep(
 
             # Update positions where centroiding succeeded and shift is reasonable
             total_shift = np.sqrt((xwin - x_vals[valid_pos]) ** 2 + (ywin - y_vals[valid_pos]) ** 2)
-            max_total_shift = fwhm if fwhm else 3.0  # Reject shifts larger than 1 FWHM
+            max_total_shift = fwhm_s if fwhm_s else 3.0  # Reject shifts larger than 1 FWHM
             good_centroid = (
                 (flag == 0)
                 & np.isfinite(xwin)
@@ -1543,11 +1631,31 @@ def measure_objects_sep(
     obj['fluxerr'] = np.nan
 
     if np.any(valid_pos):
-        # Prepare bkgann in pixels
+        # Evaluate FWHM at the valid source positions. For a callable
+        # ``fwhm``, this becomes a per-source array fed directly to SEP's
+        # broadcasted APIs; scalar ``fwhm`` remains a single float.
+        fwhm_at_pos = None
+        if fwhm_is_callable:
+            fwhm_at_pos = np.asarray(
+                fwhm(x_vals[valid_pos], y_vals[valid_pos]), dtype=float
+            )
+
+        # Prepare per-source aperture radius.
+        if fwhm_at_pos is not None:
+            aper_arr = aper * fwhm_at_pos
+        else:
+            aper_arr = aper_pix
+
+        # Prepare bkgann in pixels.
         bkgann_pix = None
         if bkgann is not None and len(bkgann) == 2:
-            if fwhm is not None and fwhm > 0:
-                bkgann_pix = (bkgann[0] * fwhm, bkgann[1] * fwhm)
+            if fwhm_at_pos is not None:
+                bkgann_pix = (
+                    bkgann[0] * fwhm_at_pos,
+                    bkgann[1] * fwhm_at_pos,
+                )
+            elif fwhm_s is not None:
+                bkgann_pix = (bkgann[0] * fwhm_s, bkgann[1] * fwhm_s)
             else:
                 bkgann_pix = bkgann
 
@@ -1612,31 +1720,40 @@ def measure_objects_sep(
 
         elif optimal:
             # Optimal extraction using SEP with built-in background handling
-            if fwhm is None or fwhm <= 0:
+            if fwhm_s is None:
                 raise ValueError("'fwhm' must be provided for optimal extraction")
 
-            if bkgann_pix:
-                log(
-                    'Using SEP optimal extraction with sigma-clipped background annulus (%.1f, %.1f)'
-                    % bkgann_pix
-                )
+            if bkgann_pix is not None:
+                if fwhm_at_pos is not None:
+                    log(
+                        'Using SEP optimal extraction with sigma-clipped background annulus '
+                        '(per-source, median %.1f-%.1f)'
+                        % (float(np.median(bkgann_pix[0])), float(np.median(bkgann_pix[1])))
+                    )
+                else:
+                    log(
+                        'Using SEP optimal extraction with sigma-clipped background annulus (%.1f, %.1f)'
+                        % tuple(bkgann_pix)
+                    )
             else:
                 log('Using SEP optimal extraction (no local background)')
 
             if group_sources:
                 log('Grouped optimal extraction enabled')
 
-            # SEP handles sigma-clipped background internally when bkgann is provided
+            # SEP accepts scalar or per-source arrays for aper and fwhm and
+            # broadcasts them (fwhm array disables the grouped fast path but
+            # still uses the generic grouped C solver).
             flux, fluxerr, flag = sep.sum_circle_optimal(
                 image1,
                 x_vals[valid_pos],
                 y_vals[valid_pos],
-                aper_pix,
-                fwhm=fwhm,
+                aper_arr,
+                fwhm=fwhm_at_pos if fwhm_at_pos is not None else fwhm_s,
                 err=err,
                 gain=gain if gain else 1.0,
                 mask=mask | mask0,
-                bkgann=bkgann_pix,  # SEP handles sigma-clipped background
+                bkgann=bkgann_pix,
                 grouped=group_sources,
                 group_radius_factor=1.2,  # Empirical
                 clip_sigma=clip_sigma,
@@ -1655,7 +1772,7 @@ def measure_objects_sep(
                 image1,
                 x_vals[valid_pos],
                 y_vals[valid_pos],
-                aper_pix,
+                aper_arr,
                 err=err,
                 gain=gain if gain else 1.0,
                 mask=mask | mask0,
@@ -1683,8 +1800,10 @@ def measure_objects_sep(
                     clip_iters=clip_iters,
                 )
 
-                # Subtract local background (use median)
-                obj['flux'][valid_pos] -= bg_median * np.pi * aper_pix**2
+                # Subtract local background (use median). aper_arr is either
+                # a scalar or a per-source array, both broadcast correctly.
+                aper_area = np.pi * np.asarray(aper_arr) ** 2
+                obj['flux'][valid_pos] -= bg_median * aper_area
 
     # Flag objects where measurement failed
     if psf is not None:

@@ -129,6 +129,182 @@ def _weighted_median(values, weights):
     return float(values[idx[np.searchsorted(cumw, 0.5)]])
 
 
+class FWHMMap:
+    """Position-dependent FWHM estimator backed by a 2-D polynomial.
+
+    Produced by :func:`estimate_fwhm_from_objects` when ``spatial_order >= 1``.
+    Coordinates are normalised internally to roughly ``[-1, 1]`` for numerical
+    stability.
+
+    Instances are callable: ``fwhm_map(x, y)`` returns FWHM in pixels at the
+    requested pixel coordinates (``x``, ``y`` may be scalars or broadcastable
+    arrays; the result has the broadcast shape). Instances are also
+    convertible via ``float(fwhm_map)`` to the scalar median summary, so they
+    can be dropped into APIs that still expect a single number.
+
+    Attributes
+    ----------
+    coeffs : ndarray
+        Flat array of polynomial coefficients, ordered by
+        ``(i, j)`` with ``i + j <= order`` and ``j`` varied fastest.
+    order : int
+        Polynomial order.
+    x0, y0, sx, sy : float
+        Coordinate normalisation: ``xn = (x - x0) / sx``.
+    median : float
+        Representative scalar FWHM (median of the fitted surface over the
+        good candidates). Used by ``float(self)``.
+    n_used : int
+        Number of candidates retained after sigma-clipping.
+    fwhm_range : tuple of float
+        Output clipping range in pixels.
+    """
+
+    __slots__ = (
+        'coeffs', 'order', 'x0', 'y0', 'sx', 'sy',
+        'median', 'n_used', 'fwhm_range',
+    )
+
+    def __init__(self, coeffs, order, x0, y0, sx, sy, median,
+                 n_used, fwhm_range):
+        self.coeffs = np.asarray(coeffs, dtype=float).ravel()
+        self.order = int(order)
+        self.x0 = float(x0)
+        self.y0 = float(y0)
+        self.sx = float(sx)
+        self.sy = float(sy)
+        self.median = float(median)
+        self.n_used = int(n_used)
+        self.fwhm_range = (float(fwhm_range[0]), float(fwhm_range[1]))
+
+    def _terms(self):
+        for i in range(self.order + 1):
+            for j in range(self.order + 1 - i):
+                yield i, j
+
+    def __call__(self, x, y):
+        x = np.asarray(x, dtype=float)
+        y = np.asarray(y, dtype=float)
+        xn = (x - self.x0) / self.sx
+        yn = (y - self.y0) / self.sy
+        shape = np.broadcast_shapes(xn.shape, yn.shape)
+        xn = np.broadcast_to(xn, shape)
+        yn = np.broadcast_to(yn, shape)
+        out = np.zeros(shape, dtype=float)
+        for k, (i, j) in enumerate(self._terms()):
+            out = out + self.coeffs[k] * (xn ** i) * (yn ** j)
+        return np.clip(out, self.fwhm_range[0], self.fwhm_range[1])
+
+    def __float__(self):
+        return self.median
+
+    def __repr__(self):
+        return (
+            "FWHMMap(order=%d, median=%.3f, n_used=%d)"
+            % (self.order, self.median, self.n_used)
+        )
+
+
+def _fit_spatial_fwhm(values, x, y, good, weights=None, *, order,
+                      fwhm_range, image_shape=None,
+                      clip_sigma=3.0, clip_iters=2, log=None):
+    """Fit a 2-D polynomial to per-object FWHM with sigma-clipping.
+
+    Returns a :class:`FWHMMap` on success, or ``None`` when fewer than
+    ``3 * nterms`` candidates survive (so callers can fall back to the scalar
+    path).
+    """
+    _log = log or (lambda *a, **k: None)
+    values = np.asarray(values, dtype=float)
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    good = np.asarray(good, dtype=bool).copy()
+    good &= np.isfinite(values) & np.isfinite(x) & np.isfinite(y)
+    good &= (values >= fwhm_range[0]) & (values < fwhm_range[1])
+
+    nterms = (order + 1) * (order + 2) // 2
+    if good.sum() < 3 * nterms:
+        _log(
+            "Spatial FWHM fit: only %d candidates for %d terms — "
+            "falling back to scalar" % (int(good.sum()), nterms)
+        )
+        return None
+
+    # Coordinate normalisation
+    if image_shape is not None:
+        H, W = image_shape[:2]
+        x0 = 0.5 * float(W)
+        y0 = 0.5 * float(H)
+        sx = max(0.5 * float(W), 1.0)
+        sy = max(0.5 * float(H), 1.0)
+    else:
+        xg, yg = x[good], y[good]
+        x0 = 0.5 * (xg.min() + xg.max())
+        y0 = 0.5 * (yg.min() + yg.max())
+        sx = max(0.5 * (xg.max() - xg.min()), 1.0)
+        sy = max(0.5 * (yg.max() - yg.min()), 1.0)
+
+    xn = (x - x0) / sx
+    yn = (y - y0) / sy
+
+    # Design matrix with i+j<=order, j varying fastest (matches FWHMMap._terms)
+    cols = []
+    for i in range(order + 1):
+        for j in range(order + 1 - i):
+            cols.append((xn ** i) * (yn ** j))
+    D = np.column_stack(cols)
+
+    if weights is not None:
+        w_all = np.asarray(weights, dtype=float).copy()
+        w_all = np.where(np.isfinite(w_all) & (w_all > 0), w_all, 0.0)
+    else:
+        w_all = np.ones_like(values)
+
+    mask = good.copy()
+    coeffs = None
+    # Some numpy/BLAS builds emit spurious fp warnings from matmul even on
+    # well-formed inputs; suppress them for the fit's own arithmetic.
+    with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+        for it in range(max(clip_iters, 1)):
+            m = mask & (w_all > 0)
+            if m.sum() < nterms:
+                break
+            sw = np.sqrt(w_all[m])
+            A = D[m] * sw[:, None]
+            b = values[m] * sw
+            coeffs, *_ = np.linalg.lstsq(A, b, rcond=None)
+            # Residuals on candidate rows only — D rows outside `good` may
+            # normalise to large values and overflow at order >= 2.
+            resid_m = values[m] - D[m] @ coeffs
+            if it == clip_iters - 1:
+                break
+            sig = mad_std(resid_m, ignore_nan=True)
+            if not np.isfinite(sig) or sig == 0:
+                break
+            keep = np.abs(resid_m) < clip_sigma * sig
+            idx_m = np.flatnonzero(m)
+            new_mask = np.zeros_like(mask)
+            new_mask[idx_m[keep]] = True
+            mask = new_mask
+
+        if coeffs is None:
+            return None
+
+        final_m = mask & (w_all > 0)
+        n_used = int(final_m.sum())
+        if n_used == 0:
+            return None
+        fit_vals_m = np.clip(D[final_m] @ coeffs, fwhm_range[0], fwhm_range[1])
+    median = float(np.nanmedian(fit_vals_m))
+    if not np.isfinite(median):
+        return None
+
+    return FWHMMap(
+        coeffs=coeffs, order=order, x0=x0, y0=y0, sx=sx, sy=sy,
+        median=median, n_used=n_used, fwhm_range=fwhm_range,
+    )
+
+
 def estimate_fwhm_from_objects(
     obj,
     *,
@@ -137,6 +313,9 @@ def estimate_fwhm_from_objects(
     use_flags=True,
     fwhm_range=(1.0, 20.0),
     min_candidates=5,
+    spatial_order=0,
+    xy_cols=('x', 'y'),
+    image_shape=None,
     verbose=False,
 ):
     """Estimate global FWHM from an object table (SEP or SExtractor).
@@ -175,13 +354,31 @@ def estimate_fwhm_from_objects(
         Passed through to :func:`estimate_fwhm`.
     min_candidates : int
         Passed through to :func:`estimate_fwhm`.
+    spatial_order : int
+        Polynomial order for a position-dependent FWHM model. ``0`` (default)
+        preserves the historical behaviour and returns a scalar. ``>=1``
+        attempts to fit a 2-D polynomial ``FWHM(x, y)`` to the per-object
+        values and returns a :class:`FWHMMap` callable. If too few candidates
+        survive the quality cuts for the requested order, the function falls
+        back to the scalar path.
+    xy_cols : tuple of str
+        Column names used for pixel coordinates when ``spatial_order >= 1``.
+        Defaults to ``('x', 'y')`` (SEP-style). Use ``('X_IMAGE', 'Y_IMAGE')``
+        for SExtractor output. Falls back to the scalar path if either column
+        is missing.
+    image_shape : tuple of int, optional
+        ``(H, W)`` image shape used to normalise pixel coordinates to roughly
+        ``[-1, 1]`` when ``spatial_order >= 1``. If not provided, the min/max
+        of the candidate coordinates are used.
     verbose : bool or callable
         If True, log diagnostic information about the estimation.
 
     Returns
     -------
-    float
-        Scalar FWHM estimate in pixels, or ``np.nan`` on failure.
+    float or FWHMMap
+        Scalar FWHM in pixels when ``spatial_order == 0``. A :class:`FWHMMap`
+        callable otherwise, or a scalar on fallback. Returns ``np.nan`` if no
+        usable candidates survive.
     """
 
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
@@ -229,6 +426,61 @@ def estimate_fwhm_from_objects(
             good &= np.asarray(obj['flag']) == 0
         elif 'FLAGS' in names:
             good &= np.asarray(obj['FLAGS']) == 0
+
+    # --- Spatial (polynomial) path ---
+    # When requested, attempt a 2-D polynomial fit of FWHM(x, y) using the
+    # same priority order for per-object FWHM proxies (flux_radius → fwhm →
+    # moments). Falls back to the scalar path if coordinates are missing or
+    # too few candidates survive.
+    if spatial_order >= 1:
+        xcol, ycol = xy_cols
+        if xcol in names and ycol in names:
+            xcoord = np.asarray(obj[xcol], dtype=float)
+            ycoord = np.asarray(obj[ycol], dtype=float)
+
+            fr_col_s = (
+                'flux_radius' if 'flux_radius' in names
+                else 'FLUX_RADIUS' if 'FLUX_RADIUS' in names else None
+            )
+            if fr_col_s is not None:
+                sp_values = 2.0 * np.asarray(obj[fr_col_s], dtype=float)
+                sp_source = 'flux_radius'
+            elif 'fwhm' in names:
+                sp_values = np.asarray(obj['fwhm'], dtype=float)
+                sp_source = 'fwhm'
+            elif 'FWHM_IMAGE' in names:
+                sp_values = np.asarray(obj['FWHM_IMAGE'], dtype=float)
+                sp_source = 'FWHM_IMAGE'
+            elif ab is not None:
+                sp_values = 2.0 * np.sqrt(np.log(2) * (a ** 2 + b ** 2))
+                sp_source = 'moments'
+            elif 'A_IMAGE' in names and 'B_IMAGE' in names:
+                a_s = np.asarray(obj['A_IMAGE'], dtype=float)
+                b_s = np.asarray(obj['B_IMAGE'], dtype=float)
+                sp_values = 2.0 * np.sqrt(np.log(2) * (a_s ** 2 + b_s ** 2))
+                sp_source = 'moments'
+            else:
+                sp_values = None
+
+            if sp_values is not None:
+                fmap = _fit_spatial_fwhm(
+                    sp_values, xcoord, ycoord, good,
+                    weights=ab, order=spatial_order,
+                    fwhm_range=fwhm_range, image_shape=image_shape,
+                    log=log,
+                )
+                if fmap is not None:
+                    log(
+                        "Spatial FWHM (%s, order=%d): median=%.2f, "
+                        "n_used=%d"
+                        % (sp_source, spatial_order, fmap.median, fmap.n_used)
+                    )
+                    return fmap
+        else:
+            log(
+                "Spatial FWHM requested but coord columns %r/%r missing — "
+                "falling back to scalar" % (xcol, ycol)
+            )
 
     # --- Primary path: flux_radius (half-light radius) ---
     # Gaussian: FWHM = 2 * R_half.  This slightly underestimates for
@@ -354,6 +606,7 @@ def get_objects_sep(
     deblend_method='watershed',
     clip_sigma=3.0,
     clip_iters=5,
+    fwhm_spatial_order=0,
     verbose=True,
     **kwargs,
 ):
@@ -460,6 +713,14 @@ def get_objects_sep(
     clip_iters : int
         Max sigma-clipping iterations for annulus background.
         0 = disable. SEP 1.4+ only.
+    fwhm_spatial_order : int
+        When FWHM is auto-estimated (``fwhm=True`` or via the optimal path),
+        fit a 2-D polynomial ``FWHM(x, y)`` of this order and apply it
+        per source. ``0`` (default) keeps the historical scalar behaviour.
+        Per-source values are used for aperture/background-annulus scaling
+        and for the optimal-extraction PSF width; the windowed centroider
+        still uses the scalar median. Ignored when a numeric ``fwhm`` is
+        supplied directly. See :class:`FWHMMap`.
     verbose : bool or callable
         Print progress messages.
 
@@ -613,10 +874,13 @@ def get_objects_sep(
         'flux_radius': _flux_radius0,
         'a': obj0['a'],
         'b': obj0['b'],
+        'x': obj0['x'],
+        'y': obj0['y'],
         'flags': obj0['flag'],
     })
 
-    # Handle FWHM parameter
+    # Handle FWHM parameter.  ``fwhm_value`` ends up being either a scalar
+    # float or a :class:`FWHMMap` callable when ``fwhm_spatial_order >= 1``.
     fwhm_value = None
     scale_with_fwhm = False
 
@@ -625,6 +889,11 @@ def get_objects_sep(
         fwhm_value = float(fwhm)
         scale_with_fwhm = True
         log("Using provided FWHM = %.2g" % fwhm_value)
+    elif isinstance(fwhm, FWHMMap):
+        # User-supplied spatial FWHM model
+        fwhm_value = fwhm
+        scale_with_fwhm = True
+        log("Using provided spatial FWHM model (median=%.2g)" % fwhm_value.median)
     elif fwhm is True or (optimal and fwhm is False):
         # Estimate FWHM from detected objects using robust mode estimator
         # (either explicitly requested or needed for optimal extraction)
@@ -632,10 +901,15 @@ def get_objects_sep(
             _obj0_for_fwhm,
             snr_min=None,
             use_flags=True,
+            spatial_order=fwhm_spatial_order,
+            image_shape=image.shape,
             verbose=verbose,
         )
 
-        if not np.isfinite(fwhm_value):
+        # FWHMMap is always "finite" (has a median); np.isfinite rejects it.
+        if isinstance(fwhm_value, FWHMMap):
+            pass
+        elif not np.isfinite(fwhm_value):
             # Fall back to plain median of moment-based FWHM for unflagged objects
             idx_fwhm = obj0['flag'] == 0
             if 'fwhm' in obj0.dtype.names:
@@ -650,29 +924,51 @@ def get_objects_sep(
             # Scale aperture/annulus when explicitly requested (fwhm=True)
             scale_with_fwhm = True
 
-        log("Estimated FWHM = %.2g" % fwhm_value)
+        if isinstance(fwhm_value, FWHMMap):
+            log(
+                "Estimated spatial FWHM (order=%d, median=%.2g)"
+                % (fwhm_value.order, fwhm_value.median)
+            )
+        else:
+            log("Estimated FWHM = %.2g" % fwhm_value)
+
+    # Stash the FWHM-units base so we can evaluate per-source apertures at
+    # the photometry call sites when fwhm_value is a FWHMMap.
+    aper_base = aper
+    bkgann_base = bkgann
+    fwhm_is_spatial = isinstance(fwhm_value, FWHMMap)
 
     # Scale aperture and background annulus with FWHM if requested
     if scale_with_fwhm and fwhm_value is not None:
-        log("Scaling aperture and background annulus with FWHM")
-        aper *= fwhm_value
-        if bkgann is not None:
-            bkgann = (bkgann[0] * fwhm_value, bkgann[1] * fwhm_value)
-        log("  Aperture: %.2g pixels" % aper)
-        if bkgann is not None:
-            log("  Background annulus: (%.2g, %.2g) pixels" % bkgann)
+        if fwhm_is_spatial:
+            log("Scaling aperture and background annulus per source via spatial FWHM")
+            log("  Aperture (median): %.2g pixels" % (aper * fwhm_value.median))
+            if bkgann is not None:
+                log(
+                    "  Background annulus (median): (%.2g, %.2g) pixels"
+                    % (bkgann[0] * fwhm_value.median, bkgann[1] * fwhm_value.median)
+                )
+        else:
+            log("Scaling aperture and background annulus with FWHM")
+            aper *= fwhm_value
+            if bkgann is not None:
+                bkgann = (bkgann[0] * fwhm_value, bkgann[1] * fwhm_value)
+            log("  Aperture: %.2g pixels" % aper)
+            if bkgann is not None:
+                log("  Background annulus: (%.2g, %.2g) pixels" % bkgann)
 
     # Windowed positional parameters - use if requested
     if centroid:
         log("Refining positions using windowed centroiding")
-        # Use sep.winpos for centroiding
-        # maxstep parameter is only available in SEP 1.4+
+        # sep.winpos takes a scalar sigma/maxstep, so use the median summary
+        # of the spatial model when one is in play.
+        fwhm_scalar = float(fwhm_value) if fwhm_value is not None else None
         winpos_kwargs = {'mask': mask | mask_bg | mask_segm}
         if _HAS_SEP_OPTIMAL:
             # SEP 1.4+ has maxstep parameter to cap position shift per iteration
             # Set to 0.2 * FWHM to avoid excessive drift in degenerate cases
-            if fwhm_value is not None:
-                maxstep = 0.2 * fwhm_value * float(centroid_maxstep_scale)
+            if fwhm_scalar is not None:
+                maxstep = 0.2 * fwhm_scalar * float(centroid_maxstep_scale)
             else:
                 # Default to 1.0 pixel if FWHM not available
                 maxstep = 1.0 * float(centroid_maxstep_scale)
@@ -680,7 +976,7 @@ def get_objects_sep(
                 raise ValueError("centroid_maxstep_scale should produce a positive finite maxstep")
             winpos_kwargs['maxstep'] = maxstep
 
-        sig = fwhm_value / 2.355 if fwhm_value is not None else 0.5
+        sig = fwhm_scalar / 2.355 if fwhm_scalar is not None else 0.5
         sig *= float(centroid_sigma_scale)
         if not np.isfinite(sig) or sig <= 0:
             raise ValueError("centroid_sigma_scale should produce a positive finite sigma")
@@ -703,6 +999,35 @@ def get_objects_sep(
 
     log("Measuring final objects")
 
+    # Build per-source aperture / background annulus / PSF-width arrays when
+    # a spatial FWHM model is in use. Aperture / bkgann only vary per source
+    # when the user asked for FWHM-unit scaling; the optimal PSF width follows
+    # the spatial model whenever one is available.
+    if fwhm_is_spatial:
+        _fwhm_pos = fwhm_value(xwin[idx], ywin[idx])
+    else:
+        _fwhm_pos = None
+
+    if scale_with_fwhm and fwhm_is_spatial:
+        aper_phot = aper_base * _fwhm_pos
+        if bkgann_base is not None:
+            bkgann_phot = (
+                bkgann_base[0] * _fwhm_pos,
+                bkgann_base[1] * _fwhm_pos,
+            )
+        else:
+            bkgann_phot = None
+    else:
+        aper_phot = aper
+        bkgann_phot = bkgann
+
+    if fwhm_is_spatial:
+        fwhm_phot_arg = _fwhm_pos
+    elif fwhm_value is not None:
+        fwhm_phot_arg = float(fwhm_value)
+    else:
+        fwhm_phot_arg = None
+
     # Choose photometry method
     if optimal and _HAS_SEP_OPTIMAL:
         if group_sources:
@@ -713,12 +1038,12 @@ def get_objects_sep(
             image1,
             xwin[idx],
             ywin[idx],
-            aper,
-            fwhm=fwhm_value,
+            aper_phot,
+            fwhm=fwhm_phot_arg,
             err=err,
             gain=gain,
             mask=mask | mask_bg | mask_segm,
-            bkgann=bkgann,
+            bkgann=bkgann_phot,
             grouped=group_sources,
             group_radius_factor=1.2,  # Empirical
             clip_sigma=clip_sigma,
@@ -733,11 +1058,11 @@ def get_objects_sep(
             image1,
             xwin[idx],
             ywin[idx],
-            aper,
+            aper_phot,
             err=err,
             gain=gain,
             mask=mask | mask_bg | mask_segm,
-            bkgann=bkgann,
+            bkgann=bkgann_phot,
             clip_sigma=clip_sigma,
             clip_iters=clip_iters,
         )
@@ -747,7 +1072,7 @@ def get_objects_sep(
         bg.back(),
         xwin[idx],
         ywin[idx],
-        aper,
+        aper_phot,
         err=bg.rms(),
         gain=gain,
         mask=mask | mask_bg | mask_segm,
@@ -755,7 +1080,7 @@ def get_objects_sep(
         clip_iters=clip_iters,
     )
 
-    bgnorm = bgflux / np.pi / aper**2
+    bgnorm = bgflux / np.pi / np.asarray(aper_phot) ** 2
 
     # Fluxes to magnitudes
     mag, magerr = np.zeros_like(flux), np.zeros_like(flux)
@@ -817,12 +1142,26 @@ def get_objects_sep(
         }
     )
 
-    obj.meta['aper'] = aper
-    obj.meta['bkgann'] = bkgann
+    if scale_with_fwhm and fwhm_is_spatial:
+        obj.meta['aper'] = aper_base * fwhm_value.median
+        if bkgann_base is not None:
+            obj.meta['bkgann'] = (
+                bkgann_base[0] * fwhm_value.median,
+                bkgann_base[1] * fwhm_value.median,
+            )
+        else:
+            obj.meta['bkgann'] = None
+    else:
+        obj.meta['aper'] = aper
+        obj.meta['bkgann'] = bkgann
     obj.meta['optimal'] = optimal and _HAS_SEP_OPTIMAL
     obj.meta['group_sources'] = group_sources and optimal and _HAS_SEP_OPTIMAL
     if fwhm_value is not None:
-        obj.meta['fwhm_phot'] = fwhm_value
+        if fwhm_is_spatial:
+            obj.meta['fwhm_phot'] = fwhm_value.median
+            obj.meta['fwhm_phot_model'] = fwhm_value
+        else:
+            obj.meta['fwhm_phot'] = fwhm_value
 
     obj.sort('flux', reverse=True)
 
