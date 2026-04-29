@@ -161,12 +161,18 @@ class FWHMMap:
     """
 
     __slots__ = (
-        'coeffs', 'order', 'x0', 'y0', 'sx', 'sy',
-        'median', 'n_used', 'fwhm_range',
+        'coeffs',
+        'order',
+        'x0',
+        'y0',
+        'sx',
+        'sy',
+        'median',
+        'n_used',
+        'fwhm_range',
     )
 
-    def __init__(self, coeffs, order, x0, y0, sx, sy, median,
-                 n_used, fwhm_range):
+    def __init__(self, coeffs, order, x0, y0, sx, sy, median, n_used, fwhm_range):
         self.coeffs = np.asarray(coeffs, dtype=float).ravel()
         self.order = int(order)
         self.x0 = float(x0)
@@ -192,22 +198,30 @@ class FWHMMap:
         yn = np.broadcast_to(yn, shape)
         out = np.zeros(shape, dtype=float)
         for k, (i, j) in enumerate(self._terms()):
-            out = out + self.coeffs[k] * (xn ** i) * (yn ** j)
+            out = out + self.coeffs[k] * (xn**i) * (yn**j)
         return np.clip(out, self.fwhm_range[0], self.fwhm_range[1])
 
     def __float__(self):
         return self.median
 
     def __repr__(self):
-        return (
-            "FWHMMap(order=%d, median=%.3f, n_used=%d)"
-            % (self.order, self.median, self.n_used)
-        )
+        return "FWHMMap(order=%d, median=%.3f, n_used=%d)" % (self.order, self.median, self.n_used)
 
 
-def _fit_spatial_fwhm(values, x, y, good, weights=None, *, order,
-                      fwhm_range, image_shape=None,
-                      clip_sigma=3.0, clip_iters=2, log=None):
+def _fit_spatial_fwhm(
+    values,
+    x,
+    y,
+    good,
+    weights=None,
+    *,
+    order,
+    fwhm_range,
+    image_shape=None,
+    clip_sigma=3.0,
+    clip_iters=2,
+    log=None,
+):
     """Fit a 2-D polynomial to per-object FWHM with sigma-clipping.
 
     Returns a :class:`FWHMMap` on success, or ``None`` when fewer than
@@ -251,7 +265,7 @@ def _fit_spatial_fwhm(values, x, y, good, weights=None, *, order,
     cols = []
     for i in range(order + 1):
         for j in range(order + 1 - i):
-            cols.append((xn ** i) * (yn ** j))
+            cols.append((xn**i) * (yn**j))
     D = np.column_stack(cols)
 
     if weights is not None:
@@ -300,8 +314,15 @@ def _fit_spatial_fwhm(values, x, y, good, weights=None, *, order,
         return None
 
     return FWHMMap(
-        coeffs=coeffs, order=order, x0=x0, y0=y0, sx=sx, sy=sy,
-        median=median, n_used=n_used, fwhm_range=fwhm_range,
+        coeffs=coeffs,
+        order=order,
+        x0=x0,
+        y0=y0,
+        sx=sx,
+        sy=sy,
+        median=median,
+        n_used=n_used,
+        fwhm_range=fwhm_range,
     )
 
 
@@ -439,8 +460,11 @@ def estimate_fwhm_from_objects(
             ycoord = np.asarray(obj[ycol], dtype=float)
 
             fr_col_s = (
-                'flux_radius' if 'flux_radius' in names
-                else 'FLUX_RADIUS' if 'FLUX_RADIUS' in names else None
+                'flux_radius'
+                if 'flux_radius' in names
+                else 'FLUX_RADIUS'
+                if 'FLUX_RADIUS' in names
+                else None
             )
             if fr_col_s is not None:
                 sp_values = 2.0 * np.asarray(obj[fr_col_s], dtype=float)
@@ -452,28 +476,32 @@ def estimate_fwhm_from_objects(
                 sp_values = np.asarray(obj['FWHM_IMAGE'], dtype=float)
                 sp_source = 'FWHM_IMAGE'
             elif ab is not None:
-                sp_values = 2.0 * np.sqrt(np.log(2) * (a ** 2 + b ** 2))
+                sp_values = 2.0 * np.sqrt(np.log(2) * (a**2 + b**2))
                 sp_source = 'moments'
             elif 'A_IMAGE' in names and 'B_IMAGE' in names:
                 a_s = np.asarray(obj['A_IMAGE'], dtype=float)
                 b_s = np.asarray(obj['B_IMAGE'], dtype=float)
-                sp_values = 2.0 * np.sqrt(np.log(2) * (a_s ** 2 + b_s ** 2))
+                sp_values = 2.0 * np.sqrt(np.log(2) * (a_s**2 + b_s**2))
                 sp_source = 'moments'
             else:
                 sp_values = None
 
             if sp_values is not None:
                 fmap = _fit_spatial_fwhm(
-                    sp_values, xcoord, ycoord, good,
-                    weights=ab, order=spatial_order,
-                    fwhm_range=fwhm_range, image_shape=image_shape,
+                    sp_values,
+                    xcoord,
+                    ycoord,
+                    good,
+                    weights=ab,
+                    order=spatial_order,
+                    fwhm_range=fwhm_range,
+                    image_shape=image_shape,
                     log=log,
                 )
                 if fmap is not None:
                     log(
                         "Spatial FWHM (%s, order=%d): median=%.2f, "
-                        "n_used=%d"
-                        % (sp_source, spatial_order, fmap.median, fmap.n_used)
+                        "n_used=%d" % (sp_source, spatial_order, fmap.median, fmap.n_used)
                     )
                     return fmap
         else:
@@ -486,19 +514,33 @@ def estimate_fwhm_from_objects(
     # Gaussian: FWHM = 2 * R_half.  This slightly underestimates for
     # Moffat profiles but the mode estimator naturally centres on the
     # stellar peak, compensating for the conversion factor difference.
-    fr_col = 'flux_radius' if 'flux_radius' in names else 'FLUX_RADIUS' if 'FLUX_RADIUS' in names else None
+    fr_col = (
+        'flux_radius'
+        if 'flux_radius' in names
+        else 'FLUX_RADIUS'
+        if 'FLUX_RADIUS' in names
+        else None
+    )
     if fr_col is not None:
         fr = np.asarray(obj[fr_col], dtype=float)
         fwhm_fr = 2.0 * fr
 
         fwhm_fr_mode = estimate_fwhm(
-            fwhm_fr, good=good, fwhm_range=fwhm_range, min_candidates=min_candidates,
+            fwhm_fr,
+            good=good,
+            fwhm_range=fwhm_range,
+            min_candidates=min_candidates,
         )
 
         if np.isfinite(fwhm_fr_mode):
             # Cross-check against ab-weighted median
             if ab is not None:
-                valid = good & np.isfinite(fwhm_fr) & (fwhm_fr >= fwhm_range[0]) & (fwhm_fr < fwhm_range[1])
+                valid = (
+                    good
+                    & np.isfinite(fwhm_fr)
+                    & (fwhm_fr >= fwhm_range[0])
+                    & (fwhm_fr < fwhm_range[1])
+                )
                 fwhm_fr_weighted = _weighted_median(fwhm_fr[valid], ab[valid])
             else:
                 fwhm_fr_weighted = np.nan
@@ -515,8 +557,7 @@ def estimate_fwhm_from_objects(
                 else:
                     log(
                         "FWHM (flux_radius): mode=%.2f, ab-weighted median=%.2f "
-                        "(ratio %.2f) — consistent"
-                        % (fwhm_fr_mode, fwhm_fr_weighted, ratio)
+                        "(ratio %.2f) — consistent" % (fwhm_fr_mode, fwhm_fr_weighted, ratio)
                     )
             else:
                 log("FWHM (flux_radius): mode=%.2f" % fwhm_fr_mode)
@@ -544,7 +585,9 @@ def estimate_fwhm_from_objects(
     else:
         return np.nan
 
-    fwhm_mode = estimate_fwhm(values, good=good, fwhm_range=fwhm_range, min_candidates=min_candidates)
+    fwhm_mode = estimate_fwhm(
+        values, good=good, fwhm_range=fwhm_range, min_candidates=min_candidates
+    )
 
     # ab-weighted median as guard against sub-stellar contamination
     if ab is not None:
@@ -594,6 +637,8 @@ def get_objects_sep(
     fwhm=False,
     optimal=False,
     group_sources=True,
+    group_radius_factor=1.0,
+    group_halo_factor=1.2,
     centroid=False,
     centroid_sigma_scale=1.0,
     centroid_maxstep_scale=1.0,
@@ -679,6 +724,13 @@ def get_objects_sep(
     group_sources : bool
         Grouped optimal extraction for overlapping sources.
         Default True (recommended). SEP 1.4+ only.
+    group_radius_factor : float
+        Connectivity scale for grouped optimal extraction. The default 1.0
+        groups sources whose apertures overlap.
+    group_halo_factor : float or None
+        Local context halo scale for grouped optimal extraction. The default
+        1.2 keeps a modest expanded solve context without widening source
+        connectivity. ``None`` lets SEP use ``group_radius_factor``.
     centroid : bool
         Refine positions via ``sep.winpos``. Default False (windowed
         positions can be biased in crowded fields). With SEP 1.4+, uses
@@ -851,33 +903,50 @@ def get_objects_sep(
     _b0 = np.maximum(obj0['b'], 0.5)
     _theta0 = obj0['theta']
     _kronrad0, _ = sep.kron_radius(
-        image1, _x0, _y0, _a0, _b0, _theta0, 6.0,
+        image1,
+        _x0,
+        _y0,
+        _a0,
+        _b0,
+        _theta0,
+        6.0,
         mask=mask | mask_bg | mask_segm,
     )
     _kronrad0 = np.maximum(_kronrad0, 1.0)
     _rmax0 = np.clip(relfluxradius * _kronrad0 * np.maximum(_a0, _b0), 3.0, 50.0)
     _flux_auto0, _, _ = sep.sum_circle(
-        image1, _x0, _y0, _rmax0,
+        image1,
+        _x0,
+        _y0,
+        _rmax0,
         mask=mask | mask_bg | mask_segm,
     )
     _flux_radius0, _ = sep.flux_radius(
-        image1, _x0, _y0, _rmax0, 0.5,
-        normflux=_flux_auto0, subpix=5,
+        image1,
+        _x0,
+        _y0,
+        _rmax0,
+        0.5,
+        normflux=_flux_auto0,
+        subpix=5,
     )
     _flux_radius0 = np.asarray(_flux_radius0, dtype=float)
 
     # Build a minimal Table from obj0 so estimate_fwhm_from_objects
     # can see flux_radius alongside the standard SEP columns.
-    _obj0_for_fwhm = Table({
-        'fwhm': obj0['fwhm'] if 'fwhm' in obj0.dtype.names
-                else 2.0 * np.sqrt(np.log(2) * (obj0['a']**2 + obj0['b']**2)),
-        'flux_radius': _flux_radius0,
-        'a': obj0['a'],
-        'b': obj0['b'],
-        'x': obj0['x'],
-        'y': obj0['y'],
-        'flags': obj0['flag'],
-    })
+    _obj0_for_fwhm = Table(
+        {
+            'fwhm': obj0['fwhm']
+            if 'fwhm' in obj0.dtype.names
+            else 2.0 * np.sqrt(np.log(2) * (obj0['a'] ** 2 + obj0['b'] ** 2)),
+            'flux_radius': _flux_radius0,
+            'a': obj0['a'],
+            'b': obj0['b'],
+            'x': obj0['x'],
+            'y': obj0['y'],
+            'flags': obj0['flag'],
+        }
+    )
 
     # Handle FWHM parameter.  ``fwhm_value`` ends up being either a scalar
     # float or a :class:`FWHMMap` callable when ``fwhm_spatial_order >= 1``.
@@ -1031,7 +1100,14 @@ def get_objects_sep(
     # Choose photometry method
     if optimal and _HAS_SEP_OPTIMAL:
         if group_sources:
-            log("Using grouped optimal extraction")
+            log(
+                "Using grouped optimal extraction "
+                "(radius_factor=%.2g, halo_factor=%s)"
+                % (
+                    group_radius_factor,
+                    ("SEP default" if group_halo_factor is None else "%.2g" % group_halo_factor),
+                )
+            )
         else:
             log("Using optimal extraction")
         flux, fluxerr, flag = sep.sum_circle_optimal(
@@ -1045,7 +1121,8 @@ def get_objects_sep(
             mask=mask | mask_bg | mask_segm,
             bkgann=bkgann_phot,
             grouped=group_sources,
-            group_radius_factor=1.2,  # Empirical
+            group_radius_factor=group_radius_factor,
+            group_halo_factor=group_halo_factor,
             clip_sigma=clip_sigma,
             clip_iters=clip_iters,
         )
@@ -1156,6 +1233,9 @@ def get_objects_sep(
         obj.meta['bkgann'] = bkgann
     obj.meta['optimal'] = optimal and _HAS_SEP_OPTIMAL
     obj.meta['group_sources'] = group_sources and optimal and _HAS_SEP_OPTIMAL
+    if obj.meta['group_sources']:
+        obj.meta['group_radius_factor'] = group_radius_factor
+        obj.meta['group_halo_factor'] = group_halo_factor
     if fwhm_value is not None:
         if fwhm_is_spatial:
             obj.meta['fwhm_phot'] = fwhm_value.median

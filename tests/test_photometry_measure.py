@@ -62,7 +62,7 @@ def _simulate_random_field(
         x = rng.randint(margin, size - margin)
         y = rng.randint(margin, size - margin)
         if xs:
-            dist2 = (np.array(xs) - x)**2 + (np.array(ys) - y)**2
+            dist2 = (np.array(xs) - x) ** 2 + (np.array(ys) - y) ** 2
             if np.any(dist2 < min_sep**2):
                 continue
         xs.append(int(x))
@@ -144,12 +144,7 @@ class TestOptimalExtraction:
     def test_optimal_extraction_basic(self, image_with_sources, detected_objects):
         """Test basic optimal extraction with Gaussian PSF."""
         result = photometry_measure.measure_objects(
-            detected_objects,
-            image_with_sources,
-            aper=5.0,
-            fwhm=3.0,
-            optimal=True,
-            verbose=False
+            detected_objects, image_with_sources, aper=5.0, fwhm=3.0, optimal=True, verbose=False
         )
 
         # Should return the same number of objects
@@ -177,7 +172,7 @@ class TestOptimalExtraction:
             aper=5.0,
             fwhm=3.0,
             optimal=False,
-            verbose=False
+            verbose=False,
         )
 
         # Optimal extraction
@@ -187,7 +182,7 @@ class TestOptimalExtraction:
             aper=5.0,
             fwhm=3.0,
             optimal=True,
-            verbose=False
+            verbose=False,
         )
 
         # Fluxes should be similar (within factor of 2 for isolated sources)
@@ -200,15 +195,13 @@ class TestOptimalExtraction:
         """Test that optimal extraction requires either psf or fwhm."""
         with pytest.raises(ValueError, match="Either 'psf' or 'fwhm' must be provided"):
             photometry_measure.measure_objects(
-                detected_objects,
-                image_with_sources,
-                aper=5.0,
-                optimal=True,
-                verbose=False
+                detected_objects, image_with_sources, aper=5.0, optimal=True, verbose=False
             )
 
     @pytest.mark.unit
-    def test_optimal_extraction_with_mask(self, image_with_sources, detected_objects, mask_with_bad_pixels):
+    def test_optimal_extraction_with_mask(
+        self, image_with_sources, detected_objects, mask_with_bad_pixels
+    ):
         """Test optimal extraction with masked pixels."""
         result = photometry_measure.measure_objects(
             detected_objects,
@@ -217,7 +210,7 @@ class TestOptimalExtraction:
             fwhm=3.0,
             optimal=True,
             mask=mask_with_bad_pixels,
-            verbose=False
+            verbose=False,
         )
 
         assert len(result) == len(detected_objects)
@@ -238,7 +231,7 @@ class TestOptimalExtraction:
         image_clean = _create_pixel_integrated_gaussian(size, cx, cy, amplitude, sigma)
         image_bad = image_clean.copy()
         mask = np.zeros_like(image_bad, dtype=bool)
-        mask[cy-1:cy+2, cx-1:cx+2] = True
+        mask[cy - 1 : cy + 2, cx - 1 : cx + 2] = True
         image_bad[mask] = 1e6
 
         obj = Table()
@@ -335,9 +328,7 @@ class TestOptimalExtraction:
         ],
     )
     @pytest.mark.parametrize("mask_fraction", [0.0, 0.1, 0.3])
-    def test_random_field_accuracy_crowded_report(
-        self, label, min_sep, n_sources, mask_fraction
-    ):
+    def test_random_field_accuracy_crowded_report(self, label, min_sep, n_sources, mask_fraction):
         """Report accuracy for crowded fields without assertions."""
         rng = np.random.RandomState(456 + int(min_sep * 10))
         metrics = _simulate_random_field(
@@ -368,6 +359,7 @@ class TestOptimalExtraction:
             f"optimal accuracy {accuracy_opt:.3f} (median rel err {med_opt:.3f}, "
             f"valid {n_valid_opt})"
         )
+
     @pytest.mark.unit
     def test_optimal_extraction_edge_objects(self, image_with_sources):
         """Test that edge objects are handled correctly."""
@@ -379,12 +371,7 @@ class TestOptimalExtraction:
         edge_objects['fluxerr'] = [10.0, 10.0, 10.0, 10.0]
 
         result = photometry_measure.measure_objects(
-            edge_objects,
-            image_with_sources,
-            aper=5.0,
-            fwhm=3.0,
-            optimal=True,
-            verbose=False
+            edge_objects, image_with_sources, aper=5.0, fwhm=3.0, optimal=True, verbose=False
         )
 
         # Edge objects should have NaN flux and be flagged
@@ -401,7 +388,7 @@ class TestOptimalExtraction:
             fwhm=3.0,
             optimal=True,
             sn=None,
-            verbose=False
+            verbose=False,
         )
 
         result_filtered = photometry_measure.measure_objects(
@@ -411,7 +398,7 @@ class TestOptimalExtraction:
             fwhm=3.0,
             optimal=True,
             sn=10.0,  # High S/N threshold
-            verbose=False
+            verbose=False,
         )
 
         # Filtered should have fewer or equal objects
@@ -421,12 +408,7 @@ class TestOptimalExtraction:
     def test_optimal_extraction_magnitudes(self, image_with_sources, detected_objects):
         """Test that magnitudes are computed correctly."""
         result = photometry_measure.measure_objects(
-            detected_objects,
-            image_with_sources,
-            aper=5.0,
-            fwhm=3.0,
-            optimal=True,
-            verbose=False
+            detected_objects, image_with_sources, aper=5.0, fwhm=3.0, optimal=True, verbose=False
         )
 
         # Check magnitude columns exist
@@ -452,7 +434,7 @@ class TestOptimalExtraction:
             fwhm=3.0,
             bkgann=(8.0, 12.0),
             optimal=True,
-            verbose=False
+            verbose=False,
         )
 
         # Should have bg_local column
@@ -463,12 +445,7 @@ class TestOptimalExtraction:
     def test_optimal_extraction_chi2(self, image_with_sources, detected_objects):
         """Test that chi-squared is computed and reasonable."""
         result = photometry_measure.measure_objects(
-            detected_objects,
-            image_with_sources,
-            aper=5.0,
-            fwhm=3.0,
-            optimal=True,
-            verbose=False
+            detected_objects, image_with_sources, aper=5.0, fwhm=3.0, optimal=True, verbose=False
         )
 
         # Should have chi2 column
@@ -510,7 +487,7 @@ class TestGroupedOptimalExtraction:
         sigma = 1.27  # FWHM ~ 3 pixels
 
         for sx, sy, amp in sources:
-            source = amp * np.exp(-((x - sx)**2 + (y - sy)**2) / (2 * sigma**2))
+            source = amp * np.exp(-((x - sx) ** 2 + (y - sy) ** 2) / (2 * sigma**2))
             image += source
 
         return image.astype(np.float64)
@@ -537,7 +514,7 @@ class TestGroupedOptimalExtraction:
             fwhm=3.0,
             optimal=True,
             group_sources=True,
-            verbose=False
+            verbose=False,
         )
 
         # Should return same number of objects
@@ -565,7 +542,7 @@ class TestGroupedOptimalExtraction:
             optimal=True,
             group_sources=True,
             grouper_radius=10.0,  # Should group sources within 10 pixels
-            verbose=False
+            verbose=False,
         )
 
         # With radius=10, pairs at ~6 and ~7 pixel separation should be grouped
@@ -586,7 +563,7 @@ class TestGroupedOptimalExtraction:
             fwhm=3.0,
             optimal=True,
             group_sources=False,
-            verbose=False
+            verbose=False,
         )
 
         # Grouped extraction (should detect all as isolated)
@@ -598,7 +575,7 @@ class TestGroupedOptimalExtraction:
             optimal=True,
             group_sources=True,
             grouper_radius=3.0,  # Small radius - all should be isolated
-            verbose=False
+            verbose=False,
         )
 
         # Fluxes should be very similar (within 1%)
@@ -625,7 +602,7 @@ class TestGroupedOptimalExtraction:
             optimal=True,
             group_sources=True,
             grouper_radius=10.0,
-            verbose=False
+            verbose=False,
         )
 
         # All fluxes should be positive
@@ -649,7 +626,7 @@ class TestGroupedOptimalExtraction:
             optimal=True,
             group_sources=True,
             grouper_radius=1.0,  # Very small - no groups
-            verbose=False
+            verbose=False,
         )
         assert np.all(result_small['group_size'] == 1)
 
@@ -662,7 +639,7 @@ class TestGroupedOptimalExtraction:
             optimal=True,
             group_sources=True,
             grouper_radius=15.0,  # Large enough to group
-            verbose=False
+            verbose=False,
         )
         assert np.any(result_large['group_size'] > 1)
 
@@ -676,7 +653,7 @@ class TestGroupedOptimalExtraction:
             fwhm=3.0,
             optimal=True,
             group_sources=True,
-            verbose=False
+            verbose=False,
         )
 
         # Should have chi2 column
@@ -687,7 +664,9 @@ class TestGroupedOptimalExtraction:
         assert np.all(result['chi2_optimal'][valid] > 0)
 
     @pytest.mark.unit
-    def test_grouped_extraction_with_mask(self, image_with_close_pairs, close_pair_objects, mask_with_bad_pixels):
+    def test_grouped_extraction_with_mask(
+        self, image_with_close_pairs, close_pair_objects, mask_with_bad_pixels
+    ):
         """Test grouped extraction with masked pixels."""
         result = photometry_measure.measure_objects(
             close_pair_objects,
@@ -697,7 +676,7 @@ class TestGroupedOptimalExtraction:
             optimal=True,
             group_sources=True,
             mask=mask_with_bad_pixels,
-            verbose=False
+            verbose=False,
         )
 
         # Should still return results
@@ -716,7 +695,9 @@ class TestMaskedColumnHandling:
     """
 
     @pytest.mark.unit
-    def test_measure_objects_aperture_with_masked_columns(self, image_with_sources, detected_objects_masked):
+    def test_measure_objects_aperture_with_masked_columns(
+        self, image_with_sources, detected_objects_masked
+    ):
         """Test aperture photometry handles MaskedColumn x/y inputs."""
         # This should not crash - masked entries should be handled gracefully
         result = photometry_measure.measure_objects(
@@ -725,7 +706,7 @@ class TestMaskedColumnHandling:
             aper=5.0,
             fwhm=3.0,
             optimal=False,
-            verbose=False
+            verbose=False,
         )
 
         # Should return same number of objects
@@ -735,7 +716,9 @@ class TestMaskedColumnHandling:
         assert np.sum(np.isfinite(result['flux'][:3])) == 3
 
     @pytest.mark.unit
-    def test_measure_objects_optimal_with_masked_columns(self, image_with_sources, detected_objects_masked):
+    def test_measure_objects_optimal_with_masked_columns(
+        self, image_with_sources, detected_objects_masked
+    ):
         """Test optimal extraction handles MaskedColumn x/y inputs."""
         result = photometry_measure.measure_objects(
             detected_objects_masked,
@@ -743,7 +726,7 @@ class TestMaskedColumnHandling:
             aper=5.0,
             fwhm=3.0,
             optimal=True,
-            verbose=False
+            verbose=False,
         )
 
         # Should return same number of objects
@@ -753,7 +736,9 @@ class TestMaskedColumnHandling:
         assert np.sum(np.isfinite(result['flux'][:3])) == 3
 
     @pytest.mark.unit
-    def test_measure_objects_grouped_with_masked_columns(self, image_with_sources, detected_objects_masked):
+    def test_measure_objects_grouped_with_masked_columns(
+        self, image_with_sources, detected_objects_masked
+    ):
         """Test grouped optimal extraction handles MaskedColumn inputs."""
         result = photometry_measure.measure_objects(
             detected_objects_masked,
@@ -763,7 +748,7 @@ class TestMaskedColumnHandling:
             optimal=True,
             group_sources=True,
             grouper_radius=10.0,
-            verbose=False
+            verbose=False,
         )
 
         # Should return same number of objects
@@ -774,7 +759,9 @@ class TestMaskedColumnHandling:
         assert 'group_size' in result.colnames
 
     @pytest.mark.unit
-    def test_measure_objects_with_local_background_masked_columns(self, image_with_sources, detected_objects_masked):
+    def test_measure_objects_with_local_background_masked_columns(
+        self, image_with_sources, detected_objects_masked
+    ):
         """Test local background estimation with MaskedColumn inputs."""
         result = photometry_measure.measure_objects(
             detected_objects_masked,
@@ -783,7 +770,7 @@ class TestMaskedColumnHandling:
             fwhm=3.0,
             bkgann=(8.0, 12.0),  # Local background annulus
             optimal=False,
-            verbose=False
+            verbose=False,
         )
 
         # Should have bg_local column
@@ -791,7 +778,9 @@ class TestMaskedColumnHandling:
         assert len(result) == len(detected_objects_masked)
 
     @pytest.mark.unit
-    def test_measure_objects_centroiding_with_masked_columns(self, image_with_sources, detected_objects_masked):
+    def test_measure_objects_centroiding_with_masked_columns(
+        self, image_with_sources, detected_objects_masked
+    ):
         """Test centroiding iteration with MaskedColumn inputs."""
         result = photometry_measure.measure_objects(
             detected_objects_masked,
@@ -800,7 +789,7 @@ class TestMaskedColumnHandling:
             fwhm=3.0,
             centroid_iter=2,  # Enable centroiding
             optimal=False,
-            verbose=False
+            verbose=False,
         )
 
         # Should have x_orig, y_orig columns from centroiding
@@ -825,24 +814,17 @@ class TestMaskedColumnHandling:
             aper=5.0,
             fwhm=3.0,
             optimal=False,
-            verbose=False
+            verbose=False,
         )
 
         # Run with MaskedColumns (all unmasked)
         result_masked = photometry_measure.measure_objects(
-            obj_masked,
-            image_with_sources,
-            aper=5.0,
-            fwhm=3.0,
-            optimal=False,
-            verbose=False
+            obj_masked, image_with_sources, aper=5.0, fwhm=3.0, optimal=False, verbose=False
         )
 
         # Fluxes should be identical
         np.testing.assert_array_almost_equal(
-            result_regular['flux'],
-            result_masked['flux'],
-            decimal=5
+            result_regular['flux'], result_masked['flux'], decimal=5
         )
 
 
@@ -866,16 +848,16 @@ class TestFullyMaskedFootprints:
 
         # Add point sources (simple Gaussian profiles)
         sources = [
-            (50, 50, 1000),    # x, y, amplitude - unmasked
-            (120, 80, 800),    # x, y, amplitude - FULLY MASKED
+            (50, 50, 1000),  # x, y, amplitude - unmasked
+            (120, 80, 800),  # x, y, amplitude - FULLY MASKED
             (200, 150, 1200),  # x, y, amplitude - unmasked
-            (80, 200, 600),    # x, y, amplitude - unmasked
+            (80, 200, 600),  # x, y, amplitude - unmasked
         ]
 
         y, x = np.ogrid[:256, :256]
         sigma = 1.27  # FWHM ~ 3 pixels
         for sx, sy, amp in sources:
-            source = amp * np.exp(-((x - sx)**2 + (y - sy)**2) / (2 * sigma**2))
+            source = amp * np.exp(-((x - sx) ** 2 + (y - sy) ** 2) / (2 * sigma**2))
             image += source
 
         # Create objects table
@@ -911,7 +893,7 @@ class TestFullyMaskedFootprints:
         y, x = np.ogrid[:256, :256]
         sigma = 1.27
         for sx, sy, amp in sources:
-            source = amp * np.exp(-((x - sx)**2 + (y - sy)**2) / (2 * sigma**2))
+            source = amp * np.exp(-((x - sx) ** 2 + (y - sy) ** 2) / (2 * sigma**2))
             image += source
 
         # Create objects table
@@ -925,24 +907,20 @@ class TestFullyMaskedFootprints:
 
         # Create mask that covers ALL sources
         mask = np.zeros((256, 256), dtype=bool)
-        mask[40:60, 40:60] = True    # Covers 1st source
+        mask[40:60, 40:60] = True  # Covers 1st source
         mask[70:90, 110:130] = True  # Covers 2nd source
 
         return image, objects, mask
 
     @pytest.mark.unit
-    def test_aperture_photometry_with_fully_masked_object(self, image_and_objects_with_masked_footprint):
+    def test_aperture_photometry_with_fully_masked_object(
+        self, image_and_objects_with_masked_footprint
+    ):
         """Test aperture photometry when one object is fully masked."""
         image, objects, mask = image_and_objects_with_masked_footprint
 
         result = photometry_measure.measure_objects(
-            objects.copy(),
-            image,
-            mask=mask,
-            aper=5.0,
-            fwhm=3.0,
-            optimal=False,
-            verbose=False
+            objects.copy(), image, mask=mask, aper=5.0, fwhm=3.0, optimal=False, verbose=False
         )
 
         # Should return same number of objects
@@ -970,7 +948,7 @@ class TestFullyMaskedFootprints:
             fwhm=3.0,
             centroid_iter=2,
             optimal=False,
-            verbose=False
+            verbose=False,
         )
 
         # Should return same number of objects
@@ -989,18 +967,14 @@ class TestFullyMaskedFootprints:
         assert (result['flags'][1] & 0x200) != 0
 
     @pytest.mark.unit
-    def test_optimal_extraction_with_fully_masked_object(self, image_and_objects_with_masked_footprint):
+    def test_optimal_extraction_with_fully_masked_object(
+        self, image_and_objects_with_masked_footprint
+    ):
         """Test optimal extraction when one object is fully masked."""
         image, objects, mask = image_and_objects_with_masked_footprint
 
         result = photometry_measure.measure_objects(
-            objects.copy(),
-            image,
-            mask=mask,
-            aper=5.0,
-            fwhm=3.0,
-            optimal=True,
-            verbose=False
+            objects.copy(), image, mask=mask, aper=5.0, fwhm=3.0, optimal=True, verbose=False
         )
 
         # Should return same number of objects
@@ -1015,7 +989,9 @@ class TestFullyMaskedFootprints:
         # The key is that it doesn't crash
 
     @pytest.mark.unit
-    def test_grouped_optimal_with_fully_masked_object(self, image_and_objects_with_masked_footprint):
+    def test_grouped_optimal_with_fully_masked_object(
+        self, image_and_objects_with_masked_footprint
+    ):
         """Test grouped optimal extraction when one object is fully masked."""
         image, objects, mask = image_and_objects_with_masked_footprint
 
@@ -1028,7 +1004,7 @@ class TestFullyMaskedFootprints:
             optimal=True,
             group_sources=True,
             grouper_radius=50.0,  # Large radius to group some objects
-            verbose=False
+            verbose=False,
         )
 
         # Should return same number of objects
@@ -1044,7 +1020,9 @@ class TestFullyMaskedFootprints:
         assert np.isfinite(result['flux'][3])
 
     @pytest.mark.unit
-    def test_local_background_with_fully_masked_object(self, image_and_objects_with_masked_footprint):
+    def test_local_background_with_fully_masked_object(
+        self, image_and_objects_with_masked_footprint
+    ):
         """Test local background estimation when one object is fully masked."""
         image, objects, mask = image_and_objects_with_masked_footprint
 
@@ -1056,7 +1034,7 @@ class TestFullyMaskedFootprints:
             fwhm=3.0,
             bkgann=(8.0, 12.0),
             optimal=False,
-            verbose=False
+            verbose=False,
         )
 
         # Should return same number of objects
@@ -1075,13 +1053,7 @@ class TestFullyMaskedFootprints:
         image, objects, mask = image_and_objects_all_masked
 
         result = photometry_measure.measure_objects(
-            objects.copy(),
-            image,
-            mask=mask,
-            aper=5.0,
-            fwhm=3.0,
-            optimal=False,
-            verbose=False
+            objects.copy(), image, mask=mask, aper=5.0, fwhm=3.0, optimal=False, verbose=False
         )
 
         # Should still return same number of objects (don't crash)
@@ -1097,13 +1069,7 @@ class TestFullyMaskedFootprints:
         image, objects, mask = image_and_objects_all_masked
 
         result = photometry_measure.measure_objects(
-            objects.copy(),
-            image,
-            mask=mask,
-            aper=5.0,
-            fwhm=3.0,
-            optimal=True,
-            verbose=False
+            objects.copy(), image, mask=mask, aper=5.0, fwhm=3.0, optimal=True, verbose=False
         )
 
         # Should still return same number of objects (don't crash)
@@ -1122,7 +1088,7 @@ class TestFullyMaskedFootprints:
             fwhm=3.0,
             centroid_iter=2,
             optimal=False,
-            verbose=False
+            verbose=False,
         )
 
         # Should still return same number of objects (don't crash)
@@ -1146,7 +1112,7 @@ class TestPSFCentroiding:
             fwhm=3.0,
             centroid_iter=3,
             centroid_method='psf',
-            verbose=False
+            verbose=False,
         )
 
         # Should have centroiding columns
@@ -1158,7 +1124,9 @@ class TestPSFCentroiding:
         assert np.all(np.isfinite(result['y']))
 
         # For sources already well-centered, shifts should be very small
-        shifts = np.sqrt((result['x'] - result['x_orig'])**2 + (result['y'] - result['y_orig'])**2)
+        shifts = np.sqrt(
+            (result['x'] - result['x_orig']) ** 2 + (result['y'] - result['y_orig']) ** 2
+        )
         # All shifts should be reasonable (< 0.1 pixel for well-centered sources)
         assert np.all(shifts < 0.1), f"Shifts too large: {shifts}"
 
@@ -1172,7 +1140,7 @@ class TestPSFCentroiding:
             aper=5.0,
             centroid_iter=3,
             centroid_method='psf',  # Request PSF but no psf/fwhm provided
-            verbose=False
+            verbose=False,
         )
 
         # Should still work (falls back to COM)
@@ -1190,7 +1158,7 @@ class TestPSFCentroiding:
             fwhm=3.0,
             centroid_iter=3,
             centroid_method='psf',
-            verbose=False
+            verbose=False,
         )
 
         assert len(result) == len(detected_objects)
@@ -1207,7 +1175,7 @@ class TestPSFCentroiding:
             fwhm=3.0,
             centroid_iter=3,
             centroid_method='com',
-            verbose=False
+            verbose=False,
         )
 
         result_psf = photometry_measure.measure_objects(
@@ -1217,7 +1185,7 @@ class TestPSFCentroiding:
             fwhm=3.0,
             centroid_iter=3,
             centroid_method='psf',
-            verbose=False
+            verbose=False,
         )
 
         # For bright isolated sources, both methods should give similar results
@@ -1229,7 +1197,9 @@ class TestPSFCentroiding:
         assert np.all(y_diff < 1.0), f"Y differences: {y_diff}"
 
     @pytest.mark.unit
-    def test_psf_centroid_with_mask(self, image_with_sources, detected_objects, mask_with_bad_pixels):
+    def test_psf_centroid_with_mask(
+        self, image_with_sources, detected_objects, mask_with_bad_pixels
+    ):
         """Test PSF centroiding with masked pixels."""
         result = photometry_measure.measure_objects(
             detected_objects.copy(),
@@ -1239,7 +1209,7 @@ class TestPSFCentroiding:
             centroid_iter=3,
             centroid_method='psf',
             mask=mask_with_bad_pixels,
-            verbose=False
+            verbose=False,
         )
 
         # Should still return results
@@ -1264,7 +1234,7 @@ class TestPSFCentroiding:
             fwhm=3.0,
             centroid_iter=5,  # More iterations for convergence
             centroid_method='psf',
-            verbose=False
+            verbose=False,
         )
 
         # Should have centroiding columns
@@ -1280,8 +1250,10 @@ class TestPSFCentroiding:
         true_y = np.array([50.0, 80.0, 150.0, 200.0])
 
         # Final positions should be closer to true positions than initial offset
-        initial_dist = np.sqrt((offset_objects['x'] - true_x)**2 + (offset_objects['y'] - true_y)**2)
-        final_dist = np.sqrt((result['x'] - true_x)**2 + (result['y'] - true_y)**2)
+        initial_dist = np.sqrt(
+            (offset_objects['x'] - true_x) ** 2 + (offset_objects['y'] - true_y) ** 2
+        )
+        final_dist = np.sqrt((result['x'] - true_x) ** 2 + (result['y'] - true_y) ** 2)
 
         # Centroiding should improve positions (or at least not make them worse)
         assert np.all(final_dist <= initial_dist), (
@@ -1305,7 +1277,7 @@ class TestPSFCentroiding:
             fwhm=3.0,
             centroid_iter=3,
             centroid_method='psf',
-            verbose=False
+            verbose=False,
         )
 
         # Should return same number of objects (may have NaN for edge cases)
@@ -1322,7 +1294,7 @@ class TestPSFCentroiding:
             centroid_iter=3,
             centroid_method='psf',
             optimal=True,
-            verbose=False
+            verbose=False,
         )
 
         # Should have both centroiding and optimal extraction columns
@@ -1365,7 +1337,7 @@ def _simulate_random_field_with_centroiding(
         x = rng.uniform(margin, size - margin)
         y = rng.uniform(margin, size - margin)
         if xs_true:
-            dist2 = (np.array(xs_true) - x)**2 + (np.array(ys_true) - y)**2
+            dist2 = (np.array(xs_true) - x) ** 2 + (np.array(ys_true) - y) ** 2
             if np.any(dist2 < min_sep**2):
                 continue
         xs_true.append(x)
@@ -1379,9 +1351,7 @@ def _simulate_random_field_with_centroiding(
     yy, xx = np.mgrid[:size, :size]
     image = rng.normal(0.0, noise_std, (size, size))
     for x, y, amp in zip(xs_true, ys_true, amplitudes):
-        image += amp * np.exp(
-            -((xx - x)**2 + (yy - y)**2) / (2 * sigma**2)
-        )
+        image += amp * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * sigma**2))
 
     # Create initial detections with slight offset to test centroiding
     offset = 0.3  # Initial offset in pixels
@@ -1513,9 +1483,7 @@ class TestPSFCentroidingAccuracy:
         ],
     )
     @pytest.mark.parametrize("mask_fraction", [0.0, 0.1, 0.3])
-    def test_centroiding_accuracy_crowded_report(
-        self, label, min_sep, n_sources, mask_fraction
-    ):
+    def test_centroiding_accuracy_crowded_report(self, label, min_sep, n_sources, mask_fraction):
         """Report centroiding accuracy for crowded fields without assertions."""
         seed = 890 + int(min_sep * 10) + int(mask_fraction * 100)
 
@@ -1589,7 +1557,7 @@ class TestPSFCentroidingAccuracy:
             x = rng.uniform(20, size - 20)
             y = rng.uniform(20, size - 20)
             if xs_true:
-                dist2 = (np.array(xs_true) - x)**2 + (np.array(ys_true) - y)**2
+                dist2 = (np.array(xs_true) - x) ** 2 + (np.array(ys_true) - y) ** 2
                 if np.any(dist2 < 15**2):
                     continue
             xs_true.append(x)
@@ -1603,9 +1571,7 @@ class TestPSFCentroidingAccuracy:
         yy, xx = np.mgrid[:size, :size]
         image = rng.normal(0.0, noise_std, (size, size))
         for x, y, amp in zip(xs_true, ys_true, amplitudes):
-            image += amp * np.exp(
-                -((xx - x)**2 + (yy - y)**2) / (2 * sigma**2)
-            )
+            image += amp * np.exp(-((xx - x) ** 2 + (yy - y) ** 2) / (2 * sigma**2))
 
         # Initial detections with offset
         obj = Table()
@@ -1646,8 +1612,8 @@ class TestPSFCentroidingAccuracy:
         xs_true = np.array(xs_true)
         ys_true = np.array(ys_true)
 
-        dist_com = np.sqrt((result_com['x'] - xs_true)**2 + (result_com['y'] - ys_true)**2)
-        dist_psf = np.sqrt((result_psf['x'] - xs_true)**2 + (result_psf['y'] - ys_true)**2)
+        dist_com = np.sqrt((result_com['x'] - xs_true) ** 2 + (result_com['y'] - ys_true) ** 2)
+        dist_psf = np.sqrt((result_psf['x'] - xs_true) ** 2 + (result_psf['y'] - ys_true) ** 2)
 
         valid = np.isfinite(dist_com) & np.isfinite(dist_psf)
         med_dist_com = np.median(dist_com[valid])
@@ -1667,6 +1633,7 @@ class TestPSFCentroidingAccuracy:
 _HAS_SEP_PSF = False
 try:
     import sep
+
     _HAS_SEP_PSF = hasattr(sep, 'psf_fit') and hasattr(sep, 'PSF')
 except ImportError:
     pass
@@ -1680,6 +1647,45 @@ _skip_no_sep_psf = pytest.mark.skipif(
 class TestSEPPSFPhotometry:
     """Test SEP-based PSF fitting photometry via measure_objects_sep(psf=...)."""
 
+    @pytest.mark.unit
+    @pytest.mark.skipif(
+        not photometry_measure._HAS_SEP_OPTIMAL,
+        reason="Requires SEP optimal extraction",
+    )
+    def test_measure_objects_sep_forwards_optimal_grouping_controls(self, monkeypatch):
+        """Grouped optimal-extraction controls should be forwarded to SEP."""
+        obj = Table({'x': [20.0, 24.0], 'y': [20.0, 20.0]})
+        image = np.zeros((48, 48), dtype=float)
+        bg = np.zeros_like(image)
+        err = np.ones_like(image)
+        seen = {}
+
+        def fake_sum_circle_optimal(data, x, y, r, fwhm, **kwargs):
+            seen.update(kwargs)
+            n = len(np.atleast_1d(x))
+            return np.full(n, 1000.0), np.ones(n), np.zeros(n, dtype=int)
+
+        monkeypatch.setattr(photometry_measure.sep, "sum_circle_optimal", fake_sum_circle_optimal)
+
+        result = photometry_measure.measure_objects_sep(
+            obj,
+            image,
+            bg=bg,
+            err=err,
+            aper=1.5,
+            fwhm=3.0,
+            optimal=True,
+            group_sources=True,
+            group_radius_factor=0.9,
+            group_halo_factor=1.4,
+            verbose=False,
+        )
+
+        assert len(result) == 2
+        assert seen["grouped"] is True
+        assert seen["group_radius_factor"] == pytest.approx(0.9)
+        assert seen["group_halo_factor"] == pytest.approx(1.4)
+
     @pytest.fixture
     def isolated_star_image(self):
         """256x256 image with one bright isolated Gaussian star at (128, 128)."""
@@ -1691,9 +1697,9 @@ class TestSEPPSFPhotometry:
         noise = 5.0
 
         image = np.random.normal(bg, noise, (256, 256))
-        image += _create_pixel_integrated_gaussian(256, 128, 128,
-                                                   true_flux / (2 * np.pi * sigma**2),
-                                                   sigma)
+        image += _create_pixel_integrated_gaussian(
+            256, 128, 128, true_flux / (2 * np.pi * sigma**2), sigma
+        )
         return image.astype(np.float64), fwhm, true_flux, bg, noise
 
     @pytest.fixture
@@ -1757,7 +1763,10 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(fwhm)
 
         result = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
         )
 
         # Check output columns
@@ -1775,7 +1784,10 @@ class TestSEPPSFPhotometry:
         obj = Table({'x': [128.0], 'y': [128.0]})
 
         result = photometry_measure.measure_objects_sep(
-            obj, image, fwhm=fwhm, gain=1.0,
+            obj,
+            image,
+            fwhm=fwhm,
+            gain=1.0,
         )
 
         assert 'x_psf' not in result.colnames
@@ -1791,7 +1803,9 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(fwhm)
 
         result = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model,
+            obj,
+            image,
+            psf=psf_model,
         )
         assert len(result) == 0
 
@@ -1805,7 +1819,11 @@ class TestSEPPSFPhotometry:
 
         with pytest.raises(ValueError, match="mutually exclusive"):
             photometry_measure.measure_objects_sep(
-                obj, image, psf=psf_model, optimal=True, fwhm=fwhm,
+                obj,
+                image,
+                psf=psf_model,
+                optimal=True,
+                fwhm=fwhm,
             )
 
     @_skip_no_sep_psf
@@ -1817,7 +1835,9 @@ class TestSEPPSFPhotometry:
 
         with pytest.raises(TypeError, match="Unsupported PSF type"):
             photometry_measure.measure_objects_sep(
-                obj, image, psf="not_a_psf",
+                obj,
+                image,
+                psf="not_a_psf",
             )
 
     # ── flux accuracy ────────────────────────────────────────────────
@@ -1830,14 +1850,15 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(fwhm)
 
         result = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
         )
 
         for i in range(len(true_fluxes)):
             bias = abs(result['flux'][i] / true_fluxes[i] - 1)
-            assert bias < 0.05, (
-                f"Star {i}: flux bias {bias*100:.1f}% exceeds 5%"
-            )
+            assert bias < 0.05, f"Star {i}: flux bias {bias * 100:.1f}% exceeds 5%"
 
     @_skip_no_sep_psf
     @pytest.mark.unit
@@ -1848,13 +1869,16 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(fwhm)
 
         result = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
             bg=np.full_like(image, bg),
             err=np.full_like(image, noise),
         )
 
         bias = abs(result['flux'][0] / true_flux - 1)
-        assert bias < 0.03, f"Flux bias {bias*100:.1f}% exceeds 3% with exact bg"
+        assert bias < 0.03, f"Flux bias {bias * 100:.1f}% exceeds 3% with exact bg"
 
     # ── position fitting ─────────────────────────────────────────────
 
@@ -1867,7 +1891,11 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(fwhm)
 
         result = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0, fit_positions=True,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
+            fit_positions=True,
         )
 
         # Position should be within 0.1 pixel of truth
@@ -1885,7 +1913,11 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(fwhm)
 
         result = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0, fit_positions=False,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
+            fit_positions=False,
         )
 
         assert result['x_psf'][0] == 128.0
@@ -1902,8 +1934,11 @@ class TestSEPPSFPhotometry:
 
         image = np.random.normal(100, 5, (256, 256)).astype(np.float64)
         image += _create_pixel_integrated_gaussian(
-            256, 130.0, 128.0,
-            true_flux / (2 * np.pi * sigma**2), sigma,
+            256,
+            130.0,
+            128.0,
+            true_flux / (2 * np.pi * sigma**2),
+            sigma,
         )
 
         # Initial guess 3 pixels away from true position
@@ -1911,13 +1946,15 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(fwhm)
 
         result = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0, fit_positions=True,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
+            fit_positions=True,
         )
 
         # The fitter should move towards the star; if shift > 1 pixel, flag is set
-        shift = np.sqrt(
-            (result['x_psf'][0] - 127.0)**2 + (result['y_psf'][0] - 128.0)**2
-        )
+        shift = np.sqrt((result['x_psf'][0] - 127.0) ** 2 + (result['y_psf'][0] - 128.0) ** 2)
         if shift > 1.0:
             assert result['flags'][0] & 0x2000, "Large shift should set 0x2000 flag"
 
@@ -1931,10 +1968,18 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(fwhm)
 
         result_grouped = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0, group_sources=True,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
+            group_sources=True,
         )
         result_ungrouped = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0, group_sources=False,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
+            group_sources=False,
         )
 
         bias_g = np.abs(result_grouped['flux'] / true_flux - 1)
@@ -1945,8 +1990,7 @@ class TestSEPPSFPhotometry:
 
         # Grouped should be at least as good, typically much better
         assert mean_bias_g <= mean_bias_u + 0.01, (
-            f"Grouped bias {mean_bias_g*100:.1f}% should be <= "
-            f"ungrouped {mean_bias_u*100:.1f}%"
+            f"Grouped bias {mean_bias_g * 100:.1f}% should be <= ungrouped {mean_bias_u * 100:.1f}%"
         )
 
     @_skip_no_sep_psf
@@ -1957,14 +2001,24 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(fwhm)
 
         result_g = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0, group_sources=True,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
+            group_sources=True,
         )
         result_u = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0, group_sources=False,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
+            group_sources=False,
         )
 
         np.testing.assert_allclose(
-            result_g['flux'], result_u['flux'], rtol=0.01,
+            result_g['flux'],
+            result_u['flux'],
+            rtol=0.01,
             err_msg="Grouped/ungrouped should agree for isolated stars",
         )
 
@@ -1979,7 +2033,10 @@ class TestSEPPSFPhotometry:
 
         psf_model = sep.PSF.from_gaussian(fwhm)
         result = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
         )
         assert np.isfinite(result['flux'][0])
 
@@ -1994,24 +2051,31 @@ class TestSEPPSFPhotometry:
         size = 21
         center = size // 2
         y, x = np.mgrid[0:size, 0:size]
-        stamp = np.exp(-((x - center)**2 + (y - center)**2) / (2 * sigma**2))
+        stamp = np.exp(-((x - center) ** 2 + (y - center) ** 2) / (2 * sigma**2))
         stamp /= stamp.sum()
 
         psf_dict = {
             'data': stamp[np.newaxis, :, :],
             'sampling': 1.0,
             'degree': 0,
-            'x0': 0, 'y0': 0, 'sx': 1, 'sy': 1,
+            'x0': 0,
+            'y0': 0,
+            'sx': 1,
+            'sy': 1,
             'fwhm': fwhm,
-            'width': size, 'height': size,
+            'width': size,
+            'height': size,
         }
 
         result = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_dict, gain=1.0,
+            obj,
+            image,
+            psf=psf_dict,
+            gain=1.0,
         )
 
         bias = abs(result['flux'][0] / true_flux - 1)
-        assert bias < 0.10, f"PSFEx dict flux bias {bias*100:.1f}% exceeds 10%"
+        assert bias < 0.10, f"PSFEx dict flux bias {bias * 100:.1f}% exceeds 10%"
 
     # ── masking and flags ────────────────────────────────────────────
 
@@ -2027,7 +2091,11 @@ class TestSEPPSFPhotometry:
         mask[126:128, 126:128] = True  # Mask a few pixels near the source
 
         result = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0, mask=mask,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
+            mask=mask,
         )
 
         assert np.isfinite(result['flux'][0])
@@ -2042,7 +2110,10 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(4.0)
 
         result = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
         )
 
         assert result['flags'][0] & 0x400, "Invalid position should set 0x400"
@@ -2059,7 +2130,10 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(fwhm)
 
         result = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
         )
 
         expected_mag = -2.5 * np.log10(result['flux'][0])
@@ -2073,10 +2147,17 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(fwhm)
 
         result_all = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
         )
         result_sn = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0, sn=500,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
+            sn=500,
         )
 
         assert len(result_sn) <= len(result_all)
@@ -2092,7 +2173,11 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(4.0)
 
         result = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0, keep_negative=False,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
+            keep_negative=False,
         )
         # Either empty or all positive
         if len(result) > 0:
@@ -2121,7 +2206,7 @@ class TestSEPPSFPhotometry:
             x = rng.uniform(margin, 512 - margin)
             y = rng.uniform(margin, 512 - margin)
             if xs:
-                dists = np.sqrt((np.array(xs) - x)**2 + (np.array(ys) - y)**2)
+                dists = np.sqrt((np.array(xs) - x) ** 2 + (np.array(ys) - y) ** 2)
                 if np.min(dists) < 5 * fwhm:
                     continue
             xs.append(x)
@@ -2137,7 +2222,10 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(fwhm)
 
         result = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
         )
 
         biases = result['flux'] / true_flux - 1
@@ -2145,9 +2233,8 @@ class TestSEPPSFPhotometry:
         mean_bias = np.abs(np.mean(biases[good]))
 
         assert mean_bias < 0.03, (
-            f"Mean bias {mean_bias*100:.2f}% exceeds 3% over {np.sum(good)} stars"
+            f"Mean bias {mean_bias * 100:.2f}% exceeds 3% over {np.sum(good)} stars"
         )
-
 
     # ── grouped flux-only (fit_positions=False) ────────────────────
 
@@ -2159,8 +2246,12 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(fwhm)
 
         result = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
-            group_sources=True, fit_positions=False,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
+            group_sources=True,
+            fit_positions=False,
         )
 
         # Positions must be unchanged
@@ -2181,20 +2272,27 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(fwhm)
 
         result_g = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
-            group_sources=True, fit_positions=False,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
+            group_sources=True,
+            fit_positions=False,
         )
         result_u = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
-            group_sources=False, fit_positions=False,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
+            group_sources=False,
+            fit_positions=False,
         )
 
         bias_g = np.mean(np.abs(result_g['flux'] / true_flux - 1))
         bias_u = np.mean(np.abs(result_u['flux'] / true_flux - 1))
 
         assert bias_g <= bias_u + 0.01, (
-            f"Grouped fixpos bias {bias_g*100:.1f}% should be <= "
-            f"ungrouped {bias_u*100:.1f}%"
+            f"Grouped fixpos bias {bias_g * 100:.1f}% should be <= ungrouped {bias_u * 100:.1f}%"
         )
 
     @_skip_no_sep_psf
@@ -2205,16 +2303,26 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(fwhm)
 
         result_g = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
-            group_sources=True, fit_positions=False,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
+            group_sources=True,
+            fit_positions=False,
         )
         result_u = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
-            group_sources=False, fit_positions=False,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
+            group_sources=False,
+            fit_positions=False,
         )
 
         np.testing.assert_allclose(
-            result_g['flux'], result_u['flux'], rtol=0.01,
+            result_g['flux'],
+            result_u['flux'],
+            rtol=0.01,
             err_msg="Grouped/ungrouped fixpos should agree for isolated stars",
         )
 
@@ -2229,7 +2337,10 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(fwhm)
 
         result = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
             fit_radius=2.0 * fwhm,
         )
 
@@ -2245,15 +2356,23 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(fwhm)
 
         result_default = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
         )
         result_zero = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
             fit_radius=0.0,
         )
 
         np.testing.assert_allclose(
-            result_default['flux'], result_zero['flux'], rtol=1e-6,
+            result_default['flux'],
+            result_zero['flux'],
+            rtol=1e-6,
         )
 
     @_skip_no_sep_psf
@@ -2267,7 +2386,10 @@ class TestSEPPSFPhotometry:
         assert psf_model.fit_radius == 0.0
 
         photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
             fit_radius=5.0 * fwhm,
         )
 
@@ -2283,7 +2405,10 @@ class TestSEPPSFPhotometry:
 
         # Get reference result with full stamp
         result_ref = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
         )
 
         # Set a restrictive fit_radius on the PSF object
@@ -2291,12 +2416,17 @@ class TestSEPPSFPhotometry:
 
         # Explicit fit_radius=0 should override the object's attribute
         result_override = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
             fit_radius=0.0,
         )
 
         np.testing.assert_allclose(
-            result_ref['flux'], result_override['flux'], rtol=1e-6,
+            result_ref['flux'],
+            result_override['flux'],
+            rtol=1e-6,
         )
 
         # Clean up
@@ -2310,8 +2440,12 @@ class TestSEPPSFPhotometry:
         psf_model = sep.PSF.from_gaussian(fwhm)
 
         result = photometry_measure.measure_objects_sep(
-            obj, image, psf=psf_model, gain=1.0,
-            group_sources=True, fit_positions=False,
+            obj,
+            image,
+            psf=psf_model,
+            gain=1.0,
+            group_sources=True,
+            fit_positions=False,
             fit_radius=2.0 * fwhm,
         )
 

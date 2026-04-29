@@ -1126,14 +1126,9 @@ def measure_objects(
         elif fwhm_s is not None:
             psf_for_extraction = fwhm if fwhm_is_callable else fwhm_s
             if fwhm_is_callable:
-                log(
-                    'Using spatial Gaussian PSF for optimal extraction (median FWHM=%.1f)'
-                    % fwhm_s
-                )
+                log('Using spatial Gaussian PSF for optimal extraction (median FWHM=%.1f)' % fwhm_s)
             else:
-                log(
-                    'Using Gaussian PSF with FWHM=%.1f for optimal extraction' % fwhm_s
-                )
+                log('Using Gaussian PSF with FWHM=%.1f for optimal extraction' % fwhm_s)
         else:
             raise ValueError("Either 'psf' or 'fwhm' must be provided for optimal extraction")
 
@@ -1351,6 +1346,8 @@ def measure_objects_sep(
     optimal=False,
     group_sources=True,
     group_factor=2.0,
+    group_radius_factor=1.0,
+    group_halo_factor=1.2,
     maxiter=20,
     fit_positions=True,
     fit_radius=0.0,
@@ -1410,8 +1407,17 @@ def measure_objects_sep(
     group_sources : bool
         If True, use grouped fitting for optimal or PSF photometry.
     group_factor : float
-        Grouping radius factor for PSF fitting. Only used for PSF fitting
-        when ``group_sources=True``.
+        Local fitting halo factor for grouped PSF fitting. Only used for
+        PSF fitting when ``group_sources=True``; SEP determines PSF-fit
+        connectivity from direct fit-support overlap.
+    group_radius_factor : float
+        Connectivity scale for grouped optimal extraction. Only used for
+        optimal extraction when ``group_sources=True``. The default 1.0
+        groups sources whose apertures overlap.
+    group_halo_factor : float or None
+        Local context halo scale for grouped optimal extraction. The default
+        1.2 keeps a modest expanded solve context without widening source
+        connectivity. ``None`` lets SEP use ``group_radius_factor``.
     maxiter : int
         Maximum number of PSF fitting iterations.
     fit_positions : bool
@@ -1636,9 +1642,7 @@ def measure_objects_sep(
         # broadcasted APIs; scalar ``fwhm`` remains a single float.
         fwhm_at_pos = None
         if fwhm_is_callable:
-            fwhm_at_pos = np.asarray(
-                fwhm(x_vals[valid_pos], y_vals[valid_pos]), dtype=float
-            )
+            fwhm_at_pos = np.asarray(fwhm(x_vals[valid_pos], y_vals[valid_pos]), dtype=float)
 
         # Prepare per-source aperture radius.
         if fwhm_at_pos is not None:
@@ -1664,8 +1668,10 @@ def measure_objects_sep(
             sep_psf = _get_sep_psf(psf, fwhm, log)
 
             log(
-                'Using SEP PSF fitting (grouped=%s, fit_positions=%s, maxiter=%d, fit_radius=%.1f, damp_snthresh=%.2f)'
-                % (group_sources, fit_positions, maxiter, fit_radius, damp_snthresh)
+                'Using SEP PSF fitting '
+                '(grouped=%s, group_factor=%.2g, fit_positions=%s, '
+                'maxiter=%d, fit_radius=%.1f, damp_snthresh=%.2f)'
+                % (group_sources, group_factor, fit_positions, maxiter, fit_radius, damp_snthresh)
             )
 
             # Build keyword arguments for sep.psf_fit
@@ -1739,7 +1745,18 @@ def measure_objects_sep(
                 log('Using SEP optimal extraction (no local background)')
 
             if group_sources:
-                log('Grouped optimal extraction enabled')
+                log(
+                    'Grouped optimal extraction enabled '
+                    '(radius_factor=%.2g, halo_factor=%s)'
+                    % (
+                        group_radius_factor,
+                        (
+                            'SEP default'
+                            if group_halo_factor is None
+                            else '%.2g' % group_halo_factor
+                        ),
+                    )
+                )
 
             # SEP accepts scalar or per-source arrays for aper and fwhm and
             # broadcasts them (fwhm array disables the grouped fast path but
@@ -1755,7 +1772,8 @@ def measure_objects_sep(
                 mask=mask | mask0,
                 bkgann=bkgann_pix,
                 grouped=group_sources,
-                group_radius_factor=1.2,  # Empirical
+                group_radius_factor=group_radius_factor,
+                group_halo_factor=group_halo_factor,
                 clip_sigma=clip_sigma,
                 clip_iters=clip_iters,
             )

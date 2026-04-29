@@ -99,7 +99,7 @@ class TestEstimateFwhm:
         stars = rng.normal(3.0, 0.1, 20)
         junk = rng.normal(10.0, 0.1, 20)
         values = np.concatenate([stars, junk])
-        good = np.array([True]*20 + [False]*20)
+        good = np.array([True] * 20 + [False] * 20)
         result = photometry.estimate_fwhm(values, good=good)
         assert abs(result - 3.0) < 0.2
 
@@ -122,12 +122,14 @@ class TestEstimateFwhmFromObjects:
         """Works with SEP-style table columns."""
         rng = np.random.default_rng(42)
         n = 100
-        obj = Table({
-            'fwhm': rng.normal(4.0, 0.2, n),
-            'a': rng.uniform(1.5, 2.5, n),
-            'b': rng.uniform(1.4, 2.4, n),
-            'flag': np.zeros(n, dtype=int),
-        })
+        obj = Table(
+            {
+                'fwhm': rng.normal(4.0, 0.2, n),
+                'a': rng.uniform(1.5, 2.5, n),
+                'b': rng.uniform(1.4, 2.4, n),
+                'flag': np.zeros(n, dtype=int),
+            }
+        )
         result = photometry.estimate_fwhm_from_objects(obj, snr_min=None)
         assert abs(result - 4.0) < 0.2
 
@@ -136,12 +138,14 @@ class TestEstimateFwhmFromObjects:
         """Works with SExtractor-style column names."""
         rng = np.random.default_rng(42)
         n = 100
-        obj = Table({
-            'FWHM_IMAGE': rng.normal(3.5, 0.15, n),
-            'A_IMAGE': rng.uniform(1.5, 2.5, n),
-            'B_IMAGE': rng.uniform(1.4, 2.4, n),
-            'FLAGS': np.zeros(n, dtype=int),
-        })
+        obj = Table(
+            {
+                'FWHM_IMAGE': rng.normal(3.5, 0.15, n),
+                'A_IMAGE': rng.uniform(1.5, 2.5, n),
+                'B_IMAGE': rng.uniform(1.4, 2.4, n),
+                'FLAGS': np.zeros(n, dtype=int),
+            }
+        )
         result = photometry.estimate_fwhm_from_objects(obj, snr_min=None)
         assert abs(result - 3.5) < 0.2
 
@@ -153,11 +157,13 @@ class TestEstimateFwhmFromObjects:
         # For Gaussian: FWHM = 2*sqrt(ln2*(a^2+b^2))
         # If a=b=sigma, FWHM = 2*sqrt(2*ln2)*sigma ≈ 2.355*sigma
         sigma = 1.7  # -> FWHM ~ 4.0
-        obj = Table({
-            'a': np.full(n, sigma) + rng.normal(0, 0.05, n),
-            'b': np.full(n, sigma) + rng.normal(0, 0.05, n),
-            'flag': np.zeros(n, dtype=int),
-        })
+        obj = Table(
+            {
+                'a': np.full(n, sigma) + rng.normal(0, 0.05, n),
+                'b': np.full(n, sigma) + rng.normal(0, 0.05, n),
+                'flag': np.zeros(n, dtype=int),
+            }
+        )
         expected = 2.0 * np.sqrt(np.log(2) * 2) * sigma
         result = photometry.estimate_fwhm_from_objects(obj, snr_min=None)
         assert abs(result - expected) < 0.3
@@ -172,10 +178,12 @@ class TestEstimateFwhmFromObjects:
         fwhm_vals = np.empty(n)
         fwhm_vals[:50] = 10.0  # flagged objects have wrong FWHM
         fwhm_vals[50:] = rng.normal(3.0, 0.1, 50)
-        obj = Table({
-            'fwhm': fwhm_vals,
-            'flag': flags,
-        })
+        obj = Table(
+            {
+                'fwhm': fwhm_vals,
+                'flag': flags,
+            }
+        )
         result = photometry.estimate_fwhm_from_objects(obj, snr_min=None, max_ellipticity=None)
         assert abs(result - 3.0) < 0.2
 
@@ -184,12 +192,14 @@ class TestEstimateFwhmFromObjects:
         """Elongated objects are excluded."""
         rng = np.random.default_rng(42)
         n = 100
-        obj = Table({
-            'fwhm': np.concatenate([rng.normal(3.0, 0.1, 80), rng.normal(8.0, 0.5, 20)]),
-            'a': np.concatenate([np.full(80, 2.0), np.full(20, 5.0)]),
-            'b': np.concatenate([np.full(80, 1.8), np.full(20, 1.0)]),  # elongated
-            'flag': np.zeros(n, dtype=int),
-        })
+        obj = Table(
+            {
+                'fwhm': np.concatenate([rng.normal(3.0, 0.1, 80), rng.normal(8.0, 0.5, 20)]),
+                'a': np.concatenate([np.full(80, 2.0), np.full(20, 5.0)]),
+                'b': np.concatenate([np.full(80, 1.8), np.full(20, 1.0)]),  # elongated
+                'flag': np.zeros(n, dtype=int),
+            }
+        )
         result = photometry.estimate_fwhm_from_objects(obj, snr_min=None, max_ellipticity=0.3)
         assert abs(result - 3.0) < 0.2
 
@@ -212,7 +222,7 @@ class TestSEPPhotometry:
             simple_image,
             mask=simple_mask,
             thresh=5.0,  # High threshold
-            verbose=False
+            verbose=False,
         )
 
         assert isinstance(obj, Table)
@@ -223,11 +233,7 @@ class TestSEPPhotometry:
     def test_get_objects_sep_with_sources(self, image_with_sources, simple_wcs):
         """Test SEP object detection on image with artificial sources."""
         obj = photometry.get_objects_sep(
-            image_with_sources,
-            thresh=5.0,
-            aper=3.0,
-            wcs=simple_wcs,
-            verbose=False
+            image_with_sources, thresh=5.0, aper=3.0, wcs=simple_wcs, verbose=False
         )
 
         assert isinstance(obj, Table)
@@ -251,18 +257,11 @@ class TestSEPPhotometry:
     def test_get_objects_sep_with_mask(self, image_with_sources, mask_with_bad_pixels):
         """Test that masking works properly."""
         # Detect without mask
-        obj_nomask = photometry.get_objects_sep(
-            image_with_sources,
-            thresh=5.0,
-            verbose=False
-        )
+        obj_nomask = photometry.get_objects_sep(image_with_sources, thresh=5.0, verbose=False)
 
         # Detect with mask
         obj_masked = photometry.get_objects_sep(
-            image_with_sources,
-            mask=mask_with_bad_pixels,
-            thresh=5.0,
-            verbose=False
+            image_with_sources, mask=mask_with_bad_pixels, thresh=5.0, verbose=False
         )
 
         # Both should be tables
@@ -278,18 +277,12 @@ class TestSEPPhotometry:
         """Test edge rejection parameter."""
         # No edge rejection
         obj_no_edge = photometry.get_objects_sep(
-            image_with_sources,
-            thresh=5.0,
-            edge=0,
-            verbose=False
+            image_with_sources, thresh=5.0, edge=0, verbose=False
         )
 
         # With edge rejection
         obj_with_edge = photometry.get_objects_sep(
-            image_with_sources,
-            thresh=5.0,
-            edge=20,
-            verbose=False
+            image_with_sources, thresh=5.0, edge=20, verbose=False
         )
 
         # Edge rejection should result in fewer or equal detections
@@ -300,18 +293,12 @@ class TestSEPPhotometry:
         """Test different background estimation parameters."""
         # Fine background grid
         obj_fine = photometry.get_objects_sep(
-            image_with_sources,
-            thresh=5.0,
-            bg_size=32,
-            verbose=False
+            image_with_sources, thresh=5.0, bg_size=32, verbose=False
         )
 
         # Coarse background grid
         obj_coarse = photometry.get_objects_sep(
-            image_with_sources,
-            thresh=5.0,
-            bg_size=128,
-            verbose=False
+            image_with_sources, thresh=5.0, bg_size=128, verbose=False
         )
 
         # Both should detect objects
@@ -348,8 +335,14 @@ class TestSEPPhotometry:
             verbose=False,
         )
 
-        idx_tight = np.argmin((np.asarray(obj_tight["x"], float) - 64.35) ** 2 + (np.asarray(obj_tight["y"], float) - 64.40) ** 2)
-        idx_broad = np.argmin((np.asarray(obj_broad["x"], float) - 64.35) ** 2 + (np.asarray(obj_broad["y"], float) - 64.40) ** 2)
+        idx_tight = np.argmin(
+            (np.asarray(obj_tight["x"], float) - 64.35) ** 2
+            + (np.asarray(obj_tight["y"], float) - 64.40) ** 2
+        )
+        idx_broad = np.argmin(
+            (np.asarray(obj_broad["x"], float) - 64.35) ** 2
+            + (np.asarray(obj_broad["y"], float) - 64.40) ** 2
+        )
 
         dx = float(obj_broad["x"][idx_broad] - obj_tight["x"][idx_tight])
         dy = float(obj_broad["y"][idx_broad] - obj_tight["y"][idx_tight])
@@ -392,6 +385,41 @@ class TestSEPPhotometry:
         assert seen["sig"] == pytest.approx((3.0 / 2.355) * 0.5)
         assert seen["maxstep"] == pytest.approx(0.2 * 3.0 * 2.0)
 
+    @pytest.mark.unit
+    def test_get_objects_sep_forwards_optimal_grouping_controls(self, monkeypatch):
+        """Grouped optimal-extraction controls should be forwarded to SEP."""
+        rng = np.random.default_rng(654)
+        image = rng.normal(100.0, 2.0, (64, 64))
+        yy, xx = np.mgrid[:64, :64]
+        sigma = 3.0 / 2.3548
+        image += 2200.0 * np.exp(-((xx - 32.2) ** 2 + (yy - 31.8) ** 2) / (2 * sigma**2))
+
+        seen = {}
+
+        def fake_sum_circle_optimal(data, x, y, r, fwhm, **kwargs):
+            seen.update(kwargs)
+            n = len(np.atleast_1d(x))
+            return np.full(n, 1000.0), np.ones(n), np.zeros(n, dtype=int)
+
+        monkeypatch.setattr(photometry.sep, "sum_circle_optimal", fake_sum_circle_optimal)
+
+        obj = photometry.get_objects_sep(
+            image,
+            thresh=5.0,
+            aper=1.5,
+            fwhm=3.0,
+            optimal=True,
+            group_sources=True,
+            group_radius_factor=0.9,
+            group_halo_factor=1.4,
+            verbose=False,
+        )
+
+        assert len(obj) == 1
+        assert seen["grouped"] is True
+        assert seen["group_radius_factor"] == pytest.approx(0.9)
+        assert seen["group_halo_factor"] == pytest.approx(1.4)
+
 
 class TestSExtractorIntegration:
     """Integration tests for SExtractor wrapper."""
@@ -401,11 +429,7 @@ class TestSExtractorIntegration:
     def test_get_objects_sextractor_basic(self, image_with_sources, temp_dir):
         """Test basic SExtractor object detection."""
         obj = photometry.get_objects_sextractor(
-            image_with_sources,
-            thresh=5.0,
-            aper=3.0,
-            _workdir=temp_dir,
-            verbose=False
+            image_with_sources, thresh=5.0, aper=3.0, _workdir=temp_dir, verbose=False
         )
 
         assert isinstance(obj, Table)
@@ -421,18 +445,12 @@ class TestSExtractorIntegration:
         """Test that SExtractor and SEP give similar results."""
         # SEP detection
         obj_sep = photometry.get_objects_sep(
-            image_with_sources,
-            thresh=5.0,
-            aper=3.0,
-            verbose=False
+            image_with_sources, thresh=5.0, aper=3.0, verbose=False
         )
 
         # SExtractor detection
         obj_sex = photometry.get_objects_sextractor(
-            image_with_sources,
-            thresh=5.0,
-            aper=3.0,
-            verbose=False
+            image_with_sources, thresh=5.0, aper=3.0, verbose=False
         )
 
         # Should detect similar number of objects (within reason)
@@ -450,12 +468,7 @@ class TestGetObjectsPhotutils:
     def test_dao_basic(self, image_with_sources):
         """Test DAOStarFinder detection."""
         obj = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=5.0,
-            method='dao',
-            fwhm=3.0,
-            aper=3.0,
-            verbose=False
+            image_with_sources, thresh=5.0, method='dao', fwhm=3.0, aper=3.0, verbose=False
         )
 
         # Should detect sources
@@ -476,12 +489,7 @@ class TestGetObjectsPhotutils:
     def test_iraf_basic(self, image_with_sources):
         """Test IRAFStarFinder detection."""
         obj = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=5.0,
-            method='iraf',
-            fwhm=3.0,
-            aper=3.0,
-            verbose=False
+            image_with_sources, thresh=5.0, method='iraf', fwhm=3.0, aper=3.0, verbose=False
         )
 
         # Should detect sources
@@ -510,7 +518,7 @@ class TestGetObjectsPhotutils:
             method='segmentation',
             deblend=False,
             aper=3.0,
-            verbose=False
+            verbose=False,
         )
 
         # Detect with deblending
@@ -522,7 +530,7 @@ class TestGetObjectsPhotutils:
             nlevels=32,
             contrast=0.001,
             aper=3.0,
-            verbose=False
+            verbose=False,
         )
 
         # Both should detect sources
@@ -544,7 +552,7 @@ class TestGetObjectsPhotutils:
             nlevels=16,
             contrast=0.01,
             aper=3.0,
-            verbose=False
+            verbose=False,
         )
 
         assert len(obj) > 0
@@ -559,11 +567,7 @@ class TestGetObjectsPhotutils:
         """Test detection with different aperture sizes."""
         for aper_size in [2.0, 3.0, 5.0]:
             obj = photometry.get_objects_photutils(
-                image_with_sources,
-                thresh=3.0,
-                method='segmentation',
-                aper=aper_size,
-                verbose=False
+                image_with_sources, thresh=3.0, method='segmentation', aper=aper_size, verbose=False
             )
 
             assert len(obj) > 0
@@ -578,7 +582,7 @@ class TestGetObjectsPhotutils:
             method='segmentation',
             aper=3.0,
             bkgann=(5.0, 8.0),
-            verbose=False
+            verbose=False,
         )
 
         assert len(obj) > 0
@@ -590,20 +594,12 @@ class TestGetObjectsPhotutils:
         """Test with and without background subtraction."""
         # With background subtraction (default)
         obj_with_bg = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=3.0,
-            method='segmentation',
-            subtract_bg=True,
-            verbose=False
+            image_with_sources, thresh=3.0, method='segmentation', subtract_bg=True, verbose=False
         )
 
         # Without background subtraction
         obj_no_bg = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=3.0,
-            method='segmentation',
-            subtract_bg=False,
-            verbose=False
+            image_with_sources, thresh=3.0, method='segmentation', subtract_bg=False, verbose=False
         )
 
         # Both should detect sources
@@ -615,18 +611,12 @@ class TestGetObjectsPhotutils:
         """Test different detection thresholds."""
         # Lower threshold should detect more sources
         obj_low = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=2.0,
-            method='segmentation',
-            verbose=False
+            image_with_sources, thresh=2.0, method='segmentation', verbose=False
         )
 
         # Higher threshold should detect fewer sources
         obj_high = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=5.0,
-            method='segmentation',
-            verbose=False
+            image_with_sources, thresh=5.0, method='segmentation', verbose=False
         )
 
         # Both should detect something
@@ -640,11 +630,7 @@ class TestGetObjectsPhotutils:
     def test_custom_background_size(self, image_with_sources):
         """Test with custom background grid size."""
         obj = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=3.0,
-            method='segmentation',
-            bg_size=32,
-            verbose=False
+            image_with_sources, thresh=3.0, method='segmentation', bg_size=32, verbose=False
         )
 
         assert len(obj) > 0
@@ -658,20 +644,12 @@ class TestGetObjectsPhotutils:
         """Test edge exclusion filtering."""
         # No edge filter
         obj_no_edge = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=2.0,
-            method='segmentation',
-            edge=0,
-            verbose=False
+            image_with_sources, thresh=2.0, method='segmentation', edge=0, verbose=False
         )
 
         # With edge filter
         obj_edge = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=2.0,
-            method='segmentation',
-            edge=20,
-            verbose=False
+            image_with_sources, thresh=2.0, method='segmentation', edge=20, verbose=False
         )
 
         # Edge filter should remove some sources
@@ -682,20 +660,12 @@ class TestGetObjectsPhotutils:
         """Test S/N filtering."""
         # Low S/N threshold
         obj_low_sn = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=2.0,
-            method='segmentation',
-            sn=2.0,
-            verbose=False
+            image_with_sources, thresh=2.0, method='segmentation', sn=2.0, verbose=False
         )
 
         # High S/N threshold
         obj_high_sn = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=2.0,
-            method='segmentation',
-            sn=10.0,
-            verbose=False
+            image_with_sources, thresh=2.0, method='segmentation', sn=10.0, verbose=False
         )
 
         # Higher S/N threshold should give fewer sources
@@ -706,20 +676,12 @@ class TestGetObjectsPhotutils:
         """Test minimum area filtering (segmentation only)."""
         # Small minarea
         obj_small = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=2.0,
-            method='segmentation',
-            minarea=3,
-            verbose=False
+            image_with_sources, thresh=2.0, method='segmentation', minarea=3, verbose=False
         )
 
         # Large minarea
         obj_large = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=2.0,
-            method='segmentation',
-            minarea=20,
-            verbose=False
+            image_with_sources, thresh=2.0, method='segmentation', minarea=20, verbose=False
         )
 
         # Larger minarea should give fewer sources
@@ -737,7 +699,7 @@ class TestGetObjectsPhotutils:
             header=header_with_wcs,
             thresh=3.0,
             method='segmentation',
-            verbose=False
+            verbose=False,
         )
 
         assert len(obj) > 0
@@ -752,11 +714,7 @@ class TestGetObjectsPhotutils:
     def test_wcs_direct(self, image_with_sources, simple_wcs):
         """Test WCS conversion from WCS object."""
         obj = photometry.get_objects_photutils(
-            image_with_sources,
-            wcs=simple_wcs,
-            thresh=3.0,
-            method='segmentation',
-            verbose=False
+            image_with_sources, wcs=simple_wcs, thresh=3.0, method='segmentation', verbose=False
         )
 
         assert len(obj) > 0
@@ -767,10 +725,7 @@ class TestGetObjectsPhotutils:
     def test_no_wcs(self, image_with_sources):
         """Test without WCS (no RA/Dec columns)."""
         obj = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=3.0,
-            method='segmentation',
-            verbose=False
+            image_with_sources, thresh=3.0, method='segmentation', verbose=False
         )
 
         # Should not have RA/Dec columns
@@ -785,15 +740,25 @@ class TestGetObjectsPhotutils:
     def test_output_columns(self, image_with_sources):
         """Test that all required columns are present."""
         obj = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=3.0,
-            method='segmentation',
-            verbose=False
+            image_with_sources, thresh=3.0, method='segmentation', verbose=False
         )
 
-        required = ['x', 'y', 'xerr', 'yerr', 'flux', 'fluxerr',
-                    'mag', 'magerr', 'fwhm', 'a', 'b', 'theta',
-                    'bg', 'flags']
+        required = [
+            'x',
+            'y',
+            'xerr',
+            'yerr',
+            'flux',
+            'fluxerr',
+            'mag',
+            'magerr',
+            'fwhm',
+            'a',
+            'b',
+            'theta',
+            'bg',
+            'flags',
+        ]
 
         for col in required:
             assert col in obj.colnames, f"Missing required column: {col}"
@@ -806,7 +771,7 @@ class TestGetObjectsPhotutils:
             thresh=3.0,
             method='segmentation',
             get_segmentation=True,
-            verbose=False
+            verbose=False,
         )
 
         assert len(obj) > 0
@@ -823,7 +788,7 @@ class TestGetObjectsPhotutils:
             method='dao',
             fwhm=3.0,
             get_segmentation=True,
-            verbose=False
+            verbose=False,
         )
 
         assert len(obj) > 0
@@ -835,10 +800,7 @@ class TestGetObjectsPhotutils:
         """Test handling of no detections."""
         # Very high threshold should detect nothing
         obj = photometry.get_objects_photutils(
-            simple_image,
-            thresh=100.0,
-            method='segmentation',
-            verbose=False
+            simple_image, thresh=100.0, method='segmentation', verbose=False
         )
 
         # Should return empty table
@@ -857,7 +819,7 @@ class TestGetObjectsPhotutils:
             deblend=True,
             aper=5.0,
             bkgann=(10.0, 15.0),
-            verbose=False
+            verbose=False,
         )
 
         assert 'method' in obj.meta
@@ -875,10 +837,7 @@ class TestGetObjectsPhotutils:
     def test_sorted_by_brightness(self, image_with_sources):
         """Test that sources are sorted by brightness (flux descending)."""
         obj = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=2.0,
-            method='segmentation',
-            verbose=False
+            image_with_sources, thresh=2.0, method='segmentation', verbose=False
         )
 
         if len(obj) > 1:
@@ -897,7 +856,7 @@ class TestGetObjectsPhotutils:
             mask=mask_with_bad_pixels,
             thresh=3.0,
             method='segmentation',
-            verbose=False
+            verbose=False,
         )
 
         # Should still detect sources in unmasked regions
@@ -910,11 +869,7 @@ class TestGetObjectsPhotutils:
         err = np.full_like(image_with_sources, 5.0)
 
         obj = photometry.get_objects_photutils(
-            image_with_sources,
-            err=err,
-            thresh=3.0,
-            method='segmentation',
-            verbose=False
+            image_with_sources, err=err, thresh=3.0, method='segmentation', verbose=False
         )
 
         assert len(obj) > 0
@@ -927,10 +882,7 @@ class TestGetObjectsPhotutils:
         image_with_nans[10:20, 10:20] = np.nan
 
         obj = photometry.get_objects_photutils(
-            image_with_nans,
-            thresh=3.0,
-            method='segmentation',
-            verbose=False
+            image_with_nans, thresh=3.0, method='segmentation', verbose=False
         )
 
         # Should still detect sources in valid regions
@@ -941,10 +893,7 @@ class TestGetObjectsPhotutils:
         """Test that invalid method raises error."""
         with pytest.raises(ValueError, match="Unknown method"):
             photometry.get_objects_photutils(
-                image_with_sources,
-                thresh=3.0,
-                method='invalid_method',
-                verbose=False
+                image_with_sources, thresh=3.0, method='invalid_method', verbose=False
             )
 
     @pytest.mark.unit
@@ -953,20 +902,13 @@ class TestGetObjectsPhotutils:
         image_3d = np.random.normal(100, 10, (10, 10, 10))
 
         with pytest.raises(ValueError, match="Image must be 2D"):
-            photometry.get_objects_photutils(
-                image_3d,
-                thresh=3.0,
-                method='segmentation'
-            )
+            photometry.get_objects_photutils(image_3d, thresh=3.0, method='segmentation')
 
     @pytest.mark.unit
     def test_verbose_output(self, image_with_sources, capsys):
         """Test verbose output."""
         obj = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=3.0,
-            method='segmentation',
-            verbose=True
+            image_with_sources, thresh=3.0, method='segmentation', verbose=True
         )
 
         # Capture printed output
@@ -990,7 +932,7 @@ class TestGetObjectsPhotutils:
             fwhm=3.0,
             sharplo=0.3,
             sharphi=0.9,
-            verbose=False
+            verbose=False,
         )
 
         # May detect fewer sources due to stricter sharpness criteria
@@ -1007,7 +949,7 @@ class TestGetObjectsPhotutils:
             fwhm=3.0,
             roundlo=-0.5,
             roundhi=0.5,
-            verbose=False
+            verbose=False,
         )
 
         # May detect fewer sources due to stricter roundness criteria
@@ -1023,19 +965,12 @@ class TestGetObjectsPhotutils:
         """Test that different methods on same image give reasonable results."""
         # Segmentation
         obj_seg = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=3.0,
-            method='segmentation',
-            verbose=False
+            image_with_sources, thresh=3.0, method='segmentation', verbose=False
         )
 
         # DAOStarFinder
         obj_dao = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=5.0,
-            method='dao',
-            fwhm=3.0,
-            verbose=False
+            image_with_sources, thresh=5.0, method='dao', fwhm=3.0, verbose=False
         )
 
         # Both should detect sources
@@ -1067,7 +1002,7 @@ class TestGetObjectsPhotutils:
             sn=3.0,
             minarea=5,
             get_segmentation=True,
-            verbose=False
+            verbose=False,
         )
 
         # Should detect sources
@@ -1098,7 +1033,7 @@ class TestPhotutilsFlags:
             method='segmentation',
             deblend=False,
             aper=3.0,
-            verbose=False
+            verbose=False,
         )
 
         obj_deblend = photometry.get_objects_photutils(
@@ -1107,7 +1042,7 @@ class TestPhotutilsFlags:
             method='segmentation',
             deblend=True,
             aper=3.0,
-            verbose=False
+            verbose=False,
         )
 
         # When deblending is enabled and there are blended sources,
@@ -1129,11 +1064,7 @@ class TestPhotutilsFlags:
         img[-5:, 0:5] = 500  # Bottom-left corner
 
         obj = photometry.get_objects_photutils(
-            img,
-            thresh=3.0,
-            method='segmentation',
-            aper=3.0,
-            verbose=False
+            img, thresh=3.0, method='segmentation', aper=3.0, verbose=False
         )
 
         if len(obj) > 0:
@@ -1152,12 +1083,7 @@ class TestPhotutilsFlags:
 
         # Without saturation parameter, no 0x004 flag
         obj_no_sat = photometry.get_objects_photutils(
-            img,
-            thresh=2.0,
-            method='segmentation',
-            saturation=None,
-            aper=3.0,
-            verbose=False
+            img, thresh=2.0, method='segmentation', saturation=None, aper=3.0, verbose=False
         )
 
         if len(obj_no_sat) > 0:
@@ -1171,7 +1097,7 @@ class TestPhotutilsFlags:
             method='segmentation',
             saturation=100,  # Much lower threshold
             aper=3.0,
-            verbose=False
+            verbose=False,
         )
 
         if len(obj_sat) > 0:
@@ -1192,7 +1118,7 @@ class TestPhotutilsFlags:
             thresh=2.0,
             method='segmentation',
             aper=3.0,
-            verbose=False
+            verbose=False,
         )
 
         obj_with_mask = photometry.get_objects_photutils(
@@ -1201,7 +1127,7 @@ class TestPhotutilsFlags:
             thresh=2.0,
             method='segmentation',
             aper=3.0,
-            verbose=False
+            verbose=False,
         )
 
         if len(obj_no_mask) > 0:
@@ -1220,12 +1146,7 @@ class TestPhotutilsFlags:
     def test_dao_edge_flag(self, image_with_sources):
         """Test edge/truncation flag for DAOStarFinder."""
         obj = photometry.get_objects_photutils(
-            image_with_sources,
-            thresh=3.0,
-            method='dao',
-            fwhm=3.0,
-            aper=3.0,
-            verbose=False
+            image_with_sources, thresh=3.0, method='dao', fwhm=3.0, aper=3.0, verbose=False
         )
 
         if len(obj) > 0:
@@ -1246,7 +1167,7 @@ class TestPhotutilsFlags:
             sharplo=0.2,
             sharphi=1.0,
             aper=3.0,
-            verbose=False
+            verbose=False,
         )
 
         if len(obj) > 0:
@@ -1264,13 +1185,7 @@ class TestPhotutilsFlags:
         img[50:55, 50:55] = 200
 
         obj_no_sat = photometry.get_objects_photutils(
-            img,
-            thresh=2.0,
-            method='dao',
-            fwhm=3.0,
-            saturation=None,
-            aper=3.0,
-            verbose=False
+            img, thresh=2.0, method='dao', fwhm=3.0, saturation=None, aper=3.0, verbose=False
         )
 
         if len(obj_no_sat) > 0:
@@ -1278,13 +1193,7 @@ class TestPhotutilsFlags:
             assert np.all(sat_flags == 0)
 
         obj_sat = photometry.get_objects_photutils(
-            img,
-            thresh=2.0,
-            method='dao',
-            fwhm=3.0,
-            saturation=150,
-            aper=3.0,
-            verbose=False
+            img, thresh=2.0, method='dao', fwhm=3.0, saturation=150, aper=3.0, verbose=False
         )
 
         if len(obj_sat) > 0:
@@ -1300,7 +1209,7 @@ class TestPhotutilsFlags:
             method='segmentation',
             # saturation not provided - should default to None
             aper=3.0,
-            verbose=False
+            verbose=False,
         )
 
         if len(obj) > 0:
@@ -1317,7 +1226,7 @@ class TestPhotutilsFlags:
             thresh=2.0,
             method='segmentation',
             aper=3.0,
-            verbose=False
+            verbose=False,
         )
 
         if len(obj) > 0:
@@ -1342,7 +1251,7 @@ class TestPhotutilsFlags:
             method='segmentation',
             saturation=200,
             aper=3.0,
-            verbose=False
+            verbose=False,
         )
 
         if len(obj) > 0:
@@ -1363,7 +1272,7 @@ class TestPhotutilsFlags:
             saturation=None,  # No saturation checking
             mask=None,  # No mask
             aper=3.0,
-            verbose=False
+            verbose=False,
         )
 
         if len(obj) > 0:
