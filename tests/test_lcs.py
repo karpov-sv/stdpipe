@@ -54,7 +54,7 @@ def test_cluster_merges_when_radius_large():
     assert lcs.lcs['N'][0] == 5
 
 
-def test_cluster_unionfind_matches_iterative_with_overlap():
+def test_cluster_separates_bridged_overlapping_groups():
     sr = 1 / 3600
     ra0 = 0.0
     dec0 = 0.0
@@ -70,24 +70,14 @@ def test_cluster_unionfind_matches_iterative_with_overlap():
     dec = np.concatenate([c1_dec, c2_dec, [dec0]])
 
     np.random.seed(0)
-    lcs_iter = LCs()
-    lcs_iter.add(ra=ra, dec=dec)
-    lcs_iter.cluster(
-        sr=sr, min_length=2, verbose=False, method='auto', unionfind_threshold=10**9
-    )
+    lcs = LCs()
+    lcs.add(ra=ra, dec=dec)
+    lcs.cluster(sr=sr, min_length=2, verbose=False)
 
-    np.random.seed(0)
-    lcs_uf = LCs()
-    lcs_uf.add(ra=ra, dec=dec)
-    lcs_uf.cluster(sr=sr, min_length=2, verbose=False, method='unionfind')
-
-    assert len(lcs_iter.lcs['ra']) == len(lcs_uf.lcs['ra']) == 2
-    assert sorted(lcs_iter.lcs['N'].tolist()) == sorted(lcs_uf.lcs['N'].tolist())
-
-    order_iter = np.argsort(lcs_iter.lcs['ra'])
-    order_uf = np.argsort(lcs_uf.lcs['ra'])
-    assert np.allclose(lcs_iter.lcs['ra'][order_iter], lcs_uf.lcs['ra'][order_uf], atol=1e-6)
-    assert np.allclose(lcs_iter.lcs['dec'][order_iter], lcs_uf.lcs['dec'][order_uf], atol=1e-6)
+    assert len(lcs.lcs['ra']) == 2
+    # The bridge point falls within sr of both group centroids and ends up
+    # claimed by each cluster.
+    assert sorted(lcs.lcs['N'].tolist()) == [4, 4]
 
 
 def test_cluster_gaussian_separation():
@@ -107,33 +97,17 @@ def test_cluster_gaussian_separation():
     dec = np.concatenate([dec1, dec2])
 
     np.random.seed(0)
-    lcs_iter = LCs()
-    lcs_iter.add(ra=ra, dec=dec)
-    lcs_iter.cluster(
-        sr=sr, min_length=20, verbose=False, method='auto', unionfind_threshold=10**9
-    )
+    lcs = LCs()
+    lcs.add(ra=ra, dec=dec)
+    lcs.cluster(sr=sr, min_length=20, verbose=False)
 
-    lcs_uf = LCs()
-    lcs_uf.add(ra=ra, dec=dec)
-    lcs_uf.cluster(sr=sr, min_length=20, verbose=False, method='unionfind')
+    assert len(lcs.lcs['ra']) >= 2
 
-    assert len(lcs_iter.lcs['ra']) >= 2
-    assert len(lcs_uf.lcs['ra']) >= 2
-
-    order = np.argsort(lcs_iter.lcs['N'])[::-1]
-    ra_centers = lcs_iter.lcs['ra'][order[:2]]
-    dec_centers = lcs_iter.lcs['dec'][order[:2]]
+    order = np.argsort(lcs.lcs['N'])[::-1]
+    ra_centers = lcs.lcs['ra'][order[:2]]
+    dec_centers = lcs.lcs['dec'][order[:2]]
     sep_meas = astrometry.spherical_distance(
         ra_centers[0], dec_centers[0], ra_centers[1], dec_centers[1]
     )
     assert sep_meas > 1.5 * sr
     assert sep_meas < 2.5 * sr
-
-    order_uf = np.argsort(lcs_uf.lcs['N'])[::-1]
-    ra_centers_uf = lcs_uf.lcs['ra'][order_uf[:2]]
-    dec_centers_uf = lcs_uf.lcs['dec'][order_uf[:2]]
-    sep_meas_uf = astrometry.spherical_distance(
-        ra_centers_uf[0], dec_centers_uf[0], ra_centers_uf[1], dec_centers_uf[1]
-    )
-    assert sep_meas_uf > 1.5 * sr
-    assert sep_meas_uf < 2.5 * sr

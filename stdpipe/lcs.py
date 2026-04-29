@@ -102,8 +102,6 @@ class LCs:
         verbose=True,
         analyze=None,
         N=1000,
-        method='auto',
-        unionfind_threshold=5000,
         max_refine_iter=1,
     ):
         """
@@ -127,10 +125,6 @@ class LCs:
             respective keys (one entry per cluster).
         N : int, optional
             Progress update interval in points.
-        method : {'auto', 'unionfind'}, optional
-            Use union-find prepass to limit scan to connected components.
-        unionfind_threshold : int, optional
-            Minimum number of points for enabling union-find when method='auto'.
         max_refine_iter : int, optional
             Maximum number of centroid refinement iterations (default 1).
         """
@@ -186,10 +180,6 @@ class LCs:
             % (len(vmask), sr * 3600)
         )
 
-        use_unionfind = method == 'unionfind'
-        if method == 'auto':
-            use_unionfind = len(vmask) >= unionfind_threshold
-
         def process_seed(i):
             # Select points around seed position
             ids = kd.query_ball_point([xarr[i], yarr[i], zarr[i]], sr0)
@@ -228,42 +218,13 @@ class LCs:
                             self.lcs[_] = []
                         self.lcs[_].append(__)
 
-        if use_unionfind:
-            pairs = kd.query_pairs(sr0)
-            parent = np.arange(len(vmask))
+        for i in range(len(vmask)):
+            if not vmask[i]:
+                process_seed(i)
 
-            def find(i):
-                while parent[i] != i:
-                    parent[i] = parent[parent[i]]
-                    i = parent[i]
-                return i
-
-            def union(i, j):
-                ri = find(i)
-                rj = find(j)
-                if ri != rj:
-                    parent[rj] = ri
-
-            for i, j in pairs:
-                union(i, j)
-
-            comps = {}
-            for i in range(len(vmask)):
-                root = find(i)
-                comps.setdefault(root, []).append(i)
-
-            comp_list = list(comps.values())
-        else:
-            comp_list = [np.arange(len(vmask))]
-
-        for comp in comp_list:
-            for i in comp:
-                if not vmask[i]:
-                    process_seed(i)
-
-                if i % N == 0 and verbose == True:
-                    sys.stdout.write("\r %d points - %d lcs" % (i, len(self.lcs['x'])))
-                    sys.stdout.flush()
+            if i % N == 0 and verbose == True:
+                sys.stdout.write("\r %d points - %d lcs" % (i, len(self.lcs['x'])))
+                sys.stdout.flush()
 
         if verbose == True:
             sys.stdout.write("\n")

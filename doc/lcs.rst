@@ -42,8 +42,8 @@ should return a mapping; each value is appended to ``self.lcs`` under its key.
    lcs.cluster(sr=1/3600, analyze=analyze)
    print(lcs.lcs['mean_flux'])
 
-Key parameters include ``sr`` (radius in degrees), ``min_length``, and ``method`` to
-control the union-find prepass for large datasets.
+Key parameters include ``sr`` (radius in degrees) and ``min_length`` (minimum number of
+detections required to keep a cluster).
 
 .. autoclass:: stdpipe.lcs.LCs
    :noindex:
