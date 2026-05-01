@@ -174,3 +174,65 @@ Simple SIP fitting (astropy / astrometrynet)
 
 .. autofunction:: stdpipe.astrometry.refine_wcs_simple
    :noindex:
+
+
+Residual-field correction
+-------------------------
+
+After the WCS fit, matched ``obj``--``cat`` pairs typically still show systematic per-position residuals: a few hundredths of a pixel from un-modelled distortions, a residual tilt the polynomial could not absorb, or PSF-position biases that the WCS solver cannot see. *STDPipe* can fit a smooth two-component ``(dx, dy)`` correction field on top of the WCS and either return it as a callable or apply it in place.
+
+The primitive lives in :mod:`stdpipe.astrometry`:
+
+- :func:`~stdpipe.astrometry.fit_astrometric_residuals` -- raw API: take observed and WCS-predicted pixel positions of matched sources, return a callable ``correct(x, y) -> (x_corrected, y_corrected)``.
+- :func:`~stdpipe.astrometry.refine_positions_from_catalog` -- convenience that takes a match dict (the output of :func:`~stdpipe.pipeline.calibrate_photometry` or :func:`~stdpipe.photometry.match`), pulls out the matched positions, and forwards to the primitive. Returns ``(correct, info)`` where ``info`` carries pre/post-correction median and 90th-percentile residual magnitudes.
+
+Both default to a fast bilinear-grid backend (``backend='grid'``) suitable for dense forced-photometry workloads (~600--1000x faster at prediction than LOESS); pass ``backend='loess'`` for higher-quality smoothing when prediction is needed at modest numbers of points. The underlying smoother is :func:`stdpipe.smoothing.fit_vector_field_2d`.
+
+.. code-block:: python
+
+   # Build the correction from an already-matched obj/cat pair
+   from stdpipe import astrometry, pipeline
+
+   m = pipeline.calibrate_photometry(obj, cat, sr=2/3600, wcs=wcs,
+                                     cat_col_mag='rmag', verbose=True)
+   correct, info = astrometry.refine_positions_from_catalog(
+       m, obj, cat, wcs,
+       image_shape=image.shape,
+       grid_shape=(8, 6),       # binned-grid resolution
+   )
+   print('median |Δ| {:.3f} → {:.3f} px, q90 {:.3f} → {:.3f} px'.format(
+       info['raw_median_dr_pix'], info['corrected_median_dr_pix'],
+       info['raw_q90_dr_pix'], info['corrected_q90_dr_pix']))
+
+   # Use the correction to refine catalogue-projected positions e.g. for
+   # forced-position aperture photometry of every catalogue source.
+   x_pred, y_pred = wcs.all_world2pix(cat['ra'], cat['dec'], 0)
+   x_corr, y_corr = correct(x_pred, y_pred)
+
+
+.. autofunction:: stdpipe.astrometry.fit_astrometric_residuals
+   :noindex:
+
+.. autofunction:: stdpipe.astrometry.refine_positions_from_catalog
+   :noindex:
+
+
+Pipeline integration
+^^^^^^^^^^^^^^^^^^^^
+
+:func:`~stdpipe.pipeline.refine_astrometry` accepts opt-in ``refine_residual_field=True`` and ``residual_field_kwargs=`` parameters. When enabled, after the WCS fit the function re-matches ``obj`` to ``cat`` positionally via :func:`~stdpipe.astrometry.spherical_match`, fits the residual field, and -- when ``update=True`` -- subtracts the smooth correction from ``obj['x']``/``obj['y']`` in place before re-deriving ``obj['ra']``/``obj['dec']`` from the refined positions. ``obj['x']``/``['y']`` then lie on the WCS-consistent grid and downstream code can work with the WCS alone, without carrying the correction model.
+
+.. code-block:: python
+
+   wcs = pipeline.refine_astrometry(
+       obj, cat, sr=2/3600, wcs=wcs, order=2, cat_col_mag='rmag',
+       refine_residual_field=True,
+       residual_field_kwargs=dict(
+           image_shape=image.shape,
+           grid_shape=(8, 6),
+           min_per_cell=6, smooth_sigma=1.0,
+       ),
+       verbose=True,
+   )
+
+A short diagnostic line is logged with the number of matches used and the median/90th-percentile residual magnitudes before and after the correction. The block silently skips when fewer than 50 positional matches survive, leaving ``obj`` untouched and the WCS unchanged.

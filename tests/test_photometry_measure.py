@@ -2458,5 +2458,251 @@ class TestSEPPSFPhotometry:
         np.testing.assert_array_equal(result['y_psf'], obj['y'])
 
 
+# ============================================================================
+# measure_aperture_deblended
+# ============================================================================
+
+
+def _gaussian_psf_dict(sigma=2.0, size=51):
+    half = size // 2
+    yy, xx = np.mgrid[0:size, 0:size]
+    g = np.exp(-((xx - half) ** 2 + (yy - half) ** 2) / (2 * sigma ** 2))
+    g /= g.sum()
+    return {
+        'data': g[None, :, :], 'width': size, 'height': size,
+        'sampling': 1.0, 'degree': 0, 'ncoeffs': 1,
+        'x0': 0.0, 'y0': 0.0, 'sx': 1.0, 'sy': 1.0, 'type': 'epsf',
+    }
+
+
+def _make_field(positions, total_fluxes, sigma=2.0, shape=(200, 200), noise=0.0,
+                seed=0):
+    """Render a synthetic image with PSF stamps placed at positions, and
+    return (image, psf_dict)."""
+    from stdpipe.psf import place_psf_stamp
+    psf = _gaussian_psf_dict(sigma=sigma)
+    img = np.zeros(shape, dtype=np.float64)
+    for (x, y), f in zip(positions, total_fluxes):
+        place_psf_stamp(img, psf, float(x), float(y), flux=float(f))
+    if noise > 0:
+        rng = np.random.default_rng(seed)
+        img += rng.normal(0, noise, img.shape)
+    return img, psf
+
+
+@pytest.mark.unit
+class TestMeasureApertureDeblended:
+    """Tests for ``measure_aperture_deblended``."""
+
+    def test_isolated_source_matches_plain_aperture(self):
+        """For a perfectly isolated source the deblending term cancels and
+        the hybrid flux must equal the plain aperture sum."""
+        import sep
+        positions = [(60.0, 60.0)]
+        total_flux = [1000.0]
+        img, psf = _make_field(positions, total_flux, sigma=2.0)
+        x = np.array([60.0]); y = np.array([60.0])
+        flux_seed = np.array([950.0])
+        flux_psf = np.array([1000.0])
+        flux_psf_err = np.array([3.0])
+        aper = 5.0
+
+        res = photometry_measure.measure_aperture_deblended(
+            img, x, y, aper=aper, psf=psf,
+            flux_seed=flux_seed, flux_psf=flux_psf,
+            flux_psf_err=flux_psf_err,
+            propagate_neighbour_errors=False,
+        )
+        plain_flux, _, _ = sep.sum_circle(
+            np.ascontiguousarray(img, np.double),
+            x.astype(float), y.astype(float), aper,
+        )
+        # For an isolated source the hybrid correction terms cancel
+        # algebraically; in practice they leave ~0.3% sub-pixel rounding
+        # noise from differences between sep.sum_circle's internal
+        # weighting and our enclosed_psf_fraction sub-pixel grid.
+        np.testing.assert_allclose(res['flux'], plain_flux, rtol=5e-3)
+
+    def test_neighbour_subtraction_recovers_target(self):
+        """With a close pair, the hybrid flux for the target must be much
+        closer to its own aperture-fraction than a plain aperture sum is."""
+        import sep
+        sigma = 2.0
+        positions = [(80.0, 80.0), (84.0, 80.0)]
+        total_flux = [1000.0, 800.0]
+        img, psf = _make_field(positions, total_flux, sigma=sigma)
+        x = np.array([80.0, 84.0]); y = np.array([80.0, 80.0])
+        flux_seed = np.array([950.0, 750.0])
+        flux_psf = np.array([1000.0, 800.0])
+        flux_psf_err = np.array([3.0, 3.0])
+        aper = 4.0
+
+        plain, _, _ = sep.sum_circle(
+            np.ascontiguousarray(img, np.double),
+            x.astype(float), y.astype(float), aper,
+        )
+        res = photometry_measure.measure_aperture_deblended(
+            img, x, y, aper=aper, psf=psf,
+            flux_seed=flux_seed, flux_psf=flux_psf,
+            flux_psf_err=flux_psf_err,
+            target=np.array([True, False]),
+            aperture_correction='none',
+            propagate_neighbour_errors=False,
+        )
+        truth_no_neighbour = sep.sum_circle(
+            np.ascontiguousarray(_make_field([positions[0]], [total_flux[0]],
+                                              sigma=sigma)[0], np.double),
+            x[:1].astype(float), y[:1].astype(float), aper,
+        )[0][0]
+        assert plain[0] > truth_no_neighbour
+        assert abs(float(res['flux'][0]) - truth_no_neighbour) < \
+               0.5 * abs(float(plain[0]) - truth_no_neighbour)
+
+    def test_aperture_correction_none_uses_seed_flux(self):
+        positions = [(60.0, 60.0)]
+        img, psf = _make_field(positions, [1000.0])
+        res = photometry_measure.measure_aperture_deblended(
+            img, np.array([60.0]), np.array([60.0]), aper=5.0, psf=psf,
+            flux_seed=np.array([950.0]), flux_psf=np.array([1000.0]),
+            aperture_correction='none',
+            propagate_neighbour_errors=False,
+            diagnostics=True,
+        )
+        np.testing.assert_allclose(res['flux_ratio_model'], 1.0)
+        np.testing.assert_allclose(res['flux_total_model'], [950.0])
+
+    def test_ratio_field_fallback_to_median(self):
+        """With fewer than ``min_for_field_fit`` clean ratios, the ratio
+        is set to a single median everywhere."""
+        positions = [(40.0, 40.0), (60.0, 60.0), (80.0, 80.0)]
+        img, psf = _make_field(positions, [1000.0] * 3)
+        x = np.array([p[0] for p in positions])
+        y = np.array([p[1] for p in positions])
+        seed = np.array([900.0, 920.0, 940.0])
+        psf_flux = np.array([1000.0, 1010.0, 1020.0])
+        res = photometry_measure.measure_aperture_deblended(
+            img, x, y, aper=5.0, psf=psf,
+            flux_seed=seed, flux_psf=psf_flux,
+            min_for_field_fit=10,
+            aperture_correction='ratio_field',
+            propagate_neighbour_errors=False,
+            diagnostics=True,
+        )
+        ratios_used = np.asarray(res['flux_ratio_model'], float)
+        assert np.allclose(ratios_used, ratios_used[0], atol=1e-9)
+
+    def test_target_mask_subselects(self):
+        positions = [(40.0, 40.0), (80.0, 80.0)]
+        img, psf = _make_field(positions, [1000.0, 1000.0])
+        x = np.array([40.0, 80.0]); y = np.array([40.0, 80.0])
+        res = photometry_measure.measure_aperture_deblended(
+            img, x, y, aper=5.0, psf=psf,
+            flux_seed=np.array([950.0, 950.0]),
+            flux_psf=np.array([1000.0, 1000.0]),
+            target=np.array([True, False]),
+            aperture_correction='none',
+            propagate_neighbour_errors=False,
+        )
+        assert len(res) == 1
+        np.testing.assert_array_equal(res['x'], [40.0])
+
+    def test_diagnostics_columns_present(self):
+        positions = [(60.0, 60.0)]
+        img, psf = _make_field(positions, [1000.0])
+        res = photometry_measure.measure_aperture_deblended(
+            img, np.array([60.0]), np.array([60.0]), aper=5.0, psf=psf,
+            flux_seed=np.array([950.0]), flux_psf=np.array([1000.0]),
+            flux_psf_err=np.array([3.0]),
+            diagnostics=True, propagate_neighbour_errors=True,
+            aperture_correction='none',
+        )
+        for col in ('flux_ap_raw', 'flux_model', 'flux_total_model',
+                    'flux_ratio_model', 'self_frac', 'flux_neighbour_err'):
+            assert col in res.colnames
+
+    def test_propagate_neighbour_errors_requires_psf_err(self):
+        positions = [(60.0, 60.0)]
+        img, psf = _make_field(positions, [1000.0])
+        with pytest.raises(ValueError, match="flux_psf_err is required"):
+            photometry_measure.measure_aperture_deblended(
+                img, np.array([60.0]), np.array([60.0]), aper=5.0, psf=psf,
+                flux_seed=np.array([950.0]), flux_psf=np.array([1000.0]),
+                propagate_neighbour_errors=True,
+            )
+
+    def test_neighbour_error_inflates_with_close_neighbour(self):
+        """propagate_neighbour_errors=True raises the reported fluxerr
+        when a bright neighbour sits inside the target aperture, while
+        leaving the isolated case at zero."""
+        from stdpipe.psf import place_psf_stamp
+        sigma = 2.0
+        psf = _gaussian_psf_dict(sigma=sigma)
+
+        img_iso = np.zeros((200, 200))
+        place_psf_stamp(img_iso, psf, 60.0, 60.0, flux=1000.0)
+        res_iso = photometry_measure.measure_aperture_deblended(
+            img_iso, np.array([60.0]), np.array([60.0]),
+            aper=5.0, psf=psf,
+            flux_seed=np.array([950.0]), flux_psf=np.array([1000.0]),
+            flux_psf_err=np.array([3.0]),
+            err=np.full_like(img_iso, 1.0), gain=1.0,
+            aperture_correction='none',
+            propagate_neighbour_errors=True,
+            diagnostics=True,
+        )
+        assert float(res_iso['flux_neighbour_err'][0]) == 0.0
+
+        img_pair = np.zeros((200, 200))
+        place_psf_stamp(img_pair, psf, 60.0, 60.0, flux=1000.0)
+        place_psf_stamp(img_pair, psf, 63.0, 60.0, flux=2000.0)
+        res_pair = photometry_measure.measure_aperture_deblended(
+            img_pair,
+            np.array([60.0, 63.0]), np.array([60.0, 60.0]),
+            aper=5.0, psf=psf,
+            flux_seed=np.array([950.0, 1900.0]),
+            flux_psf=np.array([1000.0, 2000.0]),
+            flux_psf_err=np.array([3.0, 10.0]),
+            target=np.array([True, False]),
+            err=np.full_like(img_pair, 1.0), gain=1.0,
+            aperture_correction='none',
+            propagate_neighbour_errors=True,
+            diagnostics=True,
+        )
+        ne = float(res_pair['flux_neighbour_err'][0])
+        assert 0.1 < ne < 10.0
+        assert float(res_pair['fluxerr'][0]) > float(res_iso['fluxerr'][0])
+
+    def test_input_shape_validation(self):
+        positions = [(60.0, 60.0)]
+        img, psf = _make_field(positions, [1000.0])
+        with pytest.raises(ValueError, match="must all have the same shape"):
+            photometry_measure.measure_aperture_deblended(
+                img, np.array([60.0, 70.0]), np.array([60.0]),
+                aper=5.0, psf=psf,
+                flux_seed=np.array([950.0]), flux_psf=np.array([1000.0]),
+                propagate_neighbour_errors=False,
+            )
+
+    def test_fwhm_treats_aper_as_multiple(self):
+        """When fwhm is given, aper is interpreted as a multiple of FWHM:
+        aper=2.5 with fwhm=2.0 (-> 5 px) matches aper=5.0, fwhm=None."""
+        positions = [(60.0, 60.0)]
+        img, psf = _make_field(positions, [1000.0])
+        x = np.array([60.0]); y = np.array([60.0])
+        res_a = photometry_measure.measure_aperture_deblended(
+            img, x, y, aper=5.0, psf=psf,
+            flux_seed=np.array([950.0]), flux_psf=np.array([1000.0]),
+            aperture_correction='none',
+            propagate_neighbour_errors=False,
+        )
+        res_b = photometry_measure.measure_aperture_deblended(
+            img, x, y, aper=2.5, fwhm=2.0, psf=psf,
+            flux_seed=np.array([950.0]), flux_psf=np.array([1000.0]),
+            aperture_correction='none',
+            propagate_neighbour_errors=False,
+        )
+        np.testing.assert_allclose(res_a['flux'], res_b['flux'])
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

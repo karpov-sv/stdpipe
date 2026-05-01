@@ -32,6 +32,37 @@ The PSF model built by `PSFEx`_ may also be loaded from PSFEx model file. This m
    :noindex:
 
 
+PSF model utilities
+^^^^^^^^^^^^^^^^^^^
+
+Two small helpers complement the stamp-construction routines above:
+
+- :func:`~stdpipe.psf.enclosed_psf_fraction` -- fraction of normalised PSF flux inside a circular aperture at an arbitrary image position. Vectorised over ``radius`` (scalar in → scalar out, array in → array out). Useful for on-the-fly aperture corrections.
+- :func:`~stdpipe.psf.select_psf_seeds` -- pick bright, edge-clear sources distributed uniformly across the field for use as PSF seeds. Bins on a regular ``grid_x × grid_y`` spatial grid and keeps the ``max_per_tile`` brightest per cell. Configurable column names so it works directly on SExtractor catalogues (``X_IMAGE`` / ``FLUX_AUTO``).
+
+.. code-block:: python
+
+   from stdpipe import psf
+
+   # Aperture correction at one source's position, as a function of radius
+   radii = [3.0, 5.0, 7.0, 10.0]
+   frac = psf.enclosed_psf_fraction(psf_model, x=512.0, y=512.0, radius=radii)
+   print('aperture corrections:', dict(zip(radii, frac)))
+
+   # Build a uniform PSF-seed sample for create_psf_model() / run_psfex()
+   seeds = psf.select_psf_seeds(
+       obj, image_shape=image.shape,
+       max_per_tile=20, grid=(8, 6), edge=20,
+       accept_flags=0,
+   )
+
+.. autofunction:: stdpipe.psf.enclosed_psf_fraction
+   :noindex:
+
+.. autofunction:: stdpipe.psf.select_psf_seeds
+   :noindex:
+
+
 Placing artificial stars into the image
 ---------------------------------------
 

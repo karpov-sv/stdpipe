@@ -1835,3 +1835,405 @@ def measure_objects_sep(
         return obj, bg_est_bg, err
     else:
         return obj
+
+
+def _aperture_overlap_at_offset(stamp, x_n, y_n, x_t, y_t, aper, subpixel=4):
+    """Fraction of a placed PSF stamp that falls inside a circular aperture
+    centred at an arbitrary position.
+
+    The PSF stamp is treated as already representing the source at
+    ``(x_n, y_n)`` (built via :func:`stdpipe.psf.get_psf_stamp` with the
+    matching coordinates). The aperture has radius ``aper`` (image
+    pixels) and centre ``(x_t, y_t)``.
+
+    With ``subpixel >= 2`` the per-pixel aperture coverage is computed by
+    a ``subpixel × subpixel`` sub-grid; ``subpixel=1`` falls back to a
+    pixel-centre mask.
+    """
+    h, w = stamp.shape
+    x0_img = int(round(x_n)) - w // 2
+    y0_img = int(round(y_n)) - h // 2
+    cx = float(x_t) - x0_img
+    cy = float(y_t) - y0_img
+    if int(subpixel) <= 1:
+        yy, xx = np.mgrid[0:h, 0:w]
+        rr2 = (xx - cx) ** 2 + (yy - cy) ** 2
+        return float(np.sum(stamp[rr2 <= aper * aper]))
+    n = int(subpixel)
+    sub = (np.arange(n) + 0.5) / n - 0.5
+    dyy, dxx = np.meshgrid(sub, sub, indexing='ij')
+    yy, xx = np.mgrid[0:h, 0:w]
+    rr2 = (
+        (xx[:, :, None, None] - cx + dxx[None, None, :, :]) ** 2
+        + (yy[:, :, None, None] - cy + dyy[None, None, :, :]) ** 2
+    )
+    frac = np.mean(rr2 <= aper * aper, axis=(2, 3))
+    return float(np.sum(stamp * frac))
+
+
+def measure_aperture_deblended(
+    image, x, y, aper, psf,
+    *,
+    flux_seed,
+    flux_psf,
+    flux_psf_err=None,
+    target=None,
+    fwhm=None,
+    err=None, mask=None, gain=None, bg=None,
+    aperture_correction='ratio_field',
+    correction_field_kwargs=None,
+    ratio_clip=(0.5, 3.0),
+    outlier_clip=5.0,
+    min_for_field_fit=6,
+    bad_flag=0x1000,
+    propagate_neighbour_errors=True,
+    overlap_subpixel=4,
+    diagnostics=False,
+    verbose=False,
+):
+    """Aperture photometry with PSF-based neighbour subtraction.
+
+    For every position in ``(x[target], y[target])`` measure the aperture
+    flux on ``image``, subtract the modelled contribution of every other
+    detection inside that aperture (using each one's PSF-scaled total
+    flux), and add back the target's own modelled contribution. The
+    result is an aperture flux that handles crowding the way PSF
+    photometry would, while remaining robust to PSF-model mismatch on
+    the target itself: PSF-model error feeds only into the small
+    neighbour-subtraction term, partially cancelling between
+    ``model_flux`` and ``self_flux``.
+
+    The "total flux" used to scale each detection's PSF stamp in the
+    neighbour model is
+
+        total_i = flux_seed_i * ratio(x_i, y_i)
+
+    where ``ratio = flux_psf / flux_seed`` is fit as a smooth field
+    across the frame from the per-source ratios. This provides a
+    position-dependent aperture correction even when the PSF model has
+    smoothly varying shape.
+
+    Parameters
+    ----------
+    image : 2-D ndarray
+        Background-subtracted image (or pass the background separately
+        via ``bg``).
+    x, y : (N,) array-like
+        Pixel positions of all detections in the region (targets +
+        neighbours used only to model contamination).
+    aper : float
+        Aperture radius. In image pixels by default; interpreted as a
+        multiple of ``fwhm`` when ``fwhm`` is given (matching the
+        convention of :func:`measure_objects`).
+    psf : dict
+        PSF model as returned by :func:`stdpipe.psf.run_psfex`,
+        :func:`stdpipe.psf.load_psf`, or
+        :func:`stdpipe.psf.create_psf_model`. May be position-dependent.
+    flux_seed : (N,) array-like
+        Per-source aperture flux from the upstream detection pass. Used
+        to anchor the smooth aperture-correction ratio field.
+    flux_psf : (N,) array-like
+        Per-source PSF-fitted flux from the upstream PSF-fitting pass.
+        Used to anchor the ratio field and to scale neighbour PSF stamps
+        in the model image.
+    flux_psf_err : (N,) array-like, optional
+        Per-source PSF-fit flux errors. Required when
+        ``propagate_neighbour_errors=True``.
+    target : (N,) bool mask or array of int indices, optional
+        Which detections to measure. Detections not in ``target`` still
+        appear in the neighbour model. Default: every detection.
+    fwhm : float, optional
+        Source FWHM in pixels. When given, ``aper`` is interpreted as a
+        multiple of FWHM.
+    err : 2-D ndarray, optional
+        Per-pixel 1-sigma error map for the input image. Used by
+        ``sep.sum_circle`` to compute the aperture noise.
+    mask : 2-D bool ndarray, optional
+        Bad-pixel mask. ``True`` pixels are excluded from aperture sums.
+    gain : float, optional
+        Detector gain in e-/ADU; forwarded to ``sep.sum_circle`` for
+        Poisson noise on the aperture sum.
+    bg : 2-D ndarray, optional
+        Background map. If given, it is subtracted from ``image`` before
+        the aperture sums (so ``image`` itself need not be background-
+        subtracted).
+    aperture_correction : {'ratio_field', 'fixed', 'none'}
+        How to map ``flux_seed`` to "total flux" when scaling neighbour
+        PSF stamps. ``'ratio_field'`` fits a smooth 2-D field of the
+        per-source PSF/seed ratio (default; see ``correction_field_kwargs``
+        and ``min_for_field_fit``); ``'fixed'`` uses a single MAD-clipped
+        median ratio; ``'none'`` uses ``flux_seed`` as the total flux.
+    correction_field_kwargs : dict, optional
+        Forwarded to :func:`stdpipe.smoothing.fit_vector_field_2d`. The
+        default uses the LOESS backend with ``k=100`` and per-axis
+        scales chosen from the spread of the input positions, which is a
+        quality upgrade over the rigid 2-D quadratic used in earlier
+        prototypes.
+    ratio_clip : (lo, hi)
+        Hard limits applied to the modelled ratio at every position to
+        guard against extrapolation pathologies.
+    outlier_clip : float
+        MAD multiple used to reject outliers from the per-source ratio
+        sample before fitting the field.
+    min_for_field_fit : int
+        Minimum number of clean ratios required to fit the smooth field;
+        below this, the median ratio is used everywhere.
+    bad_flag : int
+        Flag bit OR'ed into the output ``flags`` for measurements that
+        could not be computed.
+    propagate_neighbour_errors : bool
+        If True (default), inflate ``fluxerr`` by the quadrature sum of
+        each near neighbour's PSF-flux error scaled by its overlap with
+        the target aperture. Requires ``flux_psf_err``.
+    overlap_subpixel : int
+        Sub-pixel sampling factor for the per-neighbour aperture overlap
+        integrals. ``1`` for a faster pixel-centre mask.
+    diagnostics : bool
+        If True, attach extra columns to the output table:
+        ``flux_ap_raw``, ``flux_model``, ``flux_total_model``,
+        ``flux_ratio_model``, ``self_frac``, ``flux_neighbour_err``.
+    verbose : bool or callable
+        Boolean to enable default ``print`` logging, or a print-like
+        callable.
+
+    Returns
+    -------
+    astropy.table.Table
+        One row per measured target, in the order they appeared in the
+        input. Columns: ``x``, ``y``, ``flux``, ``fluxerr``, ``mag``,
+        ``magerr``, ``flags``. Diagnostic columns when
+        ``diagnostics=True``.
+    """
+    from astropy.table import Table
+    from . import psf as psf_mod
+    from . import smoothing
+    import sep
+
+    log = (verbose if callable(verbose) else print) if verbose else (
+        lambda *a, **k: None
+    )
+
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    flux_seed = np.asarray(flux_seed, dtype=float)
+    flux_psf = np.asarray(flux_psf, dtype=float)
+    if x.shape != y.shape or x.shape != flux_seed.shape \
+       or x.shape != flux_psf.shape:
+        raise ValueError(
+            "x, y, flux_seed, flux_psf must all have the same shape"
+        )
+    n_all = x.size
+
+    if propagate_neighbour_errors and flux_psf_err is None:
+        raise ValueError(
+            "flux_psf_err is required when propagate_neighbour_errors=True"
+        )
+    if flux_psf_err is not None:
+        flux_psf_err = np.asarray(flux_psf_err, dtype=float)
+        if flux_psf_err.shape != x.shape:
+            raise ValueError("flux_psf_err must have the same shape as x")
+
+    if target is None:
+        target_idx = np.arange(n_all, dtype=int)
+    else:
+        target = np.asarray(target)
+        if target.dtype == bool:
+            if target.shape != x.shape:
+                raise ValueError("target mask must match the shape of x")
+            target_idx = np.where(target)[0]
+        else:
+            target_idx = target.astype(int)
+
+    aper_pix = float(aper) * float(fwhm) if fwhm is not None else float(aper)
+
+    # ------------------------------------------------------------------
+    # 1. Per-source ratio = flux_psf / flux_seed, MAD-clipped sample.
+    # ------------------------------------------------------------------
+    with np.errstate(divide='ignore', invalid='ignore'):
+        ratio = flux_psf / flux_seed
+    ratio_ok = (
+        np.isfinite(ratio) & (ratio > 0)
+        & np.isfinite(flux_seed) & (flux_seed > 0)
+        & np.isfinite(flux_psf) & (flux_psf > 0)
+    )
+    n_clean_ratio = int(ratio_ok.sum())
+    if n_clean_ratio:
+        ratio_med = float(np.nanmedian(ratio[ratio_ok]))
+        ratio_mad = float(np.nan if n_clean_ratio < 2
+                          else _astropy_mad_std(ratio[ratio_ok]))
+        if np.isfinite(ratio_mad) and ratio_mad > 0:
+            ratio_ok &= np.abs(ratio - ratio_med) < outlier_clip * ratio_mad
+    else:
+        ratio_med = float('nan')
+
+    # ------------------------------------------------------------------
+    # 2. Smooth ratio field (or fall back to fixed median).
+    # ------------------------------------------------------------------
+    use_field = (
+        aperture_correction == 'ratio_field'
+        and int(ratio_ok.sum()) >= int(min_for_field_fit)
+    )
+    if use_field:
+        kwargs = dict(correction_field_kwargs or {})
+        kwargs.setdefault('backend', 'loess')
+        if kwargs['backend'] == 'loess':
+            xs = float(np.ptp(x[ratio_ok])) or 1.0
+            ys = float(np.ptp(y[ratio_ok])) or 1.0
+            kwargs.setdefault('scales', (xs / 4.0, ys / 4.0))
+            kwargs.setdefault('k', min(100, int(ratio_ok.sum())))
+        ratio_pred_fn = smoothing.fit_vector_field_2d(
+            x[ratio_ok], y[ratio_ok], ratio[ratio_ok], **kwargs
+        )
+        log("aperture-correction field fit on %d sources" % int(ratio_ok.sum()))
+    elif aperture_correction == 'none':
+        def ratio_pred_fn(xq, yq):
+            return np.ones_like(np.asarray(xq, float))
+    else:
+        if aperture_correction == 'ratio_field':
+            log("ratio-field fallback: only %d clean ratios, using fixed median"
+                % int(ratio_ok.sum()))
+        const = ratio_med if np.isfinite(ratio_med) else 1.0
+        def ratio_pred_fn(xq, yq):
+            return np.full(np.asarray(xq, float).shape, const)
+
+    model_ratio_all = np.asarray(ratio_pred_fn(x, y), float)
+    bad_ratio = ~np.isfinite(model_ratio_all)
+    if bad_ratio.any():
+        fill = ratio_med if np.isfinite(ratio_med) else 1.0
+        model_ratio_all[bad_ratio] = fill
+    lo, hi = ratio_clip
+    np.clip(model_ratio_all, lo, hi, out=model_ratio_all)
+
+    total_flux = flux_seed * model_ratio_all
+
+    # ------------------------------------------------------------------
+    # 3. Build the neighbour model image.
+    # ------------------------------------------------------------------
+    image_in = np.ascontiguousarray(image, dtype=np.double)
+    if bg is not None:
+        image_in = image_in - np.asarray(bg, dtype=np.double)
+    model_image = np.zeros_like(image_in)
+    place_ok = (
+        np.isfinite(total_flux) & (total_flux > 0)
+        & np.isfinite(x) & np.isfinite(y)
+    )
+    for i in np.where(place_ok)[0]:
+        psf_mod.place_psf_stamp(
+            model_image, psf, float(x[i]), float(y[i]),
+            flux=float(total_flux[i]),
+        )
+
+    # ------------------------------------------------------------------
+    # 4. Aperture sums on real and model images at each target.
+    # ------------------------------------------------------------------
+    x_t = x[target_idx]
+    y_t = y[target_idx]
+    err_in = np.ascontiguousarray(err, dtype=np.double) if err is not None else None
+    mask_in = np.ascontiguousarray(mask, dtype=bool) if mask is not None else None
+    raw_flux, raw_fluxerr, raw_flag = sep.sum_circle(
+        image_in, x_t, y_t, aper_pix,
+        err=err_in, gain=gain, mask=mask_in,
+    )
+    model_flux, _, _ = sep.sum_circle(model_image, x_t, y_t, aper_pix)
+
+    # ------------------------------------------------------------------
+    # 5. Self flux = total_flux_target * enclosed_psf_fraction(target).
+    # ------------------------------------------------------------------
+    self_frac = np.full(target_idx.size, np.nan)
+    for k, i in enumerate(target_idx):
+        if not place_ok[i]:
+            continue
+        try:
+            self_frac[k] = psf_mod.enclosed_psf_fraction(
+                psf, float(x[i]), float(y[i]),
+                radius=aper_pix, subpixel=overlap_subpixel,
+            )
+        except Exception:
+            pass
+    self_flux = total_flux[target_idx] * self_frac
+
+    corr_flux = raw_flux - model_flux + self_flux
+
+    # ------------------------------------------------------------------
+    # 6. Optional per-target neighbour error in quadrature.
+    # ------------------------------------------------------------------
+    neighbour_err = np.zeros(target_idx.size, dtype=float)
+    if propagate_neighbour_errors and flux_psf_err is not None:
+        # PSF radius in image pixels (rough): half the stamp size.
+        psf_radius_pix = 0.5 * float(psf['width'] * psf['sampling'])
+        search_r = psf_radius_pix + aper_pix
+        from scipy.spatial import cKDTree
+        tree = cKDTree(np.c_[x, y])
+        near_lists = tree.query_ball_point(
+            np.c_[x_t, y_t], r=search_r,
+        )
+        # Per-source PSF-fit flux error scaled to the same total-flux
+        # units we placed the stamps in.
+        with np.errstate(divide='ignore', invalid='ignore'):
+            ratio_for_err = np.where(
+                flux_psf > 0,
+                model_ratio_all * flux_seed / flux_psf,
+                model_ratio_all,
+            )
+        ratio_for_err = np.where(
+            np.isfinite(ratio_for_err), ratio_for_err, 1.0
+        )
+        total_flux_err = np.abs(flux_psf_err) * np.abs(ratio_for_err)
+        for k, i in enumerate(target_idx):
+            var = 0.0
+            for j in near_lists[k]:
+                if j == i:
+                    continue
+                if not place_ok[j] or not np.isfinite(total_flux_err[j]):
+                    continue
+                stamp = psf_mod.get_psf_stamp(
+                    psf, float(x[j]), float(y[j]), normalize=True,
+                )
+                overlap = _aperture_overlap_at_offset(
+                    stamp, float(x[j]), float(y[j]),
+                    float(x_t[k]), float(y_t[k]), aper_pix,
+                    subpixel=overlap_subpixel,
+                )
+                var += (total_flux_err[j] * overlap) ** 2
+            neighbour_err[k] = np.sqrt(var)
+        fluxerr = np.sqrt(np.asarray(raw_fluxerr, float) ** 2 + neighbour_err ** 2)
+    else:
+        fluxerr = np.asarray(raw_fluxerr, float)
+
+    # ------------------------------------------------------------------
+    # 7. Output table + flags + magnitudes.
+    # ------------------------------------------------------------------
+    out = Table()
+    out['x'] = x_t
+    out['y'] = y_t
+    out['flux'] = corr_flux
+    out['fluxerr'] = fluxerr
+    out['flags'] = np.asarray(raw_flag, int).copy()
+    bad = (
+        ~np.isfinite(corr_flux)
+        | ~np.isfinite(fluxerr)
+        | (corr_flux <= 0)
+        | (np.asarray(raw_flag, int) > 0)
+    )
+    out['flags'][bad] |= int(bad_flag)
+    out['mag'] = np.full(target_idx.size, np.nan)
+    out['magerr'] = np.full(target_idx.size, np.nan)
+    good = ~bad
+    out['mag'][good] = -2.5 * np.log10(corr_flux[good])
+    out['magerr'][good] = (2.5 / np.log(10)) * fluxerr[good] / corr_flux[good]
+
+    if diagnostics:
+        out['flux_ap_raw'] = np.asarray(raw_flux, float)
+        out['flux_model'] = np.asarray(model_flux, float)
+        out['flux_total_model'] = total_flux[target_idx]
+        out['flux_ratio_model'] = model_ratio_all[target_idx]
+        out['self_frac'] = self_frac
+        if propagate_neighbour_errors:
+            out['flux_neighbour_err'] = neighbour_err
+
+    return out
+
+
+def _astropy_mad_std(x):
+    from astropy.stats import mad_std
+    return float(mad_std(x))

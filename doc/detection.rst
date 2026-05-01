@@ -312,3 +312,43 @@ Both support grouped fitting for crowded fields and return fitted positions alon
    # DAOPHOT backend (requires PyRAF/IRAF)
    from stdpipe import photometry_iraf
    result = photometry_iraf.measure_objects_psf(obj, image, fwhm=fwhm)
+
+
+Hybrid aperture photometry with PSF-based deblending
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+:func:`stdpipe.photometry_measure.measure_aperture_deblended` combines aperture photometry on the target with PSF-modelled subtraction of any neighbours that fall inside the aperture. It gives PSF-quality crowding handling while keeping the target flux as an aperture sum, which is robust to PSF-model mismatch on the target itself: any model error feeds only into the small neighbour-subtraction term and partially cancels between the modelled and self-flux contributions.
+
+The function expects each detection to come with both an upstream aperture flux (``flux_seed``) and a PSF-fit flux (``flux_psf``); these are produced by :func:`~stdpipe.photometry.get_objects_sep` followed by :func:`~stdpipe.photometry_measure.measure_objects_sep` with ``psf=...``. The per-source aperture-correction ratio ``flux_psf / flux_seed`` is then fit as a smooth field across the frame (LOESS by default via :func:`stdpipe.smoothing.fit_vector_field_2d`) and used to scale the PSF stamps placed in the neighbour model.
+
+.. code-block:: python
+
+   from stdpipe import photometry, photometry_measure, psf
+
+   # Detect, build a PSF model and run PSF fitting upstream
+   obj = photometry.get_objects_sep(image, mask=mask, thresh=3.0, fwhm=True)
+   fwhm = float(obj.meta['fwhm_phot'])
+   psf_model = psf.run_psfex(image, mask=mask, gain=gain, verbose=True)
+   meas = photometry_measure.measure_objects_sep(
+       obj, image, psf=psf_model, fwhm=fwhm,
+       err=err_map, gain=gain, mask=mask, group_sources=True,
+   )
+
+   # Hybrid aperture photometry on a subset of the detections
+   target = meas['flags'] == 0
+   res = photometry_measure.measure_aperture_deblended(
+       image, meas['x'], meas['y'], aper=1.5, fwhm=fwhm, psf=psf_model,
+       flux_seed=meas['flux_seed'], flux_psf=meas['flux'],
+       flux_psf_err=meas['fluxerr'],
+       target=target,
+       err=err_map, mask=mask, gain=gain,
+       propagate_neighbour_errors=True,
+       diagnostics=True,
+   )
+
+The output table has one row per measured target (``x``, ``y``, ``flux``, ``fluxerr``, ``mag``, ``magerr``, ``flags``). Setting ``diagnostics=True`` adds the per-target ``flux_ap_raw``, ``flux_model``, ``flux_total_model``, ``flux_ratio_model``, ``self_frac``, and ``flux_neighbour_err`` columns.
+
+With ``propagate_neighbour_errors=True`` (the default), the reported ``fluxerr`` includes the per-near-neighbour PSF-flux error scaled by its overlap with the target aperture, summed in quadrature on top of the bare aperture noise. Disable for speed when neighbour errors are negligible.
+
+.. autofunction:: stdpipe.photometry_measure.measure_aperture_deblended
+   :noindex:

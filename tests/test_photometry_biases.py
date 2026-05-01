@@ -547,3 +547,183 @@ def test_default_is_grouped_psf():
     assert group_sources_default is True, (
         "group_sources should default to True for safe behavior in crowded fields"
     )
+
+
+# ============================================================================
+# Aperture vs optimal vs deblended-aperture on Moffat profiles
+# ============================================================================
+#
+# Sources are drawn as pixel-integrated Moffat profiles (β=2.5), which is a
+# realistic stellar profile and DOES NOT match the Gaussian PSF that
+# optimal extraction and ``measure_aperture_deblended`` (when given a
+# Gaussian psf-dict) assume internally. The tests sweep FWHM and pair
+# separation and report the bias of all three methods.
+
+def _moffat_image(positions, fluxes, size, fwhm, beta=2.5, oversample=8):
+    """Pixel-integrated Moffat image with one or more sources."""
+    alpha = fwhm / (2.0 * np.sqrt(2.0 ** (1.0 / beta) - 1.0))
+    sub = (np.arange(oversample) + 0.5) / oversample - 0.5
+    dyy, dxx = np.meshgrid(sub, sub, indexing='ij')
+    yy, xx = np.mgrid[0:size, 0:size]
+    image = np.zeros((size, size), dtype=np.float64)
+    norm = (beta - 1.0) / (np.pi * alpha ** 2)
+    for (x_src, y_src), flux in zip(positions, fluxes):
+        rr2 = (
+            (xx[:, :, None, None] - x_src + dxx[None, None, :, :]) ** 2
+            + (yy[:, :, None, None] - y_src + dyy[None, None, :, :]) ** 2
+        )
+        moffat = norm * (1.0 + rr2 / alpha ** 2) ** (-beta)
+        image += flux * moffat.mean(axis=(2, 3))
+    return image
+
+
+def _gaussian_psf_dict(fwhm, size=51):
+    """Position-invariant unit-flux Gaussian PSF dict, sampling=1."""
+    sigma = fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+    half = size // 2
+    yy, xx = np.mgrid[0:size, 0:size]
+    g = np.exp(-((xx - half) ** 2 + (yy - half) ** 2) / (2.0 * sigma ** 2))
+    g /= g.sum()
+    return {
+        'data': g[None, :, :], 'width': size, 'height': size,
+        'sampling': 1.0, 'degree': 0, 'ncoeffs': 1,
+        'x0': 0.0, 'y0': 0.0, 'sx': 1.0, 'sy': 1.0, 'type': 'epsf',
+    }
+
+
+def _measure_three_ways(image, x, y, *, aper_fwhm, fwhm, target_idx,
+                        flux_seed, flux_psf, flux_psf_err):
+    """Run aperture / optimal / deblended on the same detection list and
+    return the three measured fluxes for ``target_idx``. ``aper_fwhm`` is
+    in FWHM units; both ``measure_objects`` and
+    ``measure_aperture_deblended`` multiply by ``fwhm`` internally."""
+    obj = Table()
+    obj['x'] = np.asarray(x, float)
+    obj['y'] = np.asarray(y, float)
+    obj['flux'] = np.asarray(flux_seed, float)
+    obj['fluxerr'] = np.full(len(x), 1.0)
+
+    res_aper = photometry_measure.measure_objects(
+        obj, image, aper=aper_fwhm, fwhm=fwhm,
+        optimal=False, group_sources=False, verbose=False,
+    )
+    res_opt = photometry_measure.measure_objects(
+        obj, image, aper=aper_fwhm, fwhm=fwhm,
+        optimal=True, group_sources=True, verbose=False,
+    )
+    psf = _gaussian_psf_dict(fwhm)
+    res_deb = photometry_measure.measure_aperture_deblended(
+        image, x, y, aper=aper_fwhm, fwhm=fwhm, psf=psf,
+        flux_seed=flux_seed, flux_psf=flux_psf, flux_psf_err=flux_psf_err,
+        target=np.array([i in target_idx for i in range(len(x))]),
+        aperture_correction='ratio_field' if len(x) >= 6 else 'fixed',
+        propagate_neighbour_errors=False,
+    )
+    return (
+        np.asarray(res_aper['flux'])[list(target_idx)],
+        np.asarray(res_opt['flux'])[list(target_idx)],
+        np.asarray(res_deb['flux']),
+    )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("fwhm", [2.0, 3.0, 4.0, 6.0])
+def test_moffat_isolated_bias_three_methods(fwhm):
+    """ISOLATED Moffat source: report bias of aperture, optimal extraction
+    (Gaussian-PSF assumption) and deblended (Gaussian-PSF assumption).
+    All three must give finite results; aperture and deblended must agree
+    closely (the deblending terms cancel for a single source); optimal
+    will pick up FWHM-dependent PSF-mismatch bias."""
+    size = 81
+    flux_true = 5000.0
+    x_true = y_true = size / 2.0
+    image = _moffat_image([(x_true, y_true)], [flux_true], size, fwhm)
+
+    f_ap, f_opt, f_deb = _measure_three_ways(
+        image, np.array([x_true]), np.array([y_true]),
+        aper_fwhm=2.0, fwhm=fwhm, target_idx=(0,),
+        flux_seed=np.array([float(flux_true)]),
+        flux_psf=np.array([float(flux_true)]),
+        flux_psf_err=np.array([1.0]),
+    )
+
+    bias_ap = (f_ap[0] - flux_true) / flux_true
+    bias_opt = (f_opt[0] - flux_true) / flux_true
+    bias_deb = (f_deb[0] - flux_true) / flux_true
+    print(f"\n[isolated, FWHM={fwhm}] aper={f_ap[0]:.1f}  "
+          f"opt={f_opt[0]:.1f}  deb={f_deb[0]:.1f}  truth={flux_true}")
+    print(f"  bias [%] aper={100*bias_ap:+.2f}  opt={100*bias_opt:+.2f}  "
+          f"deb={100*bias_deb:+.2f}")
+
+    assert np.isfinite(f_ap[0])
+    assert np.isfinite(f_opt[0])
+    assert np.isfinite(f_deb[0])
+
+    # Deblended ≈ aperture for an isolated source (model-correction terms
+    # cancel up to sub-pixel rounding noise between sep.sum_circle and
+    # our enclosed_psf_fraction grid).
+    np.testing.assert_allclose(f_deb[0], f_ap[0], rtol=0.01)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("separation_fwhm", [1.0, 1.5, 2.0, 3.0, 5.0])
+def test_moffat_pair_bias_three_methods(separation_fwhm):
+    """CROWDED Moffat pair: report bias of all three methods on the
+    target star (which has a brighter neighbour at ``separation_fwhm``
+    FWHMs along x). The aperture sum is contaminated; optimal extraction
+    has both contamination and PSF-mismatch effects; deblended subtracts
+    the neighbour and should land much closer to the isolated baseline."""
+    size = 121
+    fwhm = 3.0
+    flux_target = 3000.0
+    flux_neighbour = 6000.0
+    x1, y1 = 60.0, 60.0
+    x2, y2 = x1 + separation_fwhm * fwhm, y1
+    image = _moffat_image(
+        [(x1, y1), (x2, y2)], [flux_target, flux_neighbour], size, fwhm,
+    )
+    image_iso = _moffat_image([(x1, y1)], [flux_target], size, fwhm)
+
+    f_ap, f_opt, f_deb = _measure_three_ways(
+        image,
+        np.array([x1, x2]), np.array([y1, y2]),
+        aper_fwhm=1.5, fwhm=fwhm, target_idx=(0,),
+        flux_seed=np.array([flux_target, flux_neighbour]),
+        flux_psf=np.array([flux_target, flux_neighbour]),
+        flux_psf_err=np.array([10.0, 10.0]),
+    )
+    f_iso_ap, _, _ = _measure_three_ways(
+        image_iso,
+        np.array([x1]), np.array([y1]),
+        aper_fwhm=1.5, fwhm=fwhm, target_idx=(0,),
+        flux_seed=np.array([flux_target]),
+        flux_psf=np.array([flux_target]),
+        flux_psf_err=np.array([10.0]),
+    )
+    baseline = float(f_iso_ap[0])
+
+    bias_ap = (float(f_ap[0]) - baseline) / baseline
+    bias_opt = (float(f_opt[0]) - baseline) / baseline
+    bias_deb = (float(f_deb[0]) - baseline) / baseline
+
+    print(f"\n[pair sep={separation_fwhm} FWHM, FWHM={fwhm}, "
+          f"target={flux_target}, neighbour={flux_neighbour}]")
+    print(f"  baseline (isolated aperture) = {baseline:.1f}")
+    print(f"  measured aper={f_ap[0]:.1f} ({100*bias_ap:+.2f}%)  "
+          f"opt={f_opt[0]:.1f} ({100*bias_opt:+.2f}%)  "
+          f"deb={f_deb[0]:.1f} ({100*bias_deb:+.2f}%)")
+
+    assert all(np.isfinite([f_ap[0], f_opt[0], f_deb[0]]))
+
+    if separation_fwhm <= 2.0:
+        # In the crowded regime the deblended flux must be at least
+        # twice as close to the isolated baseline as the plain aperture.
+        assert abs(bias_deb) < 0.5 * abs(bias_ap), (
+            f"deblending should beat aperture in the crowded regime "
+            f"(sep={separation_fwhm} FWHM): aper bias {100*bias_ap:.2f}% "
+            f"vs deb bias {100*bias_deb:.2f}%"
+        )
+    else:
+        # In the uncrowded regime the deblended flux should track the
+        # plain aperture (no measurable advantage, no harm done).
+        np.testing.assert_allclose(f_deb[0], f_ap[0], rtol=0.02)
