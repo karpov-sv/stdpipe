@@ -148,6 +148,8 @@ def refine_astrometry(
     min_matches=5,
     method='quadhash',
     update=True,
+    refine_residual_field=False,
+    residual_field_kwargs=None,
     verbose=False,
     **kwargs,
 ):
@@ -192,6 +194,20 @@ def refine_astrometry(
         ``'scamp'``, ``'astropy'``, or ``'astrometrynet'``.
     update : bool, optional
         If True, update ``ra`` and ``dec`` columns in ``obj`` in-place.
+        When combined with ``refine_residual_field=True``, ``x``/``y`` of
+        ``obj`` are also corrected (their residual against the catalogue
+        is subtracted) before ``ra``/``dec`` are recomputed from the
+        refined positions.
+    refine_residual_field : bool, optional
+        If True, after the WCS fit, fit a smooth (dx, dy) correction
+        field on the matched ``obj``--``cat`` residuals using
+        :func:`stdpipe.astrometry.refine_positions_from_catalog` and (if
+        ``update=True``) apply the inverse correction to ``obj['x']``,
+        ``obj['y']`` in place.
+    residual_field_kwargs : dict, optional
+        Forwarded to :func:`refine_positions_from_catalog`. Common keys:
+        ``backend``, ``image_shape``, ``grid_shape``, ``min_per_cell``,
+        ``smooth_sigma``.
     verbose : bool or callable, optional
         Whether to show verbose messages. May be boolean or a ``print``-like callable.
     **kwargs
@@ -220,7 +236,7 @@ def refine_astrometry(
     if method == 'quadhash':
         # Quad-hash pattern matching (default, hopefully more accurate than SCAMP)
 
-        return astrometry.refine_wcs_quadhash(
+        wcs = astrometry.refine_wcs_quadhash(
             obj,
             cat,
             wcs=wcs,
@@ -236,7 +252,7 @@ def refine_astrometry(
 
     elif method == 'scamp':
         # Fall-through to SCAMP-specific variant
-        return astrometry.refine_wcs_scamp(
+        wcs = astrometry.refine_wcs_scamp(
             obj,
             cat,
             sr=sr,
@@ -253,6 +269,106 @@ def refine_astrometry(
             **kwargs,
         )
 
+    else:
+        wcs = _refine_astrometry_iterative(
+            obj, cat, sr=sr, wcs=wcs, order=order,
+            cat_col_mag=cat_col_mag, cat_col_mag_err=cat_col_mag_err,
+            cat_col_ra=cat_col_ra, cat_col_dec=cat_col_dec,
+            n_iter=n_iter, use_photometry=use_photometry,
+            min_matches=min_matches, method=method,
+            update=update, log=log, verbose=verbose, **kwargs,
+        )
+
+    if refine_residual_field and wcs is not None:
+        _apply_residual_field_correction(
+            obj, cat, wcs, sr=sr,
+            cat_col_ra=cat_col_ra, cat_col_dec=cat_col_dec,
+            update=update,
+            residual_field_kwargs=residual_field_kwargs or {},
+            log=log,
+        )
+
+    return wcs
+
+
+def _apply_residual_field_correction(
+    obj, cat, wcs, *, sr,
+    cat_col_ra, cat_col_dec,
+    update, residual_field_kwargs, log,
+):
+    """Re-match obj↔cat positionally, fit a smooth residual field, and
+    optionally apply the inverse correction to ``obj['x']``, ``obj['y']``
+    in place. Helper for :func:`refine_astrometry`."""
+    obj_x = np.asarray(obj['x'], float)
+    obj_y = np.asarray(obj['y'], float)
+    obj_ra, obj_dec = wcs.all_pix2world(obj_x, obj_y, 0)
+    cat_ra = np.asarray(cat[cat_col_ra], float)
+    cat_dec = np.asarray(cat[cat_col_dec], float)
+
+    # All obj↔cat pairs within sr (degrees). spherical_match returns every
+    # pair, so dedupe to one nearest catalogue match per object.
+    oidx_all, cidx_all, dist_all = astrometry.spherical_match(
+        obj_ra, obj_dec, cat_ra, cat_dec, sr=sr,
+    )
+    if len(oidx_all) < 50:
+        log('Residual field skipped: only %d positional matches' % len(oidx_all))
+        return
+
+    order = np.argsort(dist_all)
+    oidx_sorted = oidx_all[order]
+    cidx_sorted = cidx_all[order]
+    _, first = np.unique(oidx_sorted, return_index=True)
+    oidx_unique = oidx_sorted[first]
+    cidx_unique = cidx_sorted[first]
+
+    if len(oidx_unique) < 50:
+        log('Residual field skipped: only %d unique positional matches'
+            % len(oidx_unique))
+        return
+
+    accepted = np.zeros(len(obj), dtype=bool)
+    accepted[oidx_unique] = True
+    cidx_aligned = np.full(len(obj), -1, dtype=int)
+    cidx_aligned[oidx_unique] = cidx_unique
+    match = {
+        'idx': accepted,
+        'oidx': np.arange(len(obj)),
+        'cidx': cidx_aligned,
+    }
+
+    correct, info = astrometry.refine_positions_from_catalog(
+        match, obj, cat, wcs,
+        cat_col_ra=cat_col_ra, cat_col_dec=cat_col_dec,
+        **residual_field_kwargs,
+    )
+    log(
+        'Residual field on %d matches: median |Δ| %.3f → %.3f px, '
+        'q90 %.3f → %.3f px' % (
+            info['n_used'],
+            info['raw_median_dr_pix'], info['corrected_median_dr_pix'],
+            info['raw_q90_dr_pix'], info['corrected_q90_dr_pix'],
+        )
+    )
+
+    if update:
+        # Apply the inverse correction at observed positions: each
+        # detection is shifted by -(dx, dy) so that the corrected x/y
+        # lie on the WCS-consistent grid. The residual field was fit at
+        # predicted positions, but the typical residual is ≪ FWHM so
+        # evaluating at observed positions is fine.
+        cdx, cdy = correct.smoother(obj_x, obj_y)
+        obj['x'] = obj_x - cdx
+        obj['y'] = obj_y - cdy
+        obj['ra'], obj['dec'] = wcs.all_pix2world(obj['x'], obj['y'], 0)
+
+
+def _refine_astrometry_iterative(
+    obj, cat, *, sr, wcs, order,
+    cat_col_mag, cat_col_mag_err, cat_col_ra, cat_col_dec,
+    n_iter, use_photometry, min_matches, method, update, log, verbose, **kwargs,
+):
+    """Iterative Python/astrometrynet refinement loop, factored out of
+    :func:`refine_astrometry` so the dispatch path can be linear."""
     for iter in range(n_iter):
         if use_photometry:
             # Matching involving photometric information

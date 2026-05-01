@@ -1667,3 +1667,159 @@ def upscale_wcs(wcs, scale=2, will_rebin=False):
             new.wcs.crpix -= -0.5 * scale + 0.5
 
     return new
+
+
+def fit_astrometric_residuals(
+    x_obs, y_obs, x_pred, y_pred,
+    *,
+    image_shape=None,
+    backend='grid',
+    **smoother_kwargs,
+):
+    """Fit a smooth (dx, dy) correction field for astrometric residuals.
+
+    Given matched pairs of observed and WCS-predicted pixel positions of
+    the same sources, fit a smooth two-component field that maps any
+    predicted position to the corresponding observed one. The returned
+    callable applies the additive correction at arbitrary positions.
+
+    Parameters
+    ----------
+    x_obs, y_obs : array-like, shape (N,)
+        Observed pixel positions of matched sources (e.g. SEP centroids).
+    x_pred, y_pred : array-like, shape (N,)
+        WCS-predicted pixel positions of the same sources from a reference
+        catalogue. ``x_obs - x_pred`` is the residual being modelled.
+    image_shape : (H, W), optional
+        Forwarded to the grid backend; ignored by LOESS.
+    backend : {"grid", "loess"}
+        Smoothing backend; see :func:`stdpipe.smoothing.fit_vector_field_2d`.
+        Default ``"grid"`` because the typical astrometric-residual workflow
+        evaluates the correction at far more positions than were used to
+        fit it (e.g. forced-position photometry of large catalogues), where
+        grid lookup is ~600--1000x faster than LOESS prediction.
+    **smoother_kwargs :
+        Forwarded to :func:`fit_vector_field_2d`. Grid backend keys:
+        ``grid_shape``, ``min_per_cell``, ``smooth_sigma``. LOESS backend
+        keys: ``scales``, ``k``, ``robust_iters``, ...
+
+    Returns
+    -------
+    correct : callable
+        ``correct(x, y) -> (x_corrected, y_corrected)``: adds the smooth
+        ``(dx, dy)`` field at ``(x, y)``. Has a ``.smoother`` attribute
+        holding the underlying field model for diagnostics.
+    """
+    from . import smoothing
+
+    x_obs = np.asarray(x_obs, float)
+    y_obs = np.asarray(y_obs, float)
+    x_pred = np.asarray(x_pred, float)
+    y_pred = np.asarray(y_pred, float)
+
+    smoother = smoothing.fit_vector_field_2d(
+        x_pred, y_pred,
+        x_obs - x_pred,
+        y_obs - y_pred,
+        backend=backend,
+        image_shape=image_shape,
+        **smoother_kwargs,
+    )
+
+    def correct(x, y):
+        cdx, cdy = smoother(x, y)
+        return np.asarray(x, float) + cdx, np.asarray(y, float) + cdy
+
+    correct.smoother = smoother
+    return correct
+
+
+def refine_positions_from_catalog(
+    match, obj, cat, wcs,
+    *,
+    obj_col_x='x', obj_col_y='y',
+    cat_col_ra='ra', cat_col_dec='dec',
+    image_shape=None,
+    backend='grid',
+    **smoother_kwargs,
+):
+    """Build an astrometric residual correction from a match dict.
+
+    Wraps :func:`fit_astrometric_residuals` with the column-extraction
+    boilerplate needed when the matches come from
+    :func:`stdpipe.pipeline.calibrate_photometry` or
+    :func:`stdpipe.photometry.match`. Returns the correction callable
+    plus a small dictionary of pre/post-correction residual statistics.
+
+    Parameters
+    ----------
+    match : dict
+        Cross-match dictionary with at least the keys ``idx`` (boolean
+        mask of accepted matches), ``oidx`` (object indices into ``obj``),
+        and ``cidx`` (catalogue indices into ``cat``).
+    obj, cat : astropy.table.Table
+        Object and catalogue tables matched by ``match``.
+    wcs : astropy.wcs.WCS
+        WCS used to project catalogue positions into pixel coordinates.
+    obj_col_x, obj_col_y : str
+        Column names for observed pixel positions in ``obj``.
+    cat_col_ra, cat_col_dec : str
+        Column names for sky positions in ``cat``.
+    image_shape : (H, W), optional
+        Forwarded to the smoothing backend.
+    backend : {"grid", "loess"}
+        Smoothing backend.
+    **smoother_kwargs :
+        Forwarded to :func:`fit_astrometric_residuals`.
+
+    Returns
+    -------
+    correct : callable
+        Same as :func:`fit_astrometric_residuals`.
+    info : dict
+        ``n_matched``, ``n_used``, ``raw_median_dr_pix``,
+        ``corrected_median_dr_pix``, ``raw_q90_dr_pix``,
+        ``corrected_q90_dr_pix``. The corrected statistics are evaluated
+        at the same matched positions used for the fit (in-sample), so
+        they over-state the gain; for an unbiased estimate, subset
+        ``match['idx']`` into a holdout mask before calling this.
+    """
+    accepted = np.asarray(match['idx'], bool)
+    oidx = np.asarray(match['oidx'])[accepted]
+    cidx = np.asarray(match['cidx'])[accepted]
+
+    x_obs = np.asarray(obj[obj_col_x][oidx], float)
+    y_obs = np.asarray(obj[obj_col_y][oidx], float)
+    x_pred, y_pred = wcs.all_world2pix(
+        np.asarray(cat[cat_col_ra][cidx], float),
+        np.asarray(cat[cat_col_dec][cidx], float),
+        0,
+    )
+
+    keep = (
+        np.isfinite(x_obs) & np.isfinite(y_obs)
+        & np.isfinite(x_pred) & np.isfinite(y_pred)
+    )
+    x_obs = x_obs[keep]; y_obs = y_obs[keep]
+    x_pred = x_pred[keep]; y_pred = y_pred[keep]
+
+    correct = fit_astrometric_residuals(
+        x_obs, y_obs, x_pred, y_pred,
+        image_shape=image_shape, backend=backend, **smoother_kwargs,
+    )
+
+    raw_dx = x_obs - x_pred
+    raw_dy = y_obs - y_pred
+    pred_dx, pred_dy = correct.smoother(x_pred, y_pred)
+    corr_dr = np.hypot(raw_dx - pred_dx, raw_dy - pred_dy)
+    raw_dr = np.hypot(raw_dx, raw_dy)
+
+    info = {
+        'n_matched': int(np.sum(accepted)),
+        'n_used': int(keep.sum()),
+        'raw_median_dr_pix': float(np.median(raw_dr)) if raw_dr.size else float('nan'),
+        'corrected_median_dr_pix': float(np.median(corr_dr)) if corr_dr.size else float('nan'),
+        'raw_q90_dr_pix': float(np.percentile(raw_dr, 90)) if raw_dr.size else float('nan'),
+        'corrected_q90_dr_pix': float(np.percentile(corr_dr, 90)) if corr_dr.size else float('nan'),
+    }
+    return correct, info
