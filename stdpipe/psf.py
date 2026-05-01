@@ -1272,3 +1272,165 @@ def _create_psf_model_polynomial(
     }
 
     return psf
+
+
+def enclosed_psf_fraction(psf, x=0, y=0, radius=None, subpixel=10):
+    """Fraction of normalised PSF flux inside a circular aperture.
+
+    Evaluates the (possibly position-dependent) PSF model at ``(x, y)``
+    via :func:`get_psf_stamp`, normalises it to unit total flux, and sums
+    the pixels lying within ``radius`` of the stamp centre. Useful for
+    on-the-fly aperture corrections.
+
+    Pixels are weighted by the fractional coverage of the circular
+    aperture using a sub-pixel grid (``subpixel`` × ``subpixel`` samples
+    per pixel) — set ``subpixel=1`` to fall back to a hard pixel-centre
+    mask, which is faster but has up to ~10 % radius-dependent jitter
+    when the aperture edge cuts through individual pixels.
+
+    Parameters
+    ----------
+    psf : dict
+        PSF model from :func:`run_psfex`, :func:`load_psf`, or
+        :func:`create_psf_model`.
+    x, y : float, optional
+        Position in image pixels at which to evaluate a position-dependent
+        PSF model. The sub-pixel parts of ``x`` and ``y`` are folded into
+        the stamp centre via :func:`get_psf_stamp`.
+    radius : float or array-like
+        Aperture radius (or radii) in image pixels.
+    subpixel : int, optional
+        Linear sub-pixel sampling per image pixel for partial-coverage
+        weighting. Default 10 (100 sub-samples per pixel).
+
+    Returns
+    -------
+    float or ndarray
+        Enclosed flux fraction at each radius. Scalar when ``radius`` is
+        a scalar, otherwise an array of the same shape.
+    """
+    if radius is None:
+        raise TypeError("radius is required")
+    radius_arr = np.atleast_1d(np.asarray(radius, float))
+
+    stamp = get_psf_stamp(psf, x, y, normalize=True)
+    h, w = stamp.shape
+    cx = w // 2 + (x - np.round(x))
+    cy = h // 2 + (y - np.round(y))
+
+    if int(subpixel) <= 1:
+        yy, xx = np.mgrid[0:h, 0:w]
+        rr2 = (xx - cx) ** 2 + (yy - cy) ** 2
+        out = np.array([float(np.sum(stamp[rr2 <= r ** 2])) for r in radius_arr])
+    else:
+        n = int(subpixel)
+        # Sub-pixel grid of offsets within a single pixel, centred on 0.
+        sub = (np.arange(n) + 0.5) / n - 0.5
+        dyy, dxx = np.meshgrid(sub, sub, indexing='ij')
+        yy, xx = np.mgrid[0:h, 0:w]
+        # For each pixel, distance² from aperture centre at every sub-pixel
+        rr2 = (xx[:, :, None, None] - cx + dxx[None, None, :, :]) ** 2 \
+            + (yy[:, :, None, None] - cy + dyy[None, None, :, :]) ** 2
+        out = np.empty(radius_arr.size, dtype=float)
+        for i, r in enumerate(radius_arr):
+            frac = np.mean(rr2 <= r ** 2, axis=(2, 3))
+            out[i] = float(np.sum(stamp * frac))
+
+    return float(out[0]) if np.isscalar(radius) or np.ndim(radius) == 0 else out
+
+
+def select_psf_seeds(
+    obj,
+    image_shape,
+    *,
+    max_per_tile=25,
+    grid=6,
+    edge=20,
+    obj_col_x='x',
+    obj_col_y='y',
+    obj_col_flux='flux',
+    obj_col_flags='flags',
+    accept_flags=0,
+):
+    """Select bright, edge-clear sources spread uniformly across the field.
+
+    Bins ``obj`` on a regular ``grid_x × grid_y`` spatial grid and returns
+    the ``max_per_tile`` brightest sources per cell that pass basic
+    quality filters: finite ``x``/``y``/flux, positive flux, optionally a
+    flag mask, and inside the image after an ``edge``-pixel margin.
+
+    The returned table is a strict subset of ``obj`` (same columns,
+    sub-selected rows) and is the natural input for
+    :func:`stdpipe.psf.create_psf_model` and similar PSF-modelling
+    routines that benefit from a uniform spatial sampling.
+
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        Source catalogue.
+    image_shape : (H, W) tuple
+        Image shape used for the spatial grid and edge mask.
+    max_per_tile : int
+        Maximum number of seeds kept per spatial cell.
+    grid : int or (nx, ny) tuple
+        Number of cells in the spatial grid. A scalar means a square
+        ``grid × grid`` layout.
+    edge : float
+        Edge margin in pixels; sources within ``edge`` of any image
+        boundary are excluded.
+    obj_col_x, obj_col_y : str
+        Column names for source positions in pixel coordinates.
+    obj_col_flux : str
+        Column name used to rank candidates within each cell (brightest
+        first). Sources with non-positive values are dropped.
+    obj_col_flags : str, optional
+        Column name for a SExtractor-style integer flag mask. Set to
+        ``None`` to skip flag filtering. If the column is missing from
+        ``obj``, no flag filter is applied either.
+    accept_flags : int
+        Bitwise mask of acceptable flags. A source is kept only when
+        ``flags & ~accept_flags == 0``.
+
+    Returns
+    -------
+    astropy.table.Table
+        A subset of ``obj`` containing the selected seeds.
+    """
+    if isinstance(grid, int):
+        grid_x = grid_y = grid
+    else:
+        grid_x, grid_y = grid
+
+    H, W = image_shape
+
+    x = np.asarray(obj[obj_col_x], float)
+    y = np.asarray(obj[obj_col_y], float)
+    flux = np.asarray(obj[obj_col_flux], float)
+    good = (
+        np.isfinite(x) & np.isfinite(y) & np.isfinite(flux) & (flux > 0)
+        & (x > edge) & (x < W - edge) & (y > edge) & (y < H - edge)
+    )
+    if obj_col_flags is not None and obj_col_flags in obj.colnames:
+        flags = np.asarray(obj[obj_col_flags], int)
+        good &= (flags & ~int(accept_flags)) == 0
+
+    if not np.any(good):
+        return obj[good]  # empty subset, preserves columns
+
+    cand_idx = np.where(good)[0]
+    cx = x[cand_idx]; cy = y[cand_idx]; cflux = flux[cand_idx]
+
+    xbin = np.clip((cx / W * grid_x).astype(int), 0, grid_x - 1)
+    ybin = np.clip((cy / H * grid_y).astype(int), 0, grid_y - 1)
+
+    keep = []
+    for iy in range(grid_y):
+        for ix in range(grid_x):
+            sel = np.where((xbin == ix) & (ybin == iy))[0]
+            if sel.size:
+                order = np.argsort(cflux[sel])[::-1][:max_per_tile]
+                keep.append(cand_idx[sel[order]])
+
+    if not keep:
+        return obj[np.zeros(len(obj), dtype=bool)]
+    return obj[np.unique(np.concatenate(keep))]
