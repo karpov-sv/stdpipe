@@ -642,6 +642,7 @@ def get_objects_sep(
     centroid=False,
     centroid_sigma_scale=1.0,
     centroid_maxstep_scale=1.0,
+    centroid_maxshift_scale=0.5,
     use_mask_large=False,
     subtract_bg=True,
     npix_large=100,
@@ -745,6 +746,14 @@ def get_objects_sep(
         used by ``sep.winpos``. The default 1.0 keeps the historical
         cap ``maxstep = 0.2 * FWHM``. Values below 1 restrict the allowed
         centroid motion more strongly; values above 1 loosen it.
+    centroid_maxshift_scale : float
+        Multiplicative scale applied to the SEP 1.4+ ``maxshift`` cap on
+        the *total* centroid drift across all winpos iterations (in units
+        of FWHM). The default 0.5 means a centroid can move at most
+        ``0.5 * FWHM`` from its initial position, complementing the
+        per-iteration ``maxstep`` cap. Set to a large value to effectively
+        disable. Ignored when SEP is older than 1.4 or when FWHM is not
+        available.
     use_mask_large : bool
         Filter out objects with footprints larger than *npix_large*.
     npix_large : int
@@ -1032,7 +1041,16 @@ def get_objects_sep(
         # sep.winpos takes a scalar sigma/maxstep, so use the median summary
         # of the spatial model when one is in play.
         fwhm_scalar = float(fwhm_value) if fwhm_value is not None else None
-        winpos_kwargs = {'mask': mask | mask_bg | mask_segm}
+        # Constrain winpos to each source's own segmentation footprint.
+        # Without this, sep.winpos is segmentation-blind and deblended
+        # sub-objects sharing a flux peak (e.g. saturated cores split into
+        # fragments) all converge to the same point. Negative seg_id tells
+        # SEP to mask every pixel except those belonging to that source.
+        winpos_kwargs = {
+            'mask': mask | mask_bg | mask_segm,
+            'segmap': segm if segm.dtype == np.int32 else segm.astype(np.int32),
+            'seg_id': -np.arange(1, len(obj0) + 1, dtype=np.int32),
+        }
         if _HAS_SEP_OPTIMAL:
             # SEP 1.4+ has maxstep parameter to cap position shift per iteration
             # Set to 0.2 * FWHM to avoid excessive drift in degenerate cases
@@ -1044,6 +1062,16 @@ def get_objects_sep(
             if not np.isfinite(maxstep) or maxstep <= 0:
                 raise ValueError("centroid_maxstep_scale should produce a positive finite maxstep")
             winpos_kwargs['maxstep'] = maxstep
+
+            # SEP 1.4+ also has maxshift parameter to cap the *total* drift
+            # across all winpos iterations. Belt-and-braces alongside the
+            # segmap restriction: bounds runaway centroids even when a source
+            # spans a large segment (e.g. saturated cores with bloom trails).
+            if fwhm_scalar is not None:
+                maxshift = fwhm_scalar * float(centroid_maxshift_scale)
+                if not np.isfinite(maxshift) or maxshift <= 0:
+                    raise ValueError("centroid_maxshift_scale should produce a positive finite maxshift")
+                winpos_kwargs['maxshift'] = maxshift
 
         sig = fwhm_scalar / 2.355 if fwhm_scalar is not None else 0.5
         sig *= float(centroid_sigma_scale)
