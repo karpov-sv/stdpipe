@@ -590,6 +590,9 @@ def match(
         if robust:
             # Rescale the arguments with weights
             C = _StableRLM(zero[idx] / total_err[idx], (X[idx].T / total_err[idx]).T).fit()
+            if C.scale == 0.0 or not np.isfinite(C.scale):
+                log('Fit failed - RLM scale collapsed to zero, model is degenerate')
+                return None
         else:
             C = sm.WLS(zero[idx], X[idx], weights=1 / total_err[idx] ** 2).fit()
 
