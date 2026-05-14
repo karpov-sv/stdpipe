@@ -1,10 +1,51 @@
 import sys
 import numpy as np
 from astropy.stats import mad_std
+from astropy.time import Time
 
 from scipy.spatial import cKDTree
 
 from . import astrometry
+
+
+# Fast-conversion registry for types whose element-by-element iteration is
+# catastrophically slow (e.g. astropy.time.Time, where list.extend() on a
+# ~3.5 M-row column boxes each scalar individually and takes ~20 s).
+#
+# Each handler is a callable ``handler(val) -> (storage_array, finalizer)``:
+#   * ``storage_array`` is an ndarray of fast-iterating scalars (typically
+#     float64) that is appended to the per-key Python list.
+#   * ``finalizer`` is called once during :meth:`LCs.cluster` consolidation
+#     as ``finalizer(ndarray) -> typed_object`` to rebuild the original
+#     container from the accumulated storage values.
+#
+# To add support for another slow-iterating type, append a (predicate,
+# handler) tuple to ``_FAST_TYPE_HANDLERS``.
+
+
+def _time_handler(val):
+    """Round-trip Time through MJD floats (~150 ms for 3.5 M rows)."""
+    scale, fmt = val.scale, val.format
+
+    def finalize(arr):
+        out = Time(arr, format='mjd', scale=scale)
+        if fmt != 'mjd':
+            out.format = fmt
+        return out
+
+    return val.mjd, finalize
+
+
+_FAST_TYPE_HANDLERS = [
+    (lambda v: isinstance(v, Time), _time_handler),
+]
+
+
+def _fast_storage_handler(val):
+    for predicate, handler in _FAST_TYPE_HANDLERS:
+        if predicate(val):
+            return handler
+    return None
 
 
 class LCs:
@@ -33,6 +74,10 @@ class LCs:
     def __init__(self):
         # Storage for user-supplied data vectors
         self._params = {}
+        # Per-key finalizer callables for keys whose values were stored via
+        # the fast-conversion path (see ``_FAST_TYPE_HANDLERS``). Applied
+        # during :meth:`cluster` consolidation to restore the original type.
+        self._finalizers = {}
 
         self.lcs = None
         self.kd = None
@@ -68,14 +113,29 @@ class LCs:
         >>> lcs.add(ra=[1, 2], dec=[3, 4], flux=10.0)
         """
 
-        def extend(col, val, length):
+        def extend(col, val, length, key):
             if (
                 val is not None
                 and hasattr(val, "__len__")
                 and not isinstance(val, str)
                 and len(val) == length
             ):
-                col.extend(val)
+                # Some array-likes (notably astropy.time.Time) iterate so
+                # slowly element-by-element that ``list.extend(val)`` becomes
+                # the bottleneck. Route them through a fast bulk-conversion
+                # path; the original type is restored during ``cluster()``.
+                handler = _fast_storage_handler(val)
+                if handler is not None:
+                    storage_arr, finalizer = handler(val)
+                    col.extend(storage_arr.tolist())
+                    self._finalizers.setdefault(key, finalizer)
+                elif hasattr(val, 'tolist'):
+                    # ndarray / astropy.table.Column: bulk C-level conversion
+                    # avoids the ~10x slowdown of per-element iteration in
+                    # ``list.extend(Column)``.
+                    col.extend(val.tolist())
+                else:
+                    col.extend(val)
             elif val is not None:
                 col.extend(np.repeat(val, length))
             else:
@@ -91,7 +151,7 @@ class LCs:
             if key not in self._params:
                 self._params[key] = []
 
-            extend(self._params[key], kwargs[key], length)
+            extend(self._params[key], kwargs[key], length, key)
 
     def cluster(
         self,
@@ -140,7 +200,11 @@ class LCs:
             log('Converting arrays')
 
             for name in self._params:
-                self._params[name] = np.array(self._params[name])
+                arr = np.array(self._params[name])
+                finalizer = self._finalizers.get(name)
+                if finalizer is not None:
+                    arr = finalizer(arr)
+                self._params[name] = arr
 
             self._xarr, self._yarr, self._zarr = astrometry.radectoxyz(
                 self._params[col_ra], self._params[col_dec]
