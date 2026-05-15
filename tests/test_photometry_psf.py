@@ -692,7 +692,10 @@ class TestCreatePSFModel:
         assert epsf['degree'] == 0  # ePSF is position-invariant
         assert epsf['ncoeffs'] == 1
         assert epsf['type'] == 'epsf'
-        assert epsf['sampling'] == 0.5  # Default oversampling=2
+        # Auto-selected oversampling=1 for FWHM~3 px (well-sampled), so
+        # sampling=1/oversampling=1.0. To force oversampling=2 the caller
+        # would pass it explicitly.
+        assert epsf['sampling'] == 1.0
 
     @pytest.mark.unit
     def test_create_psf_model_auto_detect(self, image_with_sources):
@@ -1324,11 +1327,14 @@ class TestEPSFWithPSFModule:
     @pytest.mark.unit
     def test_epsf_with_get_psf_stamp(self, image_with_sources, detected_objects):
         """Test that ePSF works with psf.get_psf_stamp()."""
-        # Create ePSF
+        # Create ePSF — force oversampling=2 so the supersampled model is
+        # strictly larger than the downsampled stamp (the auto-default would
+        # pick oversampling=1 for FWHM>=2.5 px and the two would be equal).
         epsf = psf.create_psf_model(
             image_with_sources,
             obj=detected_objects,
             size=25,
+            oversampling=2,
             verbose=False
         )
 

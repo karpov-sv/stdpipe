@@ -602,12 +602,12 @@ def create_psf_model(
     fwhm=None,
     size=None,
     mask=None,
-    oversampling=2,
+    oversampling=None,
     degree=0,
     regularization=1e-6,
     subtract_neighbors=True,
     subtract_background=False,
-    isolation=5.0,
+    isolation=2.0,
     get_raw=False,
     verbose=False,
 ):
@@ -643,11 +643,13 @@ def create_psf_model(
         Approximate FWHM of stars in pixels. If None, will be estimated.
     size : int, optional
         Size of cutouts to extract around stars (should be odd). If None, automatically
-        determined from FWHM as ``max(25, round_up_to_odd(8 * fwhm))``.
+        determined from FWHM as ``max(15, round_up_to_odd(5 * fwhm))``.
     mask : numpy.ndarray, optional
         Image mask as a boolean array (True values will be masked).
     oversampling : int, optional
-        Oversampling factor for the ePSF (default: 2).
+        Oversampling factor for the ePSF. If None (default), it is auto-selected from
+        the FWHM: ``1`` when ``fwhm >= 2.5`` image pixels (well-sampled PSF) and
+        ``2`` otherwise (under-sampled PSF). Pass an explicit integer to override.
     degree : int, optional
         Polynomial degree for spatial PSF variation (default: 0 = constant). Degree 1 =
         linear (3 coefficients), degree 2 = quadratic (6 coefficients), etc.
@@ -666,8 +668,9 @@ def create_psf_model(
         ``'plane'`` is usually the most robust choice.
     isolation : float, optional
         Minimum nearest-neighbor distance in FWHM units for selecting stars for ePSF building
-        (default: 5.0). Stars with a neighbor closer than ``isolation * fwhm`` are excluded.
-        Set to 0 or None to disable isolation filtering.
+        (default: 2.0). Stars with a neighbor closer than ``isolation * fwhm`` are excluded.
+        Combined with ``subtract_neighbors=True``, the lower default value works in both
+        sparse and dense fields. Set to 0 or None to disable isolation filtering.
     get_raw : bool, optional
         If True and ``degree=0``, returns raw photutils EPSFModel object. Ignored when
         ``degree > 0``.
@@ -703,7 +706,7 @@ def create_psf_model(
                 log('FWHM not available, using default: %.2f pixels' % fwhm)
 
         if size is None:
-            size = max(25, int(np.ceil(8 * fwhm)))
+            size = max(15, int(np.ceil(5 * fwhm)))
         if size % 2 == 0:
             size += 1
 
@@ -731,12 +734,23 @@ def create_psf_model(
             fwhm = 3.0
             log('FWHM not available, using default: %.2f pixels' % fwhm)
 
-    # Auto-size stamps based on FWHM if not specified
+    # Auto-size stamps based on FWHM if not specified.
+    # 5*FWHM keeps the stamp small enough to be cheap in sep.psf_fit while
+    # still covering ~3-sigma of the PSF wings. The 8*FWHM legacy default
+    # over-extends in dense fields (large fit groups, slow rendering).
     if size is None:
-        size = max(25, int(np.ceil(8 * fwhm)))
+        size = max(15, int(np.ceil(5 * fwhm)))
     if size % 2 == 0:
         size += 1  # Make sure size is odd
     log('Using stamp size: %d pixels (FWHM=%.1f)' % (size, fwhm))
+
+    # Auto-pick oversampling from FWHM if not explicitly set.
+    # FWHM >= 2.5 image pixels is well-sampled enough that oversampling=1 is
+    # adequate (saves model storage and SEP rendering cost). Smaller FWHM
+    # (under-sampled PSFs) needs oversampling=2 to avoid pixelisation bias.
+    if oversampling is None:
+        oversampling = 1 if fwhm >= 2.5 else 2
+        log('Auto-selected oversampling=%d (FWHM=%.2f pix)' % (oversampling, fwhm))
 
     # Filter by isolation: reject stars with a neighbor closer than isolation * fwhm.
     # Neighbor contamination in star stamps is the primary source of ePSF bias
