@@ -274,16 +274,40 @@ class TestPointInSurvey:
         np.testing.assert_array_equal(result, expected)
 
     @pytest.mark.unit
-    def test_point_in_ls_high_latitude(self):
-        """Points far from Galactic plane (|b| > 20) should be in LS."""
-        # North Galactic Pole: RA~192.86, Dec~27.13 → b≈90
-        assert templates.point_in_ls(192.86, 27.13) == True
+    def test_point_in_ls_inside(self):
+        """Points inside the survey footprint should be in LS."""
+        # North Galactic Pole: RA~192.86, Dec~27.13 - deep inside the south
+        assert templates.point_in_ls(192.86, 27.13) is True
+        # Northern (BASS/MzLS) part of the footprint
+        assert templates.point_in_ls(180.0, 60.0) is True
 
     @pytest.mark.unit
-    def test_point_in_ls_galactic_center(self):
-        """Points near Galactic plane (|b| < 20) should not be in LS."""
-        # Galactic center: RA~266.4, Dec~-29.0 → b≈0
-        assert templates.point_in_ls(266.4, -29.0) == False
+    def test_point_in_ls_outside(self):
+        """Points outside the survey footprint should not be in LS."""
+        # Galactic center: RA~266.4, Dec~-29.0 - not covered
+        assert templates.point_in_ls(266.4, -29.0) is False
+        # Northern polar cap beyond the BASS/MzLS coverage
+        assert templates.point_in_ls(0.0, 89.0) is False
+
+    @pytest.mark.unit
+    def test_point_in_ls_low_galactic_latitude(self):
+        """DR11 covers low |b| regions the old |b| > 20 cut used to reject."""
+        # LMC: RA~80.89, Dec~-69.76 - covered by DELVE, |b| ~ 33 but the
+        # surrounding low-latitude bricks are covered as well
+        assert templates.point_in_ls(80.89, -69.76) is True
+        # RA~300, Dec~-40 - |b| ~ 15, inside the southern footprint
+        assert templates.point_in_ls(300.0, -40.0) is True
+
+    @pytest.mark.unit
+    def test_point_in_ls_band(self):
+        """Band coverage should be taken into account when requested."""
+        # The northern part of the survey has no i band
+        assert templates.point_in_ls(180.0, 60.0, band='r') is True
+        assert templates.point_in_ls(180.0, 60.0, band='i') is False
+        # The southern one does have it
+        assert templates.point_in_ls(10.0, -45.0, band='i') is True
+        # No band outside of griz is ever covered
+        assert templates.point_in_ls(10.0, -45.0, band='y') is False
 
     @pytest.mark.unit
     def test_point_in_ls_array(self):
@@ -292,8 +316,86 @@ class TestPointInSurvey:
         dec = np.array([27.13, -29.0])
         result = templates.point_in_ls(ra, dec)
         assert len(result) == 2
-        assert result[0] == True   # High |b|
-        assert result[1] == False  # Low |b|
+        assert result[0] == True   # Inside the footprint
+        assert result[1] == False  # Outside of it
+
+    @pytest.mark.unit
+    def test_point_in_ls_array_band(self):
+        """Array inputs should work with band filtering too."""
+        result = templates.point_in_ls(
+            np.array([180.0, 10.0]), np.array([60.0, -45.0]), band='i'
+        )
+        assert len(result) == 2
+        assert result[0] == False  # North, no i band
+        assert result[1] == True   # South
+
+
+# ========================================================================
+# TestFindSkycells
+# ========================================================================
+
+
+class TestFindSkycells:
+    """Test Legacy Survey brick lookup and URL construction."""
+
+    @pytest.mark.unit
+    def test_ls_south_url(self):
+        """Southern brick should resolve to a DR11 south coadd URL."""
+        urls = templates.find_skycells(0.125, -0.25, 0.01, band='r', survey='ls')
+        assert urls == [
+            'https://portal.nersc.gov/cfs/cosmo/data/legacysurvey/dr11/south/'
+            'coadd/000/0001m002/legacysurvey-0001m002-image-r.fits.fz'
+        ]
+
+    @pytest.mark.unit
+    def test_ls_north_url(self):
+        """Northern brick should resolve to a DR11 north coadd URL."""
+        urls = templates.find_skycells(65.977, 68.5, 0.01, band='r', survey='ls')
+        assert urls == [
+            'https://portal.nersc.gov/cfs/cosmo/data/legacysurvey/dr11/north/'
+            'coadd/065/0659p685/legacysurvey-0659p685-image-r.fits.fz'
+        ]
+
+    @pytest.mark.unit
+    def test_ls_mask_url(self):
+        """Masks are common for all the bands."""
+        urls = templates.find_skycells(
+            0.125, -0.25, 0.01, band='r', ext='mask', survey='ls'
+        )
+        assert len(urls) == 1
+        assert urls[0].endswith('legacysurvey-0001m002-maskbits.fits.fz')
+
+    @pytest.mark.unit
+    def test_ls_uncovered_band_skipped(self):
+        """Northern bricks have no i band, so no image should be returned."""
+        assert templates.find_skycells(65.977, 68.5, 0.01, band='i', survey='ls') == []
+
+        # ..while the mask is still available there
+        assert len(
+            templates.find_skycells(
+                65.977, 68.5, 0.01, band='i', ext='mask', survey='ls'
+            )
+        ) == 1
+
+    @pytest.mark.unit
+    def test_ls_no_band(self):
+        """Band coverage should not be checked when the band is not specified."""
+        urls = templates.find_skycells(0.125, -0.25, 0.01, band=None, survey='ls')
+        assert len(urls) == 1
+
+    @pytest.mark.unit
+    def test_ls_no_duplicate_bricks(self):
+        """North and south footprints overlap - every brick should appear once."""
+        # Declination inside the overlap between the two regions
+        urls = templates.find_skycells(180.0, 20.0, 0.5, band='r', survey='ls')
+        assert len(urls) > 1
+        assert len(urls) == len(set(urls))
+
+    @pytest.mark.unit
+    def test_unsupported_survey(self):
+        """Unknown survey name should raise."""
+        with pytest.raises(RuntimeError):
+            templates.find_skycells(0.0, 0.0, 0.1, survey='unknown')
 
 
 # ========================================================================

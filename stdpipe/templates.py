@@ -409,17 +409,83 @@ def point_in_ps1(ra, dec):
 
 
 # Legacy Survey images
-__ls_skycells = None
+# Data release the images and bricks are taken from
+ls_release = 'dr11'
+
+__ls_bricks = None
+__ls_brick_coords = None
+
+# Half-diagonal of a 0.25 deg Legacy Survey brick
+__ls_brick_radius = 0.25 * np.sqrt(2) / 2
 
 
-def point_in_ls(ra, dec):
+def _get_ls_bricks():
     """
-    Whether the sky point is covered by Legacy Survey, rough estimation
+    Load (and cache in a global variable) the table of Legacy Survey bricks -
+    their names, centres, and the list of bands covered in every one of them.
     """
+    global __ls_bricks
+
+    if __ls_bricks is None:
+        __ls_bricks = Table.read(
+            utils.get_data_path('legacysurvey_bricks.fits.gz'), format='fits'
+        )
+
+    return __ls_bricks
+
+
+def _get_ls_brick_coords():
+    """
+    Sky coordinates of Legacy Survey brick centres, cached in a global variable
+    so that the k-d tree built on the first positional match is re-used later.
+    """
+    global __ls_brick_coords
+
+    if __ls_brick_coords is None:
+        bricks = _get_ls_bricks()
+        __ls_brick_coords = SkyCoord(bricks['ra'], bricks['dec'], unit='deg')
+
+    return __ls_brick_coords
+
+
+def point_in_ls(ra, dec, band=None):
+    """
+    Whether the sky point is covered by Legacy Survey, rough estimation.
+
+    The point is checked against the actual list of survey bricks, so it also
+    handles the low Galactic latitude regions added to the footprint by the
+    DECam surveys (DES, DELVE, DeROSITA) included in DR11.
+
+    Parameters
+    ----------
+    ra, dec : float or array_like
+        Sky coordinates of the point(s), in degrees.
+    band : str, optional
+        If specified, additionally require the brick to be covered in this
+        photometric band. The northern part of the survey has no ``'i'`` band.
+
+    Returns
+    -------
+    bool or ndarray
+        Whether the point(s) are inside the survey footprint.
+    """
+    bricks = _get_ls_bricks()
+
     sc = SkyCoord(ra, dec, unit='deg')
-    res = np.abs(sc.galactic.b.deg) > 20
 
-    return res
+    # The bricks tile the sky contiguously, so the point belongs to its nearest
+    # brick if it is closer than the brick half-diagonal
+    idx, sep, _ = sc.match_to_catalog_sky(_get_ls_brick_coords())
+
+    res = np.atleast_1d(sep.deg < __ls_brick_radius)
+
+    if band is not None:
+        # The brick the point belongs to should also be covered in this band
+        res &= np.array(
+            [band in _ for _ in bricks['bands'][np.atleast_1d(idx)]], dtype=bool
+        )
+
+    return bool(res[0]) if sc.isscalar else res
 
 
 def _filter_cells_by_footprint(cell_ra, cell_dec, cell_radius, wcs, width, height):
@@ -472,7 +538,8 @@ def find_skycells(
     ra, dec, sr : float
         Centre and radius (degrees) of the search region.
     band : str
-        Photometric band.
+        Photometric band. For Legacy Survey, the bricks that have no coverage
+        in this band are skipped (the northern part of it has no ``'i'`` band).
     ext : str
         ``'image'`` or ``'mask'``.
     survey : str
@@ -530,22 +597,23 @@ def find_skycells(
             results.append(url)
 
     elif survey == 'ls':
-        global __ls_skycells
-
-        if __ls_skycells is None:
-            # Load skycells information and store to global variable
-            __ls_skycells = Table.read(
-                utils.get_data_path('legacysurvey_bricks.fits.gz'), format='fits'
-            )
+        bricks = _get_ls_bricks()
 
         cell_radius = 0.186
 
         # Coarse spherical preselection
         _, idx, _ = astrometry.spherical_match(
-            ra, dec, __ls_skycells['ra'], __ls_skycells['dec'], sr + cell_radius
+            ra, dec, bricks['ra'], bricks['dec'], sr + cell_radius
         )
 
-        candidates = __ls_skycells[idx]
+        candidates = bricks[idx]
+
+        # Masks are common for all the bands, images are not - so skip the
+        # bricks that have no coverage in the band we are interested in
+        if ext != 'mask' and band is not None:
+            candidates = candidates[
+                np.array([band in _ for _ in candidates['bands']], dtype=bool)
+            ]
 
         # Refine against actual rectangular footprint when WCS is available
         if wcs is not None and width is not None and height is not None:
@@ -561,7 +629,7 @@ def find_skycells(
 
         for cell in candidates:
             url = 'https://portal.nersc.gov/cfs/cosmo/data/legacysurvey/'
-            url += 'dr10/south/' if (cell['survey'] == 'S') else 'dr9/north/'
+            url += '%s/%s/' % (ls_release, 'south' if cell['survey'] == 'S' else 'north')
             url += 'coadd/%s/%s/' % (cell['brickname'][:3], cell['brickname'])
             if ext == 'mask':
                 url += (
@@ -665,46 +733,63 @@ def get_skycells(
         if os.path.exists(filename) and not overwrite:
             log('%s already downloaded' % os.path.split(filename)[-1])
         else:
-            log('Downloading %s' % cellname)
+            # Guard the download with an inter-process lock so that concurrent
+            # workers do not download the same skycell file in parallel
+            with utils.file_lock(filename):
+                if os.path.exists(filename) and not overwrite:
+                    # Another process downloaded it while we waited for the lock
+                    log('%s already downloaded' % os.path.split(filename)[-1])
+                else:
+                    log('Downloading %s' % cellname)
 
-            hdu = fits_open_remote(cell)
-            if hdu is not None:
-                image, header = hdu[1].data, hdu[1].header
+                    try:
+                        # Bypass astropy's URL cache - the file is stored in
+                        # our own persistent cache below, so a second copy in
+                        # ~/.astropy/cache/download would never be re-used
+                        hdu = fits.open(cell, cache=False)
+                    except Exception:
+                        import traceback
 
-                if normalize:
-                    if survey == 'ps1':
-                        image, header = normalize_ps1_skycell(image, header)
+                        traceback.print_exc()
 
-                    if survey == 'ls' and ext == 'image':
-                        try:
-                            # Get invvar file to mask not covered regions
-                            ihdu = fits_open_remote(cell.replace('-image-', '-invvar-'))
-                            if ihdu is not None:
-                                invvar = ihdu[1].data
-                                image[invvar == 0] = np.nan
-                                ihdu.close()
-                        except Exception:
-                            pass
+                        hdu = None
+                    if hdu is not None:
+                        image, header = hdu[1].data, hdu[1].header
 
-                if _cache_downscale > 1:
-                    image, header = cutouts.downscale_image(
-                        image,
-                        header=header,
-                        scale=_cache_downscale,
-                        mode='or' if ext == 'mask' else 'sum',
-                    )
+                        if normalize:
+                            if survey == 'ps1':
+                                image, header = normalize_ps1_skycell(image, header)
 
-                    log(
-                        "Downscaling the image and storing it as",
-                        os.path.split(filename)[-1],
-                    )
+                            if survey == 'ls' and ext == 'image':
+                                try:
+                                    # Get invvar file to mask not covered regions
+                                    ihdu = fits.open(cell.replace('-image-', '-invvar-'), cache=False)
+                                    if ihdu is not None:
+                                        invvar = ihdu[1].data
+                                        image[invvar == 0] = np.nan
+                                        ihdu.close()
+                                except Exception:
+                                    pass
 
-                # Write atomically so that an interrupted write does not leave
-                # a truncated file in the cache
-                fits.writeto(filename + '.tmp', image, header, overwrite=True)
-                os.replace(filename + '.tmp', filename)
+                        if _cache_downscale > 1:
+                            image, header = cutouts.downscale_image(
+                                image,
+                                header=header,
+                                scale=_cache_downscale,
+                                mode='or' if ext == 'mask' else 'sum',
+                            )
 
-                hdu.close()
+                            log(
+                                "Downscaling the image and storing it as",
+                                os.path.split(filename)[-1],
+                            )
+
+                        # Write atomically so that an interrupted write does not leave
+                        # a truncated file in the cache
+                        fits.writeto(filename + '.tmp', image, header, overwrite=True)
+                        os.replace(filename + '.tmp', filename)
+
+                        hdu.close()
 
         if os.path.exists(filename):
             filenames.append(filename)
@@ -770,7 +855,7 @@ def get_survey_image(
 
     Pan-STARRS images are converted from asinh scaling to linear flux.
     Pan-STARRS mask bits: https://outerspace.stsci.edu/display/PANSTARRS/PS1+Pixel+flags+in+Image+Table+Data
-    Legacy Survey mask bits: https://www.legacysurvey.org/dr10/bitmasks
+    Legacy Survey mask bits: https://www.legacysurvey.org/dr11/bitmasks
 
     Parameters
     ----------

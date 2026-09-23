@@ -91,8 +91,8 @@ def _detect_catalog_type(cat):
     Returns
     -------
     catalog_type : str or None
-        Detected catalog type ('ps1', 'gaiadr2', 'skymapper', 'apass',
-        'gaiadr3syn', 'sdss', '2mass', 'vhs') or None if cannot detect
+        Detected catalog type ('ps1', 'gaiadr2', 'gaiaedr3', 'skymapper',
+        'apass', 'gaiadr3syn', 'sdss', '2mass', 'vhs') or None if cannot detect
     """
     colnames = set(cat.colnames)
 
@@ -101,6 +101,11 @@ def _detect_catalog_type(cat):
     # Gaia DR3 synthetic photometry - has Fu, Fg, Fr, Fi, Fz flux columns
     if {'Fu', 'Fg', 'Fr', 'Fi', 'Fz'}.issubset(colnames):
         return 'gaiadr3syn'
+
+    # Gaia EDR3 - same magnitudes as DR2, so has to be checked first. RUWE and
+    # the corrected G magnitude are not present in DR2
+    if {'Gmag', 'BPmag', 'RPmag'}.issubset(colnames) and {'RUWE', 'GmagCorr'} & colnames:
+        return 'gaiaedr3'
 
     # Gaia DR2 - has Gmag, BPmag, RPmag
     if {'Gmag', 'BPmag', 'RPmag'}.issubset(colnames):
@@ -306,8 +311,18 @@ def _augment_gaiadr2(cat, verbose=False):
         g = cat['Gmag']
         bp_rp = cat['BPmag'] - cat['RPmag']
 
-        # phot_bp_rp_excess_factor == E(BR/RP) == E_BR_RP_
-        Cstar = cat['E_BR_RP_'] - np.polyval(
+        # phot_bp_rp_excess_factor == E(BR/RP). VizieR sends this field with no
+        # VOTable ID, so astroquery < 0.4.8, which used the IDs astropy
+        # synthesizes from the names, saw it as E_BR_RP_. Since 0.4.8 (#3153) it
+        # uses the names, so accept both spellings.
+        for _ in ['E(BR/RP)', 'E_BR_RP_']:
+            if _ in cat.colnames:
+                excess = cat[_]
+                break
+        else:
+            raise KeyError('E(BR/RP)')
+
+        Cstar = excess - np.polyval(
             [-0.00445024, 0.0570293, -0.02810592, 1.20477819], bp_rp
         )
 
@@ -630,8 +645,10 @@ def augment_cat_bands(cat, catalog=None, verbose=False):
     cat : astropy.table.Table
         Input catalog to augment. Modified in-place.
     catalog : str, optional
-        Catalog type: 'ps1', 'atlas', 'gaiadr2', 'skymapper', 'apass',
-        'gaiadr3syn', 'sdss', '2mass', 'vhs'. If None, auto-detect from columns.
+        Catalog type. Magnitude conversions are defined for 'ps1', 'atlas',
+        'gaiadr2', 'skymapper', 'apass', 'gaiadr3syn', 'sdss', '2mass' and 'vhs';
+        other catalogues known to :data:`catalogs` (e.g. 'gaiaedr3', 'usnob1',
+        'gsc', 'vsx') are returned unchanged. If None, auto-detect from columns.
     verbose : bool or callable, optional
         Logging control.
 
@@ -668,6 +685,12 @@ def augment_cat_bands(cat, catalog=None, verbose=False):
         _augment_2mass(cat, verbose=verbose)
     elif catalog == 'vhs':
         _augment_vhs(cat, verbose=verbose)
+    elif catalog in catalogs:
+        # Known catalogue, we just have no magnitude conversions for it
+        log(
+            f"No magnitude conversions defined for '{catalog}'"
+            f" ({catalogs[catalog]['name']}), skipping augmentation"
+        )
     else:
         log(f"Warning: Unknown catalog type '{catalog}'. Skipping augmentation.")
 
@@ -791,7 +814,7 @@ def get_cat_vizier(
         log("Augmenting the catalogue with distances from field center")
         cat['_r'] = astrometry.spherical_distance(ra0, dec0, cat['RAJ2000'], cat['DEJ2000'])
 
-    if augment_bands or True:
+    if augment_bands:
         # Augment catalogue with additional bandpasses
         augment_cat_bands(cat, catalog=catalog if catalog in catalogs else None, verbose=verbose)
 

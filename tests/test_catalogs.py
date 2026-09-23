@@ -303,6 +303,48 @@ class TestCatalogAugmentation:
         assert 'Vmag' in result.colnames
 
     @pytest.mark.unit
+    def test_augment_gaiadr2_vizier_column_name(self):
+        """Test Gaia DR2 augmentation with the column name Vizier actually returns."""
+        cat = Table()
+        cat['Gmag'] = np.array([15.0, 16.0])
+        cat['BPmag'] = np.array([15.5, 16.5])
+        cat['RPmag'] = np.array([14.5, 15.5])
+        cat['E(BR/RP)'] = np.array([1.2, 1.3])  # Unsanitized name, as Vizier returns it
+
+        result = catalogs.augment_cat_bands(cat, catalog='gaiadr2', verbose=False)
+
+        for _ in ['Bmag', 'Vmag', 'Rmag', 'Imag']:
+            assert _ in result.colnames
+            assert np.all(np.isfinite(result[_]))
+
+    @pytest.mark.unit
+    def test_detect_gaiaedr3_not_gaiadr2(self):
+        """Test that Gaia EDR3 is not mistaken for DR2, which shares its magnitudes."""
+        cat = Table()
+        cat['Gmag'] = np.array([15.0, 16.0])
+        cat['BPmag'] = np.array([15.5, 16.5])
+        cat['RPmag'] = np.array([14.5, 15.5])
+        cat['RUWE'] = np.array([1.0, 1.1])  # Present in EDR3, absent in DR2
+
+        assert catalogs._detect_catalog_type(cat) == 'gaiaedr3'
+
+    @pytest.mark.unit
+    def test_augment_gaiaedr3_no_conversions(self):
+        """Test that a known catalog without conversions is left alone quietly."""
+        cat = Table()
+        cat['Gmag'] = np.array([15.0, 16.0])
+        cat['RUWE'] = np.array([1.0, 1.1])
+
+        messages = []
+        result = catalogs.augment_cat_bands(cat, catalog='gaiaedr3', verbose=messages.append)
+
+        # No DR2 conversions should have been applied to EDR3 magnitudes
+        assert 'Vmag' not in result.colnames
+        assert result.colnames == ['Gmag', 'RUWE']
+        # And it should not be reported as unknown
+        assert not any('Unknown catalog' in _ for _ in messages)
+
+    @pytest.mark.unit
     def test_augment_unknown_catalog(self):
         """Test that unknown catalog type is handled gracefully."""
         cat = Table()

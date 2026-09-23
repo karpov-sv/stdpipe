@@ -1505,6 +1505,21 @@ def plot_mag_histogram(
 
 
 from contextlib import contextmanager
+import threading
+
+# Matplotlib draws through a single process-wide mathtext parser
+# (`MathTextParser._parser` is a class attribute), and its pyparsing parse
+# actions keep mutable state on it. Two threads rendering labels with $..$ in
+# them at the same time corrupt that state, and one of them fails with a
+# ParseException pointing at an empty string. So rendering is serialized,
+# while the figures themselves are still built concurrently. Little
+# parallelism is lost by that - Agg rasterization mostly holds the GIL, so
+# concurrent draws were never really concurrent.
+#
+# The lock is public on purpose: code that draws its own figures in other
+# threads should acquire this very lock, as two independent locks protect
+# nothing.
+render_lock = threading.RLock()
 
 
 @contextmanager
@@ -1534,19 +1549,22 @@ def figure_saver(filename=None, show=False, tight_layout=True, **kwargs):
     try:
         yield fig
     finally:
-        if filename:
-            if tight_layout:
-                fig.tight_layout()
-            fig.savefig(filename, bbox_inches='tight')
+        # Everything that actually renders is under the lock; building the
+        # figure above is not
+        with render_lock:
+            if filename:
+                if tight_layout:
+                    fig.tight_layout()
+                fig.savefig(filename, bbox_inches='tight')
 
-        if show:
-            try:
-                from IPython.core.display import display
+            if show:
+                try:
+                    from IPython.core.display import display
 
-                # That should display the figure
-                display(fig)
-            except:
-                pass
+                    # That should display the figure
+                    display(fig)
+                except:
+                    pass
 
 
 def plot_outline(x, y, *args, ax=None, **kwargs):
