@@ -789,6 +789,10 @@ def get_objects_sep(
 
         **Columns:** x, y, xerr, yerr, flux, fluxerr, mag, magerr,
         flags, ra, dec, bg, fwhm, a, b, theta, and optionally seg_id.
+        With a position-dependent FWHM model also ``fwhm_model`` (model
+        FWHM at each source, used as optimal PSF width) and, when
+        *aper*/*bkgann* are scaled with it, ``aper`` (actual per-source
+        aperture radius in pixels).
 
         **Metadata:** aper, bkgann, optimal, group_sources, fwhm_phot.
 
@@ -1246,6 +1250,8 @@ def get_objects_sep(
             'ra': ra[fidx],
             'dec': dec[fidx],
             'bg': bgnorm[fidx],
+            'bgflux': bgflux[fidx],
+            'bgfluxerr': bgfluxerr[fidx],
             'fwhm': fwhm[fidx],
             'flux_radius': _flux_radius[fidx],
             'a': obj0['a'][idx][fidx],
@@ -1254,7 +1260,13 @@ def get_objects_sep(
         }
     )
 
+    # Per-source values actually used for photometry when they vary across
+    # the field; meta below only holds their median summary.
+    if fwhm_is_spatial:
+        obj['fwhm_model'] = _fwhm_pos[fidx]
+
     if scale_with_fwhm and fwhm_is_spatial:
+        obj['aper'] = aper_phot[fidx]
         obj.meta['aper'] = aper_base * fwhm_median
         if bkgann_base is not None:
             obj.meta['bkgann'] = (

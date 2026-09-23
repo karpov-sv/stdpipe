@@ -759,6 +759,23 @@ class TestSEPSpatialFWHM:
         assert len(obj_call) == len(obj_scalar)
         assert np.allclose(obj_call['flux'], obj_scalar['flux'])
 
+    @pytest.mark.unit
+    def test_per_source_aper_columns(self):
+        """Spatial FWHM reports per-source model FWHM and aperture radius;
+        scalar FWHM keeps the plain column set."""
+        image = self._make_varying_fwhm_image()
+        fmap = lambda x, y: 2.5 + 1.5 * np.asarray(x) / image.shape[1]
+
+        obj = photometry.get_objects_sep(image, fwhm=fmap, aper=1.5, verbose=False)
+        assert np.allclose(obj['fwhm_model'], fmap(obj['x'], obj['y']))
+        assert np.allclose(obj['aper'], 1.5 * obj['fwhm_model'])
+        # Model follows the left-to-right FWHM ramp
+        assert np.corrcoef(obj['x'], obj['aper'])[0, 1] > 0.99
+
+        obj_scalar = photometry.get_objects_sep(image, fwhm=3.0, verbose=False)
+        assert 'aper' not in obj_scalar.colnames
+        assert 'fwhm_model' not in obj_scalar.colnames
+
 
 class TestSExtractorIntegration:
     """Integration tests for SExtractor wrapper."""
