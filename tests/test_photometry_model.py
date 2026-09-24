@@ -6,6 +6,8 @@ import warnings
 
 import numpy as np
 import pytest
+import statsmodels.api as sm
+from statsmodels.tools.sm_exceptions import ConvergenceWarning
 
 from stdpipe import photometry_model
 
@@ -47,6 +49,48 @@ def _build_match_data(n=20, zero_point=25.0, color_term=0.12, include_color=Fals
         "zero_point": zero_point,
         "color_term": color_term,
     }
+
+
+def _add_noise_and_outliers(data, sigma=0.01, n_outliers=0, outlier_offset=1.0, seed=321):
+    """Perturb catalogue magnitudes with Gaussian noise and gross outliers.
+
+    Noise keeps the robust fit scale away from zero, so the full IRLS path of
+    ``_StableRLM`` is exercised instead of the perfect-fit early exit.
+    """
+    rng = np.random.default_rng(seed)
+    n = len(data["cat_mag"])
+
+    data["cat_mag"] = data["cat_mag"] + rng.normal(0, sigma, n)
+    data["obj_magerr"] = np.full(n, sigma / np.sqrt(2))
+    data["cat_magerr"] = np.full(n, sigma / np.sqrt(2))
+
+    outliers = np.zeros(n, dtype=bool)
+    if n_outliers:
+        outliers[rng.choice(n, n_outliers, replace=False)] = True
+        data["cat_mag"][outliers] += outlier_offset
+    data["outliers"] = outliers
+
+    return data
+
+
+def _run_match(data, **kwargs):
+    return photometry_model.match(
+        data["obj_ra"],
+        data["obj_dec"],
+        data["obj_mag"],
+        data["obj_magerr"],
+        data["obj_flags"],
+        data["cat_ra"],
+        data["cat_dec"],
+        data["cat_mag"],
+        cat_magerr=data["cat_magerr"],
+        cat_color=kwargs.pop("cat_color", data["cat_color"]),
+        sr=1 / 3600,
+        obj_x=data["obj_x"],
+        obj_y=data["obj_y"],
+        verbose=False,
+        **kwargs,
+    )
 
 
 class TestMakeSeries:
@@ -247,6 +291,153 @@ class TestMatch:
         zero_err = result["zero_fn"](data["obj_x"][:5], data["obj_y"][:5], get_err=True)
         assert np.all(np.isfinite(zero_err))
         assert np.all(zero_err >= 0)
+
+
+class TestStableRLM:
+    """Direct tests of the ``_StableRLM`` subclass used by robust ``match()``.
+
+    It re-implements ``RLM.fit()`` on top of private statsmodels helpers, so
+    these tests guard against upstream API drift (e.g. the statsmodels 0.15
+    ``RLM._estimate_scale(resid, scale_est)`` signature change).
+    """
+
+    @staticmethod
+    def _make_data(n=200, n_outliers=0, seed=42):
+        rng = np.random.default_rng(seed)
+        x = rng.uniform(-1, 1, n)
+        exog = np.vstack([np.ones(n), x]).T
+        endog = 2.0 + 0.5 * x + rng.normal(0, 0.1, n)
+        if n_outliers:
+            endog[rng.choice(n, n_outliers, replace=False)] += 5.0
+        return endog, exog
+
+    @pytest.mark.unit
+    def test_fit_matches_statsmodels_rlm(self):
+        endog, exog = self._make_data(n_outliers=10)
+
+        C = photometry_model._StableRLM(endog, exog).fit()
+        R = sm.RLM(endog, exog).fit()
+
+        np.testing.assert_allclose(C.params, R.params, rtol=1e-6)
+        np.testing.assert_allclose(C.scale, R.scale, rtol=1e-6)
+        np.testing.assert_allclose(C.bse, R.bse, rtol=1e-6)
+
+    @pytest.mark.unit
+    def test_fit_downweights_outliers(self):
+        endog, exog = self._make_data(n_outliers=20)
+        outliers = endog - (2.0 + 0.5 * exog[:, 1]) > 2.5
+
+        C = photometry_model._StableRLM(endog, exog).fit()
+
+        np.testing.assert_allclose(C.params, [2.0, 0.5], atol=0.03)
+        # Scale is a standard deviation of the clean residuals
+        assert 0.07 < C.scale < 0.13
+        assert np.all(C.weights[outliers] < 0.1)
+        assert np.median(C.weights[~outliers]) == pytest.approx(1.0)
+        assert C.fit_history["iteration"] > 1
+
+    @pytest.mark.unit
+    def test_fit_perfect_data_warns_and_returns_exact_params(self):
+        x = np.linspace(-1, 1, 50)
+        exog = np.vstack([np.ones_like(x), x]).T
+        endog = 2.0 + 0.5 * x
+
+        with pytest.warns(ConvergenceWarning, match="scale is 0.0"):
+            C = photometry_model._StableRLM(endog, exog).fit()
+
+        np.testing.assert_allclose(C.params, [2.0, 0.5], atol=1e-10)
+        assert C.scale == pytest.approx(0.0, abs=1e-12)
+
+
+class TestMatchRobust:
+    """``match()`` with ``robust=True`` (the default), i.e. via ``_StableRLM``."""
+
+    @pytest.mark.unit
+    def test_match_robust_is_default(self):
+        data = _add_noise_and_outliers(_build_match_data(n=50))
+
+        result = _run_match(data, spatial_order=0)
+        result_robust = _run_match(data, spatial_order=0, robust=True)
+
+        assert result is not None
+        np.testing.assert_array_equal(result["idx"], result_robust["idx"])
+        np.testing.assert_allclose(result["zero_model"], result_robust["zero_model"])
+
+    @pytest.mark.unit
+    def test_match_robust_constant_zero_point(self):
+        data = _add_noise_and_outliers(_build_match_data(n=50))
+
+        result = _run_match(data, spatial_order=0, robust=True)
+
+        assert result is not None
+        assert result["color_term"] is None
+        zero_eval = result["zero_fn"](data["obj_x"], data["obj_y"])
+        np.testing.assert_allclose(zero_eval, data["zero_point"], atol=5e-3)
+
+        zero_err = result["zero_fn"](data["obj_x"][:5], data["obj_y"][:5], get_err=True)
+        assert np.all(np.isfinite(zero_err))
+        assert np.all(zero_err > 0)
+
+    @pytest.mark.unit
+    def test_match_robust_rejects_outliers(self):
+        data = _add_noise_and_outliers(_build_match_data(n=60), n_outliers=8, outlier_offset=0.5)
+
+        result = _run_match(data, spatial_order=0, robust=True, threshold=5.0)
+
+        assert result is not None
+        # Outliers are rejected, clean points are kept
+        assert not np.any(result["idx"][data["outliers"]])
+        assert np.mean(result["idx"][~data["outliers"]]) > 0.9
+
+        zero_eval = result["zero_fn"](data["obj_x"], data["obj_y"])
+        np.testing.assert_allclose(zero_eval, data["zero_point"], atol=5e-3)
+
+    @pytest.mark.unit
+    def test_match_robust_color_term_and_spatial(self):
+        data = _add_noise_and_outliers(
+            _build_match_data(n=100, include_color=True, color_term=0.08),
+            n_outliers=5,
+        )
+
+        result = _run_match(data, spatial_order=1, robust=True, use_color=1)
+
+        assert result is not None
+        assert np.isclose(result["color_term"], data["color_term"], atol=5e-3)
+        assert np.isfinite(result["color_term_err"]) and result["color_term_err"] > 0
+
+        zero_eval = result["zero_fn"](data["obj_x"], data["obj_y"])
+        np.testing.assert_allclose(zero_eval, data["zero_point"], atol=1e-2)
+
+    @pytest.mark.unit
+    def test_match_robust_perfect_fit(self):
+        # Noiseless data: the robust scale is exactly zero, which must be
+        # treated as a perfect fit and not as a degenerate model
+        data = _build_match_data(include_color=False)
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ConvergenceWarning)
+            result = _run_match(data, spatial_order=0, robust=True)
+
+        assert result is not None
+        assert np.all(result["idx"])
+        zero_eval = result["zero_fn"](data["obj_x"], data["obj_y"])
+        np.testing.assert_allclose(zero_eval, data["zero_point"], atol=1e-6)
+
+    @pytest.mark.unit
+    def test_match_robust_agrees_with_weighted_on_clean_data(self):
+        data = _add_noise_and_outliers(_build_match_data(n=80, include_color=True))
+
+        kwargs = dict(spatial_order=1, use_color=1, threshold=None)
+        result_rlm = _run_match(data, robust=True, **kwargs)
+        result_wls = _run_match(data, robust=False, **kwargs)
+
+        assert result_rlm is not None and result_wls is not None
+        np.testing.assert_allclose(result_rlm["color_term"], result_wls["color_term"], atol=5e-3)
+        np.testing.assert_allclose(
+            result_rlm["zero_fn"](data["obj_x"], data["obj_y"]),
+            result_wls["zero_fn"](data["obj_x"], data["obj_y"]),
+            atol=5e-3,
+        )
 
 
 class TestSnModel:

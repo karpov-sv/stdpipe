@@ -14,6 +14,7 @@ from scipy import linalg
 from scipy.optimize import minimize_scalar, least_squares, root_scalar
 from statsmodels.regression import _tools as reg_tools
 from statsmodels.robust import robust_linear_model as rlm_model
+from statsmodels.robust import scale as rlm_scale
 from statsmodels.tools.sm_exceptions import ConvergenceWarning
 
 from . import astrometry
@@ -171,6 +172,19 @@ class _StableRLM(sm.RLM):
         self.df_resid = float(self.exog.shape[0] - np.linalg.matrix_rank(self.exog))
         self.df_model = float(np.linalg.matrix_rank(self.exog) - 1)
         self.nobs = float(self.endog.shape[0])
+
+    def _estimate_scale(self, resid, scale_est=None):
+        # Own implementation: RLM._estimate_scale is private and its signature
+        # changed in statsmodels 0.15 (scale_est became an explicit argument)
+        if scale_est is None:
+            scale_est = self.scale_est
+
+        if isinstance(scale_est, str) and scale_est.lower() == 'mad':
+            return rlm_scale.mad(resid, center=0)
+        elif isinstance(scale_est, rlm_scale.HuberScale):
+            return scale_est(self.df_resid, self.nobs, resid)
+        else:
+            raise ValueError("Option %s for scale_est not understood" % scale_est)
 
     def fit(
         self,
