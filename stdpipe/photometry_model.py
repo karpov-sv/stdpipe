@@ -141,6 +141,51 @@ def _evaluate_parameter_covariance(X, cov):
     return np.sqrt(err2)
 
 
+def _get_row_space(X):
+    """Row space of a rank-deficient design matrix.
+
+    Columns are normalized first so that the rank tolerance does not depend on
+    their scales. Returns ``(basis, norms)`` with orthonormal ``basis`` of the
+    row space of the normalized matrix, or None if ``X`` has full column rank.
+    """
+    X = np.asarray(X, dtype=float)
+
+    norms = np.sqrt(np.sum(X**2, axis=0))
+    norms[norms == 0] = 1.0
+
+    _, s, vt = np.linalg.svd(X / norms, full_matrices=False)
+    tol = s.max() * max(X.shape) * np.finfo(float).eps if s.size else 0.0
+    rank = int(np.sum(s > tol))
+
+    if rank == X.shape[1]:
+        return None
+
+    return vt[:rank], norms
+
+
+def _is_estimable(X, row_space, tol=1e-6):
+    """Whether linear combinations of parameters (rows of ``X``) are constrained by the fit.
+
+    ``row_space`` comes from :func:`_get_row_space` on the fitted design. A
+    combination is estimable if it lies in the row space of that design;
+    otherwise its value is arbitrary and its uncertainty is undefined.
+    """
+    X = np.atleast_2d(np.asarray(X, dtype=float))
+
+    if row_space is None:
+        return np.ones(X.shape[0], dtype=bool)
+
+    basis, norms = row_space
+    Xn = X / norms
+    resid = Xn - (Xn @ basis.T) @ basis
+
+    with np.errstate(invalid='ignore'):
+        rel = np.linalg.norm(resid, axis=1) / np.maximum(np.linalg.norm(Xn, axis=1), 1e-300)
+
+    # Rows with non-finite values give NaN here and are left to the callers
+    return ~(rel > tol)
+
+
 def _stable_pinv_exog(exog):
     exog = np.asarray(exog, dtype=float)
 
@@ -167,6 +212,10 @@ def _stable_pinv_exog(exog):
 
 
 class _StableRLM(sm.RLM):
+    # Coefficients are solved with the pseudoinverse (minimum-norm solution
+    # for rank-deficient designs, like sm.WLS), as QR returns huge, mutually
+    # cancelling values there
+
     def _initialize(self):
         self.pinv_wexog, self.normalized_cov_params = _stable_pinv_exog(self.exog)
         self.df_resid = float(self.exog.shape[0] - np.linalg.matrix_rank(self.exog))
@@ -214,7 +263,7 @@ class _StableRLM(sm.RLM):
                 self.exog,
                 weights=np.ones_like(self.endog),
                 check_weights=False,
-            ).fit(method='qr')
+            ).fit(method='pinv')
         else:
             start_params = np.asarray(start_params, dtype=np.double).squeeze()
             if start_params.shape[0] != self.exog.shape[1] or start_params.ndim != 1:
@@ -265,7 +314,7 @@ class _StableRLM(sm.RLM):
                 self.exog,
                 weights=self.weights,
                 check_weights=True,
-            ).fit(method='qr')
+            ).fit(method='pinv')
 
             if update_scale is True:
                 self.scale = self._estimate_scale(wls_results.resid)
@@ -749,7 +798,21 @@ def match(
         log('Non-linearity term is %.3f' % C.params[pos_nonlin])
 
     cov_p = _prepare_parameter_covariance(C.cov_params())
+
+    # Parameter combinations not constrained by the fitted points (rank
+    # deficient design, e.g. constant catalogue color) have arbitrary values
+    # and undefined uncertainties -- report NaN errors for them instead of the
+    # misleadingly small pseudoinverse ones
+    row_space = _get_row_space(X[idx])
+    if row_space is not None:
+        log(
+            'Warning: design matrix is rank deficient (rank %d < %d parameters), '
+            'some model terms are not constrained by the data'
+            % (len(row_space[0]), Nparams)
+        )
+
     zero_model_err = _evaluate_parameter_covariance(X, cov_p)
+    zero_model_err[~_is_estimable(X, row_space)] = np.nan
 
     # Export the model
     def zero_fn(xx, yy, mag=None, get_err=False, add_intrinsic_rms=False):
@@ -782,6 +845,11 @@ def match(
 
         if get_err:
             err = _evaluate_parameter_covariance(X, cov_p[0 : X.shape[1], 0 : X.shape[1]])
+            if row_space is not None:
+                # Omitted trailing terms (e.g. color) enter with zero coefficients
+                Xfull = np.zeros((X.shape[0], Nparams))
+                Xfull[:, 0 : X.shape[1]] = X
+                err[~_is_estimable(Xfull, row_space)] = np.nan
             if add_intrinsic_rms:
                 err = np.hypot(err, intrinsic_rms)
             return err
@@ -792,7 +860,9 @@ def match(
     if cat_color is not None and (fit_color_term or force_color_term is not None):
         if fit_color_term:
             color_term = list(C.params[pos_color:][: int(fit_color_term)])
-            color_term_err = list(np.sqrt(np.diag(cov_p))[pos_color:][: int(fit_color_term)])
+            color_term_err = np.sqrt(np.diag(cov_p))
+            color_term_err[~_is_estimable(np.eye(Nparams), row_space)] = np.nan
+            color_term_err = list(color_term_err[pos_color:][: int(fit_color_term)])
             if len(color_term) == 1:
                 color_term = color_term[0]
                 color_term_err = color_term_err[0]

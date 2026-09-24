@@ -337,16 +337,36 @@ class TestStableRLM:
         assert C.fit_history["iteration"] > 1
 
     @pytest.mark.unit
-    def test_fit_perfect_data_warns_and_returns_exact_params(self):
+    def test_fit_perfect_data_returns_exact_params(self):
         x = np.linspace(-1, 1, 50)
         exog = np.vstack([np.ones_like(x), x]).T
         endog = 2.0 + 0.5 * x
 
-        with pytest.warns(ConvergenceWarning, match="scale is 0.0"):
+        # Depending on roundoff the scale is either exactly zero (early exit
+        # with a ConvergenceWarning) or negligible
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ConvergenceWarning)
             C = photometry_model._StableRLM(endog, exog).fit()
 
         np.testing.assert_allclose(C.params, [2.0, 0.5], atol=1e-10)
-        assert C.scale == pytest.approx(0.0, abs=1e-12)
+        # Treated as a perfect fit by match()
+        assert C.scale < photometry_model._MIN_FIT_SCALE
+
+    @pytest.mark.unit
+    def test_fit_rank_deficient_design_gives_minimum_norm_solution(self):
+        endog, exog = self._make_data(n_outliers=10)
+        # Duplicated column makes the design singular; the slope may be split
+        # arbitrarily between the two copies, and the minimum-norm solution
+        # splits it evenly instead of returning huge cancelling values
+        exog = np.hstack([exog, exog[:, 1:]])
+
+        C = photometry_model._StableRLM(endog, exog).fit()
+
+        assert np.all(np.isfinite(C.params))
+        assert np.all(np.abs(C.params) < 10)
+        np.testing.assert_allclose(C.params[1], C.params[2], rtol=1e-8)
+        np.testing.assert_allclose(C.params[0], 2.0, atol=0.03)
+        np.testing.assert_allclose(C.params[1] + C.params[2], 0.5, atol=0.03)
 
 
 class TestMatchRobust:
@@ -438,6 +458,106 @@ class TestMatchRobust:
             result_wls["zero_fn"](data["obj_x"], data["obj_y"]),
             atol=5e-3,
         )
+
+
+class TestMatchRankDeficient:
+    """``match()`` with a design matrix not constrained by the data."""
+
+    @staticmethod
+    def _constant_color_data(color=0.5):
+        # All stars share the same color, so the color term column is
+        # proportional to the constant one and only their sum is constrained
+        data = _add_noise_and_outliers(_build_match_data(n=60, include_color=True))
+        data["cat_color"][:] = color
+        rng = np.random.default_rng(1)
+        data["cat_mag"] = (
+            data["obj_mag"] + data["zero_point"] + data["color_term"] * color + rng.normal(0, 0.01, 60)
+        )
+        return data
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("robust", [True, False])
+    def test_match_constant_color(self, robust):
+        data = self._constant_color_data()
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ConvergenceWarning)
+            result = _run_match(data, spatial_order=0, robust=robust, use_color=1)
+
+        assert result is not None
+        # Minimum-norm solution: finite, with the constrained combination correct
+        assert np.isfinite(result["color_term"]) and abs(result["color_term"]) < 100
+        zero_eval = result["zero_fn"](data["obj_x"], data["obj_y"]) + result["color_term"] * 0.5
+        np.testing.assert_allclose(zero_eval, data["zero_point"] + data["color_term"] * 0.5, atol=5e-3)
+
+        # The color term alone, and the zero point without it, are unconstrained
+        assert np.isnan(result["color_term_err"])
+        assert np.all(np.isnan(result["zero_fn"](data["obj_x"][:5], data["obj_y"][:5], get_err=True)))
+
+        # The full model at the fitted points is constrained
+        assert np.all(np.isfinite(result["zero_model_err"][result["idx"]]))
+        assert np.all(result["zero_model_err"][result["idx"]] > 0)
+
+    @pytest.mark.unit
+    def test_match_constant_color_robust_agrees_with_weighted(self):
+        data = self._constant_color_data()
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ConvergenceWarning)
+            result_rlm = _run_match(data, spatial_order=0, robust=True, use_color=1)
+            result_wls = _run_match(data, spatial_order=0, robust=False, use_color=1)
+
+        np.testing.assert_allclose(result_rlm["color_term"], result_wls["color_term"], rtol=1e-2)
+
+    @pytest.mark.unit
+    def test_match_full_rank_errors_stay_finite(self):
+        data = _add_noise_and_outliers(_build_match_data(n=60, include_color=True))
+
+        result = _run_match(data, spatial_order=1, robust=True, use_color=1)
+
+        assert np.isfinite(result["color_term_err"]) and result["color_term_err"] > 0
+        assert np.all(np.isfinite(result["zero_model_err"][result["idx0"]]))
+        assert np.all(np.isfinite(result["zero_fn"](data["obj_x"], data["obj_y"], get_err=True)))
+
+
+class TestEstimable:
+    @pytest.mark.unit
+    def test_full_rank_returns_none(self):
+        X = np.random.default_rng(0).normal(size=(20, 3))
+        assert photometry_model._get_row_space(X) is None
+        assert np.all(photometry_model._is_estimable(np.eye(3), None))
+
+    @pytest.mark.unit
+    def test_collinear_columns(self):
+        rng = np.random.default_rng(0)
+        x = rng.normal(size=20)
+        X = np.vstack([np.ones(20), 0.5 * np.ones(20), x]).T
+
+        row_space = photometry_model._get_row_space(X)
+        assert row_space is not None
+        assert len(row_space[0]) == 2
+
+        rows = np.array(
+            [
+                [1.0, 0.0, 0.0],  # intercept alone - not estimable
+                [0.0, 1.0, 0.0],  # constant color alone - not estimable
+                [1.0, 0.5, 0.0],  # their combination at fitted color - estimable
+                [0.0, 0.0, 1.0],  # independent slope - estimable
+                [1.0, 0.5, 3.0],  # any fitted row - estimable
+                [np.nan, 0.0, 0.0],  # invalid rows are left to callers
+            ]
+        )
+        np.testing.assert_array_equal(
+            photometry_model._is_estimable(rows, row_space),
+            [False, False, True, True, True, True],
+        )
+
+    @pytest.mark.unit
+    def test_column_scaling_does_not_affect_rank(self):
+        rng = np.random.default_rng(0)
+        # Widely different but independent column scales, as with bg_order terms
+        X = np.vstack([np.ones(30), 1e8 * rng.uniform(1, 2, 30), 1e-6 * rng.normal(size=30)]).T
+        assert photometry_model._get_row_space(X) is None
 
 
 class TestSnModel:
