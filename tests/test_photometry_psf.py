@@ -1002,6 +1002,67 @@ class TestCreatePSFModelPolynomial:
         return image.astype(np.float64), obj
 
     @pytest.mark.unit
+    def test_auto_degree_constant_psf(self):
+        """Automatic degree should not add spatial terms for a constant PSF."""
+        image, obj = self._make_varying_psf_image(n_stars=80, fwhm_gradient=0.0)
+
+        result = psf.create_psf_model(image, obj=obj, fwhm=3.0, degree='auto', verbose=False)
+
+        assert result['degree'] == 0
+        info = result['degree_selection']
+        assert info['degrees'][0] == 0
+        assert len(info['score_diff']) == len(info['degrees'])
+
+    @pytest.mark.unit
+    def test_auto_degree_varying_psf(self):
+        """Automatic degree should model a strong PSF gradient."""
+        image, obj = self._make_varying_psf_image(n_stars=80, fwhm_gradient=1.5)
+
+        result = psf.create_psf_model(image, obj=obj, fwhm=3.0, degree='auto', verbose=False)
+
+        assert result['degree'] >= 1
+        assert result['ncoeffs'] == (result['degree'] + 1) * (result['degree'] + 2) // 2
+        assert result['data'].shape[0] == result['ncoeffs']
+
+    @pytest.mark.unit
+    def test_auto_degree_limited_by_star_count(self):
+        """Candidate degrees are limited to what the number of stars supports."""
+        image, obj = self._make_varying_psf_image(n_stars=20, fwhm_gradient=1.5)
+
+        result = psf.create_psf_model(
+            image, obj=obj, fwhm=3.0, degree='auto', isolation=0, verbose=False
+        )
+
+        # 20 stars at 5 stars per coefficient allow degree 1 (3 coefficients) at most
+        assert result['degree'] <= 1
+        assert max(result['degree_selection']['degrees']) <= 1
+
+    @pytest.mark.unit
+    def test_auto_degree_undersampled_matches_explicit(self):
+        """For under-sampled PSF, candidates account for oversampling, and the
+        automatic model is identical to an explicit build with the chosen degree."""
+        from stdpipe import simulation
+
+        fwhm = 2.0
+        true_psf = simulation.create_psf_model(fwhm=fwhm, oversampling=4)
+        rng = np.random.default_rng(1)
+        image = rng.normal(0, 1.0, (512, 512))
+        xs = rng.uniform(20, 492, 80)
+        ys = rng.uniform(20, 492, 80)
+        fluxes = rng.uniform(5e4, 2e5, 80)
+        for x, y, f in zip(xs, ys, fluxes):
+            psf.place_psf_stamp(image, true_psf, x, y, flux=f)
+        obj = Table({'x': xs, 'y': ys, 'flux': fluxes})
+
+        auto = psf.create_psf_model(image, obj=obj, fwhm=fwhm, degree='auto', isolation=0)
+        assert auto['oversampling'] == 2
+        # 80 stars / oversampling**2 = 20 samples per model pixel: up to degree 1
+        assert max(auto['degree_selection']['degrees']) == 1
+
+        explicit = psf.create_psf_model(image, obj=obj, fwhm=fwhm, degree=auto['degree'], isolation=0)
+        np.testing.assert_allclose(auto['data'], explicit['data'], atol=1e-12)
+
+    @pytest.mark.unit
     def test_degree1_structure(self):
         """Test degree=1 produces correct PSFEx-compatible structure."""
         image, obj = self._make_varying_psf_image()

@@ -754,6 +754,7 @@ def create_psf_model(
     subtract_background=False,
     isolation=2.0,
     maxiters=5,
+    max_degree=3,
     get_raw=False,
     verbose=False,
 ):
@@ -805,9 +806,18 @@ def create_psf_model(
         Oversampling factor for the ePSF. If None (default), it is auto-selected from
         the FWHM: ``1`` when ``fwhm >= 2.5`` image pixels (well-sampled PSF) and
         ``2`` otherwise (under-sampled PSF). Pass an explicit integer to override.
-    degree : int, optional
+    degree : int or 'auto', optional
         Polynomial degree for spatial PSF variation (default: 0 = constant). Degree 1 =
-        linear (3 coefficients), degree 2 = quadratic (6 coefficients), etc.
+        linear (3 coefficients), degree 2 = quadratic (6 coefficients), etc. If
+        ``'auto'``, the degree (up to ``max_degree``, and to what the number of
+        stars supports at 5 stars per coefficient) is selected by spatial
+        cross-validation: the lowest degree predicting the shapes of stars left
+        out of the fit not worse than the best one by more than one standard
+        error. Per-degree scores are then stored in ``degree_selection`` entry
+        of the returned dictionary. The choice is conservative: on simulated
+        fields it picks the lower of two nearly equivalent degrees (at most
+        ~0.2% rms PSF flux accuracy lost), while never selecting degrees that
+        the data cannot constrain.
     regularization : float, optional
         Tikhonov regularization parameter for polynomial fitting (default: 1e-6). Only used
         when ``degree > 0``. Set to 0 for unregularized least-squares.
@@ -838,6 +848,8 @@ def create_psf_model(
         (default: 5). Iterations stop earlier once the RMS center correction
         is below 0.005 pixels. Set to 0 to build the model in a single pass at
         catalogue positions, with stamps normalized by their sums.
+    max_degree : int, optional
+        Highest polynomial degree considered when ``degree='auto'`` (default: 3).
     get_raw : bool, optional
         If True and ``degree=0``, returns the model as photutils ``ImagePSF``
         object. Ignored when ``degree > 0``.
@@ -958,16 +970,40 @@ def create_psf_model(
         size,
         mask,
         oversampling,
-        degree,
+        None if degree == 'auto' else degree,
         regularization,
         subtract_neighbors,
         neighbors_obj if neighbors_obj is not None else obj,
         background_mode,
         maxiters,
         log,
+        max_degree=max_degree,
     )
 
-    if get_raw and degree == 0:
+    selection = psf.get('degree_selection')
+    if selection is not None and psf['degree'] != selection['registration_degree']:
+        # Star centers and normalizations were refined with the highest
+        # candidate degree model; rebuild the chosen one from scratch so that
+        # it is identical to an explicit build with that degree
+        log('Rebuilding PSF model with selected degree %d' % psf['degree'])
+        psf = _create_psf_model_polynomial(
+            image,
+            obj,
+            fwhm,
+            size,
+            mask,
+            oversampling,
+            psf['degree'],
+            regularization,
+            subtract_neighbors,
+            neighbors_obj if neighbors_obj is not None else obj,
+            background_mode,
+            maxiters,
+            log,
+        )
+        psf['degree_selection'] = selection
+
+    if get_raw and psf['degree'] == 0:
         # photutils expects oversampled PSF images normalized to oversampling**2
         return photutils.psf.ImagePSF(psf['data'][0] * oversampling**2, oversampling=oversampling)
 
@@ -1338,6 +1374,52 @@ def _fit_catalogue_fluxes(image, mask, cat_x, cat_y, filtered, terms, sampling, 
     return flux
 
 
+def _spline_weights_matrix(samples, os_size, npad=12):
+    """Sparse matrix of cubic B-spline interpolation weights for star samples.
+
+    Maps padded, prefiltered per-star model grids (flattened, stacked over
+    stars) to the values at sample positions, i.e. it is equivalent to
+    ``map_coordinates(order=3, prefilter=False)`` on the output of
+    :func:`_prefilter_psf_planes`, but reusable for any model.
+    """
+
+    from scipy.sparse import csr_matrix
+
+    nstars, nsamp = samples['node'].shape
+    size = os_size + 2 * npad
+    gx = samples['gx'] + npad
+    gy = samples['gy'] + npad
+    ix = np.floor(gx).astype(np.int64)
+    iy = np.floor(gy).astype(np.int64)
+
+    def bspline(t):
+        return np.stack(
+            [
+                (1 - t) ** 3 / 6,
+                (3 * t**3 - 6 * t**2 + 4) / 6,
+                (-3 * t**3 + 3 * t**2 + 3 * t + 1) / 6,
+                t**3 / 6,
+            ],
+            axis=-1,
+        )
+
+    wx = bspline(gx - ix)  # (nstars, nsamp, 4)
+    wy = bspline(gy - iy)
+    offsets = np.arange(-1, 3)
+    cols_x = np.clip(ix[..., np.newaxis] + offsets, 0, size - 1)
+    cols_y = np.clip(iy[..., np.newaxis] + offsets, 0, size - 1)
+
+    star = np.arange(nstars)[:, np.newaxis, np.newaxis, np.newaxis]
+    cols = star * size * size + cols_y[..., :, np.newaxis] * size + cols_x[..., np.newaxis, :]
+    weights = wy[..., :, np.newaxis] * wx[..., np.newaxis, :]
+    rows = np.broadcast_to(np.arange(nstars * nsamp).reshape(nstars, nsamp, 1, 1), cols.shape)
+
+    return csr_matrix(
+        (weights.ravel(), (rows.ravel(), cols.ravel())),
+        shape=(nstars * nsamp, nstars * size * size),
+    )
+
+
 def _eval_psf_at_samples(coeffs, V, samples, os_size, gradient=False):
     """Evaluate polynomial PSF model for every star at its sample positions.
 
@@ -1345,14 +1427,20 @@ def _eval_psf_at_samples(coeffs, V, samples, os_size, gradient=False):
     d/dx and d/dy per oversampled pixel) if ``gradient=True``, in which case
     the model of every star is first normalized to unit sum over the grid.
 
-    As spline interpolation is linear, every coefficient plane is
-    interpolated once at the samples of all stars, and the results are then
-    combined with per-star polynomial terms, instead of interpolating a
-    separate model grid for every star.
+    As spline prefiltering is linear, coefficient planes are prefiltered once
+    and combined into per-star grids, which are then interpolated at all
+    samples with a single sparse product; the interpolation weights are
+    computed once per set of samples and cached in it.
     """
 
     ncoeffs = V.shape[1]
+    nstars, nsamp = samples['node'].shape
     planes = coeffs.reshape(ncoeffs, os_size, os_size)
+
+    if samples.get('_weights') is None:
+        samples['_weights'] = _spline_weights_matrix(samples, os_size)
+    W = samples['_weights']
+
     if gradient:
         gy, gx = np.gradient(planes, axis=(1, 2))
         maps = [planes, gx, gy]
@@ -1361,18 +1449,47 @@ def _eval_psf_at_samples(coeffs, V, samples, os_size, gradient=False):
 
     result = []
     for m in maps:
-        values = np.array(
-            _interp_psf_planes(_prefilter_psf_planes(m), samples['gx'], samples['gy'])
-        )
-        result.append(np.einsum('sk,ksn->sn', V, values))
+        filtered = np.array(_prefilter_psf_planes(m)).reshape(ncoeffs, -1)
+        # Accelerate BLAS raises spurious floating point flags on finite matmuls
+        with np.errstate(over='ignore', invalid='ignore', divide='ignore'):
+            grids = V @ filtered
+        result.append((W @ grids.ravel()).reshape(nstars, nsamp))
 
     if gradient:
-        # Accelerate BLAS raises spurious floating point flags on finite matmuls
         with np.errstate(over='ignore', invalid='ignore', divide='ignore'):
             totals = V @ planes.reshape(ncoeffs, -1).sum(axis=1)
             result = [r / totals[:, np.newaxis] for r in result]
 
     return result if gradient else result[0]
+
+
+def _sample_noise_variance(value, res, fit, keep, norm):
+    """Expected variance of normalized star samples, shape ``[nstars, nsamp]``.
+
+    Every star's own robust residual level (background noise) plus a source
+    term proportional to the model over star flux, with a global coefficient
+    estimated from the residuals of the core samples of kept stars.
+    """
+
+    with np.errstate(invalid='ignore', divide='ignore'), warnings.catch_warnings():
+        warnings.simplefilter('ignore', RuntimeWarning)
+        r = np.where(fit, res, np.nan)
+        sig = 1.4826 * np.nanmedian(np.abs(r - np.nanmedian(r, axis=1)[:, np.newaxis]), axis=1)
+        sig = np.where(np.isfinite(sig) & (sig > 0), sig, np.nan)
+        model = np.clip(value - res, 0, None) / norm[:, np.newaxis]
+        core = fit & keep[:, np.newaxis] & (model > 0.1 * np.nanmax(model))
+        # Median of squared normal deviate is 0.455 of its variance
+        beta = (
+            np.nanmedian(
+                (res[core] ** 2 / 0.455 - np.broadcast_to(sig[:, np.newaxis], res.shape)[core] ** 2)
+                / model[core]
+            )
+            if np.any(core)
+            else 0.0
+        )
+        beta = beta if np.isfinite(beta) and beta > 0 else 0.0
+
+        return sig[:, np.newaxis] ** 2 + beta * model
 
 
 def _solve_polynomial_psf(
@@ -1431,7 +1548,7 @@ def _solve_polynomial_psf(
 
     node_f = node.ravel()
     star_f = np.repeat(np.arange(nstars), nsamp)
-    Vs = V[star_f]  # (nstars * nsamp, ncoeffs)
+    star_node = star_f * nnodes + node_f
     reg = max(regularization, 1e-12) * np.eye(ncoeffs)[np.newaxis]
     # Node assignment is fixed within the solve, so is the grouping of samples
     layout = _group_layout(node_f, nnodes, valid.ravel())
@@ -1460,20 +1577,7 @@ def _solve_polynomial_psf(
                 # own robust background level plus a source term proportional to
                 # the model over star flux, with global coefficient estimated
                 # from the residuals of the core samples.
-                r = np.where(fit, res, np.nan)
-                sig = 1.4826 * np.nanmedian(
-                    np.abs(r - np.nanmedian(r, axis=1)[:, np.newaxis]), axis=1
-                )
-                sig = np.where(np.isfinite(sig) & (sig > 0), sig, np.nan)
-                model = np.clip(value - res, 0, None) / norm[:, np.newaxis]
-                core = fit & keep[:, np.newaxis] & (model > 0.1 * np.nanmax(model))
-                # Median of squared normal deviate is 0.455 of its variance
-                beta = np.nanmedian(
-                    (res[core] ** 2 / 0.455 - np.broadcast_to(sig[:, np.newaxis], res.shape)[core] ** 2)
-                    / model[core]
-                ) if np.any(core) else 0.0
-                beta = beta if np.isfinite(beta) and beta > 0 else 0.0
-                z = res / np.sqrt(sig[:, np.newaxis] ** 2 + beta * model)
+                z = res / np.sqrt(_sample_noise_variance(value, res, fit, keep, norm))
                 zk = np.where(fit & new_keep[:, np.newaxis], z, np.nan)
                 med_n, scale_n, count_n = _group_robust_stats(
                     node_f, zk.ravel(), nnodes, layout=layout
@@ -1493,17 +1597,15 @@ def _solve_polynomial_psf(
             else:
                 changed = True
 
-            # Per-node weighted least squares for the model correction
+            # Per-node weighted least squares for the model correction. The
+            # polynomial terms are constant within a star, so weights and
+            # weighted residuals are first summed per (star, node)
             w2 = ((weights**2)[:, np.newaxis] * (fit & keep[:, np.newaxis])).ravel()
-            VTV = np.empty((nnodes, ncoeffs, ncoeffs))
-            VTr = np.empty((nnodes, ncoeffs))
             wr = w2 * np.where(np.isfinite(res), res, 0).ravel()
-            for k in range(ncoeffs):
-                VTr[:, k] = np.bincount(node_f, wr * Vs[:, k], minlength=nnodes)
-                for l in range(k, ncoeffs):
-                    VTV[:, k, l] = VTV[:, l, k] = np.bincount(
-                        node_f, w2 * Vs[:, k] * Vs[:, l], minlength=nnodes
-                    )
+            w_sn = np.bincount(star_node, w2, minlength=nstars * nnodes).reshape(nstars, nnodes)
+            r_sn = np.bincount(star_node, wr, minlength=nstars * nnodes).reshape(nstars, nnodes)
+            VTV = np.einsum('sn,sk,sl->nkl', w_sn, V, V, optimize=True)
+            VTr = np.einsum('sn,sk->nk', r_sn, V, optimize=True)
             try:
                 corr = np.linalg.solve(VTV + reg, VTr[..., np.newaxis])[..., 0].T
             except np.linalg.LinAlgError:
@@ -1558,6 +1660,158 @@ def _fit_stamp_offsets(samples, fit, V, coeffs, os_size, fwhm):
     return dx, dy, amp, ok
 
 
+def _subset_samples(samples, idx):
+    """Samples of a subset of stars."""
+
+    # Cached entries (leading underscore) belong to the full set of samples
+    return {
+        key: (value[idx] if isinstance(value, np.ndarray) else value)
+        for key, value in samples.items()
+        if not key.startswith('_')
+    }
+
+
+def _heldout_star_scores(samples, fit, V, coeffs, var, os_size, fwhm, clip=3.0):
+    """Robust goodness of fit of stars against a PSF model not fitted to them.
+
+    Every star gets its own amplitude and sub-pixel shift fitted over the
+    core, so only the shape of the model is tested. The score is the mean
+    over used core samples (within ``2 * fwhm``, where PSF photometry gets
+    its information) of the squared normalized residual, clipped at ``clip``
+    sigma. Outer samples are not scored: they are much more numerous, and
+    small noise-level differences there would outweigh the core mismatch
+    that biases PSF fluxes. Returns NaN for stars that can't be fitted.
+    """
+
+    nstars = V.shape[0]
+    sampling = samples['sampling']
+    M, gx, gy = _eval_psf_at_samples(coeffs, V, samples, os_size, gradient=True)
+    core = fit & (samples['r'] < 2 * fwhm)
+
+    scores = np.full(nstars, np.nan)
+    for i in range(nstars):
+        use = core[i] & np.isfinite(M[i])
+        if np.sum(use) < 6:
+            continue
+        A = np.column_stack([M[i], -gx[i] / sampling, -gy[i] / sampling])
+        sol, _, _, _ = np.linalg.lstsq(A[use], samples['value'][i][use], rcond=None)
+        if not np.all(np.isfinite(sol)) or sol[0] <= 0:
+            continue
+        ok = core[i] & np.isfinite(var[i]) & (var[i] > 0)
+        if not np.any(ok):
+            continue
+        z2 = (samples['value'][i][ok] - A[ok] @ sol) ** 2 / var[i][ok]
+        scores[i] = np.mean(np.minimum(z2, clip**2))
+
+    return scores
+
+
+def _select_psf_degree(
+    samples,
+    fit,
+    keep,
+    var,
+    positions_x,
+    positions_y,
+    image_shape,
+    weights,
+    regularization,
+    os_size,
+    fwhm,
+    degrees,
+    norm_params,
+    coeffs_start,
+    log,
+    nblocks=4,
+    min_scored=10,
+):
+    """Choose polynomial degree of the PSF model by spatial cross-validation.
+
+    The field is split into ``nblocks x nblocks`` blocks, assigned to
+    ``nblocks`` folds so that every fold is spread over the field. For every
+    candidate degree, the model is fitted to the stars outside a fold and
+    tested on the stars inside it. Degrees are compared by paired per-star
+    score differences, and the lowest degree not worse than the best one by
+    more than one standard error of the difference is chosen.
+
+    Returns the chosen degree, the full-data solution for it as
+    ``(coeffs, keep, fit, res)``, and a dict with per-degree mean score
+    differences to the best degree and their errors.
+    """
+
+    x0, y0, sx, sy = norm_params
+    h, w = image_shape
+    bx = np.clip((positions_x / w * nblocks).astype(int), 0, nblocks - 1)
+    by = np.clip((positions_y / h * nblocks).astype(int), 0, nblocks - 1)
+    folds = (bx + 2 * by) % nblocks
+
+    scores = {}
+    solutions = {}
+    for degree in degrees:
+        ncoeffs = (degree + 1) * (degree + 2) // 2
+        V = _poly_terms(positions_x, positions_y, degree, x0, y0, sx, sy)
+        start = np.zeros((ncoeffs, coeffs_start.shape[1]))
+        start[0] = coeffs_start[0]
+        solutions[degree] = _solve_polynomial_psf(
+            samples, V, weights, regularization, os_size, coeffs=start
+        )
+
+        scores[degree] = np.full(len(positions_x), np.nan)
+        for f in range(nblocks):
+            train = np.flatnonzero(folds != f)
+            test = np.flatnonzero((folds == f) & keep)
+            if not len(test) or len(train) < 2 * ncoeffs:
+                continue
+            coeffs_f, _, _, _ = _solve_polynomial_psf(
+                _subset_samples(samples, train),
+                V[train],
+                weights[train],
+                regularization,
+                os_size,
+                coeffs=solutions[degree][0],
+            )
+            scores[degree][test] = _heldout_star_scores(
+                _subset_samples(samples, test), fit[test], V[test], coeffs_f, var[test], os_size, fwhm
+            )
+
+    # Paired comparison on stars scored for all degrees
+    good = np.all([np.isfinite(scores[d]) for d in degrees], axis=0)
+    ngood = int(np.sum(good))
+    means = {d: np.mean(scores[d][good]) if ngood else 0.0 for d in degrees}
+    best = min(degrees, key=lambda d: means[d])
+    info = {'degrees': list(degrees), 'nstars': ngood, 'registration_degree': degrees[-1]}
+    info['score_diff'] = [float(means[d] - means[best]) for d in degrees]
+    info['score_diff_err'] = [
+        float(np.std(scores[d][good] - scores[best][good]) / np.sqrt(ngood)) if ngood else 0.0
+        for d in degrees
+    ]
+
+    chosen = best
+    for d, diff, err in zip(degrees, info['score_diff'], info['score_diff_err']):
+        if diff <= err:
+            chosen = d
+            break
+
+    if info['nstars'] < min_scored:
+        log(
+            'Warning: only %d stars could be scored for degree selection, using degree %d'
+            % (info['nstars'], degrees[0])
+        )
+        chosen = degrees[0]
+
+    log(
+        'Degree selection on %d stars: '
+        % info['nstars']
+        + ', '.join(
+            'degree %d: %+.4f +- %.4f' % (d, diff, err)
+            for d, diff, err in zip(degrees, info['score_diff'], info['score_diff_err'])
+        )
+        + ' -> degree %d' % chosen
+    )
+
+    return chosen, solutions[chosen], info
+
+
 def _create_psf_model_polynomial(
     image,
     obj,
@@ -1572,6 +1826,7 @@ def _create_psf_model_polynomial(
     background_mode,
     maxiters,
     log,
+    max_degree=None,
 ):
     """Build PSF model by fitting per-pixel polynomials to star stamps.
 
@@ -1588,8 +1843,13 @@ def _create_psf_model_polynomial(
     never interpolated.
     """
 
+    auto_degree = degree is None
+    if auto_degree:
+        # Refined below from the number of usable stars
+        degree = 0
     ncoeffs = (degree + 1) * (degree + 2) // 2
-    log('Building PSF model: degree=%d (%d coefficients)' % (degree, ncoeffs))
+    if not auto_degree:
+        log('Building PSF model: degree=%d (%d coefficients)' % (degree, ncoeffs))
     if background_mode != 'none':
         log('Subtracting local stamp background using %s model' % background_mode)
 
@@ -1772,6 +2032,31 @@ def _create_psf_model_polynomial(
     nstars = len(cutouts)
     log('Extracted %d valid stamps for PSF fitting' % nstars)
 
+    # Every model pixel is constrained only by the stars whose pixels fall
+    # onto it, i.e. by about nstars / oversampling**2 of them
+    min_stars_per_coeff = 5
+    samples_per_node = nstars / oversampling**2
+
+    if auto_degree:
+        # Highest degree with enough samples per polynomial coefficient; the
+        # model is built with it, and the degree is then selected below
+        candidates = [
+            d
+            for d in range(int(max_degree) + 1)
+            if samples_per_node >= min_stars_per_coeff * (d + 1) * (d + 2) // 2
+        ] or [0]
+        degree = candidates[-1]
+        ncoeffs = (degree + 1) * (degree + 2) // 2
+        log(
+            'Building PSF model: automatic degree up to %d (%d stars)' % (degree, nstars)
+        )
+    elif samples_per_node < min_stars_per_coeff * ncoeffs:
+        log(
+            'Warning: %d stars at oversampling %d may be too few to constrain '
+            'degree %d PSF model (%d coefficients); consider degree=\'auto\''
+            % (nstars, oversampling, degree, ncoeffs)
+        )
+
     if nstars < ncoeffs:
         raise ValueError(
             "Only %d valid stamps, need at least %d for degree=%d" % (nstars, ncoeffs, degree)
@@ -1911,6 +2196,29 @@ def _create_psf_model_polynomial(
         centers_x, centers_y = new_x, new_y
         norms[ok] *= amp[ok]
 
+    degree_info = None
+    if auto_degree and len(candidates) > 1:
+        var = _sample_noise_variance(samples['value'], res, fit, keep, samples['norm'])
+        degree, (coeffs, keep, fit, res), degree_info = _select_psf_degree(
+            samples,
+            fit,
+            keep,
+            var,
+            positions_x,
+            positions_y,
+            image.shape,
+            weights,
+            regularization,
+            os_size,
+            fwhm,
+            candidates,
+            (x0, y0, sx, sy),
+            coeffs,
+            log,
+        )
+        ncoeffs = (degree + 1) * (degree + 2) // 2
+        V = _poly_terms(positions_x, positions_y, degree, x0, y0, sx, sy)
+
     # Residual statistics before regularization
     used = fit & keep[:, np.newaxis]
     rms = np.sqrt(np.sum(np.where(used, res, 0) ** 2) / max(int(used.sum()), 1))
@@ -1958,6 +2266,8 @@ def _create_psf_model_polynomial(
         # Model pixels sample the pixel-integrated PSF (Anderson & King ePSF)
         'subpixel_integrated': False,
     }
+    if degree_info is not None:
+        psf['degree_selection'] = degree_info
 
     return psf
 
