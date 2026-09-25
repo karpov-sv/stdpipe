@@ -240,10 +240,9 @@ Both approaches:
 - More accurate than aperture photometry, especially in crowded fields
 - Account for full PSF including wings
 - Best for: accurate fluxes, crowded fields, faint sources
-- Returns fitted positions (`x_psf`, `y_psf`) and quality metrics
+- Fitted positions replace `x`, `y` (input ones kept in `x_orig`, `y_orig`, as with centroiding), plus quality metrics
 
 **PSF Output Columns (all with `_psf` suffix):**
-- `x_psf`, `y_psf` - Fitted source positions
 - `qfit_psf` - Fit quality (0 = good)
 - `cfit_psf` - Central pixel fit quality (0 = good)
 - `flags_psf` - Photutils fit flags

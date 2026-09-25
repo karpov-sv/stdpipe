@@ -161,7 +161,7 @@ class TestMeasureObjectsPSF:
         assert len(result) > 0
 
         # Check that expected columns are present
-        required_cols = ['flux', 'fluxerr', 'mag', 'magerr', 'x_psf', 'y_psf']
+        required_cols = ['flux', 'fluxerr', 'mag', 'magerr', 'x_orig', 'y_orig']
         for col in required_cols:
             assert col in result.colnames
 
@@ -172,8 +172,8 @@ class TestMeasureObjectsPSF:
         # (within a few pixels for our clean artificial data)
         if len(result) > 0:
             pos_diff = np.sqrt(
-                (result['x_psf'] - result['x'])**2 +
-                (result['y_psf'] - result['y'])**2
+                (result['x'] - result['x_orig'])**2 +
+                (result['y'] - result['y_orig'])**2
             )
             # Most should be well-centered
             assert np.median(pos_diff[np.isfinite(pos_diff)]) < 2.0
@@ -335,8 +335,9 @@ class TestMeasureObjectsPSF:
             verbose=False,
         )
 
-        assert abs(result_fixed['x_psf'][0] - obj['x'][0]) < 1e-3
-        assert abs(result_free['x_psf'][0] - 25.0) < abs(obj['x'][0] - 25.0)
+        assert abs(result_fixed['x'][0] - obj['x'][0]) < 1e-3
+        assert abs(result_free['x'][0] - 25.0) < abs(obj['x'][0] - 25.0)
+        assert result_free['x_orig'][0] == obj['x'][0]
 
     @pytest.mark.unit
     def test_measure_objects_psf_fit_size_even(self):
@@ -540,8 +541,9 @@ class TestMeasureObjectsPSF:
         assert 'cfit_psf' in result.colnames
         assert 'flags_psf' in result.colnames
         assert 'npix_psf' in result.colnames
-        assert 'x_psf' in result.colnames
-        assert 'y_psf' in result.colnames
+        # Fitted positions are stored in the standard columns
+        assert 'x_psf' not in result.colnames
+        assert 'x_orig' in result.colnames
 
         # Check that columns have reasonable values
         assert len(result) > 0
@@ -579,8 +581,8 @@ class TestMeasureObjectsPSF:
 
         # Should have expected columns
         assert 'flux' in result.colnames
-        assert 'x_psf' in result.colnames
-        assert 'y_psf' in result.colnames
+        assert 'x_orig' in result.colnames
+        assert 'y_orig' in result.colnames
 
         # Unmasked objects (first 3) should have some valid results
         valid_count = np.sum(np.isfinite(result['flux'][:3]))

@@ -1770,8 +1770,10 @@ class TestSEPPSFPhotometry:
         )
 
         # Check output columns
-        for col in ['flux', 'fluxerr', 'mag', 'magerr', 'x_psf', 'y_psf', 'flags_psf']:
+        for col in ['flux', 'fluxerr', 'mag', 'magerr', 'x_orig', 'y_orig', 'flags_psf']:
             assert col in result.colnames, f"Missing column: {col}"
+        # Fitted positions are stored in the standard columns
+        assert 'x_psf' not in result.colnames and 'y_psf' not in result.colnames
 
         # Flux should be within 5% of truth
         assert abs(result['flux'][0] / true_flux - 1) < 0.05
@@ -1779,7 +1781,7 @@ class TestSEPPSFPhotometry:
     @_skip_no_sep_psf
     @pytest.mark.unit
     def test_psf_fit_output_columns_not_present_for_aperture(self, isolated_star_image):
-        """Aperture photometry (psf=None) should NOT produce x_psf/y_psf columns."""
+        """Aperture photometry (psf=None) should NOT produce PSF fit columns."""
         image, fwhm, true_flux, bg, noise = isolated_star_image
         obj = Table({'x': [128.0], 'y': [128.0]})
 
@@ -1790,8 +1792,7 @@ class TestSEPPSFPhotometry:
             gain=1.0,
         )
 
-        assert 'x_psf' not in result.colnames
-        assert 'y_psf' not in result.colnames
+        assert 'x_orig' not in result.colnames
         assert 'flags_psf' not in result.colnames
 
     @_skip_no_sep_psf
@@ -1899,15 +1900,15 @@ class TestSEPPSFPhotometry:
         )
 
         # Position should be within 0.1 pixel of truth
-        dx = abs(result['x_psf'][0] - 128.0)
-        dy = abs(result['y_psf'][0] - 128.0)
-        assert dx < 0.1, f"x_psf offset {dx:.3f} > 0.1 pix"
-        assert dy < 0.1, f"y_psf offset {dy:.3f} > 0.1 pix"
+        dx = abs(result['x'][0] - 128.0)
+        dy = abs(result['y'][0] - 128.0)
+        assert dx < 0.1, f"x offset {dx:.3f} > 0.1 pix"
+        assert dy < 0.1, f"y offset {dy:.3f} > 0.1 pix"
 
     @_skip_no_sep_psf
     @pytest.mark.unit
     def test_psf_fit_no_position_fitting(self, isolated_star_image):
-        """With fit_positions=False, x_psf/y_psf should match input positions."""
+        """With fit_positions=False, positions are kept as they are."""
         image, fwhm, true_flux, bg, noise = isolated_star_image
         obj = Table({'x': [128.0], 'y': [128.0]})
         psf_model = sep.PSF.from_gaussian(fwhm)
@@ -1920,8 +1921,9 @@ class TestSEPPSFPhotometry:
             fit_positions=False,
         )
 
-        assert result['x_psf'][0] == 128.0
-        assert result['y_psf'][0] == 128.0
+        assert result['x'][0] == 128.0
+        assert result['y'][0] == 128.0
+        assert 'x_orig' not in result.colnames
 
     @_skip_no_sep_psf
     @pytest.mark.unit
@@ -1954,7 +1956,8 @@ class TestSEPPSFPhotometry:
         )
 
         # The fitter should move towards the star; if shift > 1 pixel, flag is set
-        shift = np.sqrt((result['x_psf'][0] - 127.0) ** 2 + (result['y_psf'][0] - 128.0) ** 2)
+        assert result['x_orig'][0] == 127.0
+        shift = np.sqrt((result['x'][0] - 127.0) ** 2 + (result['y'][0] - 128.0) ** 2)
         if shift > 1.0:
             assert result['flags'][0] & 0x2000, "Large shift should set 0x2000 flag"
 
@@ -2255,8 +2258,8 @@ class TestSEPPSFPhotometry:
         )
 
         # Positions must be unchanged
-        np.testing.assert_array_equal(result['x_psf'], obj['x'])
-        np.testing.assert_array_equal(result['y_psf'], obj['y'])
+        np.testing.assert_array_equal(result['x'], obj['x'])
+        np.testing.assert_array_equal(result['y'], obj['y'])
 
         # chi2 should be NaN (no position fitting → no chi2)
         assert np.all(np.isnan(result['chi2_psf']))
@@ -2454,8 +2457,8 @@ class TestSEPPSFPhotometry:
         assert np.all(result['flux'] > 0)
 
         # Positions still unchanged
-        np.testing.assert_array_equal(result['x_psf'], obj['x'])
-        np.testing.assert_array_equal(result['y_psf'], obj['y'])
+        np.testing.assert_array_equal(result['x'], obj['x'])
+        np.testing.assert_array_equal(result['y'], obj['y'])
 
 
 # ============================================================================

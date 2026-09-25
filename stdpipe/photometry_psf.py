@@ -571,8 +571,10 @@ def measure_objects_psf(
     Returns
     -------
     result : `~astropy.table.Table` or tuple
-        Copy of original table with ``flux``, ``fluxerr``, ``mag``, ``magerr``,
-        ``x_psf``, ``y_psf`` columns from PSF fitting. Also includes quality of
+        Copy of original table with ``flux``, ``fluxerr``, ``mag``, ``magerr``
+        columns from PSF fitting. With ``recentroid=True``, fitted positions
+        of successful fits replace ``x``, ``y``, and the input ones are kept in
+        ``x_orig``, ``y_orig``. Also includes quality of
         fit columns: ``qfit_psf`` (fit quality, 0=good), ``cfit_psf`` (central
         pixel fit quality), ``flags_psf`` (photutils fit flags), ``npix_psf``
         (number of unmasked pixels used in fit), and ``reduced_chi2_psf``
@@ -595,6 +597,7 @@ def measure_objects_psf(
         _prepare_image_and_mask,
         _extract_valid_positions,
         _compute_magnitudes_and_filter,
+        _store_fitted_positions,
     )
 
     image1, mask0, mask = _prepare_image_and_mask(image, mask)
@@ -1115,6 +1118,17 @@ def measure_objects_psf(
                 log('PSF photometry failed: %s' % str(e))
                 log('Falling back to NaN values')
                 obj['flags'][valid_pos] |= 0x1000
+
+    # Fitted positions replace the input ones (kept in x_orig/y_orig), except
+    # for failed fits
+    if recentroid:
+        fitted = np.isfinite(np.asarray(obj['flux'], dtype=float))
+        _store_fitted_positions(
+            obj,
+            np.where(fitted, obj['x_psf'], np.nan),
+            np.where(fitted, obj['y_psf'], np.nan),
+        )
+    obj.remove_columns(['x_psf', 'y_psf'])
 
     obj = _compute_magnitudes_and_filter(obj, sn, keep_negative, log)
 

@@ -105,6 +105,34 @@ def _extract_valid_positions(obj):
     return x_vals, y_vals, valid_pos
 
 
+def _store_fitted_positions(obj, x_fit, y_fit, keep_orig=True):
+    """Store positions refined by the fit in ``x``/``y`` columns.
+
+    Follows the centroiding convention: input positions are preserved in
+    ``x_orig``/``y_orig`` (unless ``keep_orig`` is False, e.g. when they are
+    already stored there by the preceding centroiding step), and objects
+    without finite fitted position keep their input one.
+
+    Parameters
+    ----------
+    obj : astropy.table.Table
+        Table with 'x' and 'y' columns, modified in place.
+    x_fit, y_fit : array-like
+        Fitted positions for all rows of the table, NaN where not fitted.
+    keep_orig : bool
+        Whether to store input positions in ``x_orig``/``y_orig`` columns.
+    """
+    if keep_orig:
+        obj['x_orig'] = np.array(obj['x'])
+        obj['y_orig'] = np.array(obj['y'])
+
+    x_fit = np.asarray(x_fit, dtype=float)
+    y_fit = np.asarray(y_fit, dtype=float)
+    good = np.isfinite(x_fit) & np.isfinite(y_fit)
+    obj['x'][good] = x_fit[good]
+    obj['y'][good] = y_fit[good]
+
+
 def _prepare_image_and_mask(image, mask):
     """Sanitize image and mask for photometry.
 
@@ -1506,8 +1534,10 @@ def measure_objects_sep(
         columns from SEP measurements, and ``bg_fluxerr`` (noise of the
         global background model inside the aperture, 0 if both ``bg`` and
         ``err`` are provided). When ``psf`` is provided, also
-        includes ``x_psf``, ``y_psf`` (fitted positions), ``chi2_psf``,
-        ``niter_psf``, and ``flags_psf`` columns.
+        includes ``chi2_psf``, ``niter_psf``, and ``flags_psf`` columns.
+        Positions refined by centroiding or PSF fitting (with
+        ``fit_positions=True``) replace ``x``, ``y``, and the input ones are
+        kept in ``x_orig``, ``y_orig``.
     bg_image : ndarray
         Background image (only returned if ``get_bg=True``).
     err_image : ndarray
@@ -1753,12 +1783,6 @@ def measure_objects_sep(
             obj['flux'][valid_pos] = flux
             obj['fluxerr'][valid_pos] = fluxerr
 
-            # Store fitted positions
-            obj['x_psf'] = np.nan
-            obj['y_psf'] = np.nan
-            obj['x_psf'][valid_pos] = xfit
-            obj['y_psf'][valid_pos] = yfit
-
             # Store PSF fit quality metrics
             obj['chi2_psf'] = np.nan
             obj['chi2_psf'][valid_pos] = chi2
@@ -1778,6 +1802,15 @@ def measure_objects_sep(
                 dy_fit = yfit - y_vals[valid_pos]
                 large_shift = (dx_fit**2 + dy_fit**2) > 1.0
                 obj['flags'][np.where(valid_pos)[0][large_shift]] |= 0x2000
+
+                # Store fitted positions, keeping the ones before centroiding
+                x_fit = np.full(len(obj), np.nan)
+                y_fit = np.full(len(obj), np.nan)
+                x_fit[valid_pos] = xfit
+                y_fit[valid_pos] = yfit
+                # Failed fits keep their input positions
+                x_fit[~np.isfinite(obj['flux'])] = np.nan
+                _store_fitted_positions(obj, x_fit, y_fit, keep_orig=not centroid_iter)
 
         elif optimal:
             # Optimal extraction using SEP with built-in background handling

@@ -232,7 +232,7 @@ class TestSEPPSFBiasAnalytic:
                 good = result[result['flags'] == 0]
                 assert len(good) == 1
                 pos_err = np.sqrt(
-                    (good['x_psf'][0] - cx) ** 2 + (good['y_psf'][0] - cy) ** 2
+                    (good['x'][0] - cx) ** 2 + (good['y'][0] - cy) ** 2
                 )
                 assert pos_err < 0.1, (
                     f"offset=({dx},{dy}): position error {pos_err:.4f} > 0.1 pix"

@@ -187,7 +187,8 @@ at the positions of already detected objects. It supports:
        verbose=True
    )
 
-The output table includes fitted positions (`x_psf`, `y_psf`), fluxes (`flux`, `fluxerr`),
+The output table includes fitted positions (replacing `x`, `y`, with the input ones kept in
+`x_orig`, `y_orig`), fluxes (`flux`, `fluxerr`),
 magnitudes (`mag`, `magerr`), and quality metrics:
 
 - `qfit_psf` - Fit quality (0 = good, higher values indicate poor fits)

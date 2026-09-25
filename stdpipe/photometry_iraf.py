@@ -14,6 +14,8 @@ from astropy.io import fits
 from astropy.table import Table
 import photutils.background
 
+from .photometry_measure import _store_fitted_positions
+
 
 # Check if pyraf is available without importing it yet
 # (importing pyraf initializes IRAF which can cause issues with pytest stdin/stdout capturing)
@@ -597,8 +599,9 @@ def measure_objects_psf(
     Returns
     -------
     astropy.table.Table
-        Table with PSF photometry results including flux, mag, x_psf, y_psf,
-        qfit_psf, cfit_psf, flags_psf columns. If ``get_bg=True``, returns a
+        Table with PSF photometry results including flux, mag, qfit_psf,
+        cfit_psf, flags_psf columns. Fitted positions of successful fits
+        replace x, y, and the input ones are kept in x_orig, y_orig. If ``get_bg=True``, returns a
         tuple of (table, background, background_error).
 
     Raises
@@ -889,6 +892,16 @@ def measure_objects_psf(
         # Flag objects with non-zero pier flags
         obj['flags'][obj['flags_psf'] != 0] |= 0x100
         obj['flags'][~np.isfinite(obj['flux'])] |= 0x100
+
+        # Fitted positions replace the input ones (kept in x_orig/y_orig),
+        # except for failed fits
+        fitted = np.isfinite(obj['flux'])
+        _store_fitted_positions(
+            obj,
+            np.where(fitted, obj['x_psf'], np.nan),
+            np.where(fitted, obj['y_psf'], np.nan),
+        )
+        obj.remove_columns(['x_psf', 'y_psf'])
 
         # Apply filters
         if sn is not None and sn > 0:

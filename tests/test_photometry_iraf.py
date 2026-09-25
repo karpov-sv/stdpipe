@@ -436,7 +436,7 @@ class TestMeasureObjectsPSFIRAF:
         assert len(result) > 0
 
         # Check required columns are present
-        required_cols = ['flux', 'fluxerr', 'mag', 'magerr', 'x_psf', 'y_psf',
+        required_cols = ['flux', 'fluxerr', 'mag', 'magerr', 'x_orig', 'y_orig',
                         'qfit_psf', 'cfit_psf', 'flags_psf']
         for col in required_cols:
             assert col in result.colnames
@@ -452,8 +452,8 @@ class TestMeasureObjectsPSFIRAF:
             assert np.all(result['flux'][valid_fits] > 0)
             assert np.all(result['fluxerr'][valid_fits] > 0)
             assert np.all(result['magerr'][valid_fits] > 0)
-            assert np.all(np.isfinite(result['x_psf'][valid_fits]))
-            assert np.all(np.isfinite(result['y_psf'][valid_fits]))
+            assert np.all(np.isfinite(result['x'][valid_fits]))
+            assert np.all(np.isfinite(result['y'][valid_fits]))
 
     @pytest.mark.unit
     def test_measure_objects_psf_with_selected_stars(self, image_with_sources, detected_objects):
@@ -471,8 +471,8 @@ class TestMeasureObjectsPSFIRAF:
 
         assert isinstance(result, Table)
         assert len(result) > 0
-        assert 'x_psf' in result.colnames
-        assert 'y_psf' in result.colnames
+        assert 'x_orig' in result.colnames
+        assert 'y_orig' in result.colnames
 
     @pytest.mark.unit
     def test_measure_objects_psf_missing_fwhm(self, image_with_sources, detected_objects):
@@ -717,8 +717,8 @@ class TestPSFPhotometryWorkflow:
 
         # Successfully fitted objects should have valid PSF photometry
         assert np.all(result['flux'][valid_fits] > 0)
-        assert np.all(np.isfinite(result['x_psf'][valid_fits]))
-        assert np.all(np.isfinite(result['y_psf'][valid_fits]))
+        assert np.all(np.isfinite(result['x'][valid_fits]))
+        assert np.all(np.isfinite(result['y'][valid_fits]))
 
     @pytest.mark.unit
     def test_compare_aperture_psf(self, image_with_sources, detected_objects):
@@ -743,9 +743,10 @@ class TestPSFPhotometryWorkflow:
         assert len(result_aper) > 0
         assert len(result_psf) > 0
 
-        # PSF photometry should provide fitted positions
-        assert 'x_psf' in result_psf.colnames
-        assert 'y_psf' in result_psf.colnames
+        # PSF photometry should provide fitted positions, keeping the input ones
+        assert 'x_orig' in result_psf.colnames
+        assert 'y_orig' in result_psf.colnames
+        assert 'x_psf' not in result_psf.colnames
 
         # Both should have flux measurements
         assert 'flux' in result_aper.colnames
