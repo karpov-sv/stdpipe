@@ -194,3 +194,66 @@ class TestSelectPsfSeeds:
             obj_col_flux='FLUX_AUTO', obj_col_flags=None,
         )
         assert len(seeds) == 2
+
+
+class TestPsfStampConvention:
+    """get_psf_stamp should follow the declared sub-pixel convention of the model."""
+
+    @staticmethod
+    def _pixel_integrated_gaussian(u, v, sigma):
+        from scipy.special import erf
+
+        s = np.sqrt(2) * sigma
+        return (
+            0.25
+            * (erf((u + 0.5) / s) - erf((u - 0.5) / s))
+            * (erf((v + 0.5) / s) - erf((v - 0.5) / s))
+        )
+
+    @pytest.mark.unit
+    def test_sampled_even_size_model(self):
+        """Even-sized model sampling the pixel-integrated PSF must not be block-summed."""
+        from stdpipe import psf
+
+        sigma = 1.8 / 2.3548
+        sampling = 0.5
+        n = 30  # Even size, multiple of the oversampling factor
+        g = (np.arange(n) - (n - 1) / 2) * sampling
+        data = self._pixel_integrated_gaussian(g[np.newaxis, :], g[:, np.newaxis], sigma)
+        data *= sampling**2
+        model = {
+            'data': data[np.newaxis],
+            'width': n,
+            'height': n,
+            'sampling': sampling,
+            'degree': 0,
+            'x0': 0,
+            'y0': 0,
+            'sx': 1,
+            'sy': 1,
+        }
+
+        # PSF center (center of the model grid) is at (dx, dy) from the
+        # central stamp pixel
+        dx = dy = 0.3
+        stamp = psf.get_psf_stamp(dict(model, subpixel_integrated=False), 0, 0, dx, dy)
+        h = stamp.shape[0] // 2
+        u = np.arange(-h, h + 1)
+        expected = self._pixel_integrated_gaussian(
+            u[np.newaxis, :] - dx, u[:, np.newaxis] - dy, sigma
+        )
+        expected /= np.sum(expected)
+
+        assert np.max(np.abs(stamp - expected)) < 0.01 * np.max(expected)
+
+        # Without the declared convention the size heuristic block-sums it,
+        # broadening the core
+        heuristic = psf.get_psf_stamp(model, 0, 0, dx, dy)
+        assert np.max(heuristic) < 0.95 * np.max(expected)
+
+    @pytest.mark.unit
+    def test_producers_declare_convention(self):
+        """Built-in PSF producers should declare their convention explicitly."""
+        from stdpipe import simulation
+
+        assert simulation.create_psf_model(fwhm=3.0)['subpixel_integrated'] is True

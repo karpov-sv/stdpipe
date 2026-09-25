@@ -223,6 +223,8 @@ def create_psf_model(
         'sy': 1.0,
         'psf_type': psf_type_name,
         'beta': beta if psf_type.lower() == 'moffat' else None,
+        # Every model pixel holds the flux integrated over its own area
+        'subpixel_integrated': True,
     }
 
     if has_aberrations:

@@ -841,6 +841,54 @@ class TestCreatePSFModelAccuracy:
         assert abs(bias) < 0.003
 
     @pytest.mark.unit
+    def test_model_based_neighbour_subtraction(self):
+        """Non-Gaussian neighbours should be subtracted with the model itself."""
+        from stdpipe import photometry, simulation
+
+        fwhm = 2.2
+        true_psf = simulation.create_psf_model(
+            fwhm=fwhm, psf_type='moffat', beta=2.5, oversampling=4
+        )
+        rng = np.random.default_rng(42)
+        image = rng.normal(0, 5.0, (512, 512))
+        rows = []
+        # Every star has an equally bright neighbour at 3 FWHM, whose Moffat
+        # wings a Gaussian approximation would leave in the stamp
+        for x in np.arange(30, 490, 40.0):
+            for y in np.arange(30, 490, 40.0):
+                x1, y1 = x + rng.uniform(-0.5, 0.5), y + rng.uniform(-0.5, 0.5)
+                angle = rng.uniform(0, 2 * np.pi)
+                flux = rng.uniform(5e4, 2e5)
+                psf.place_psf_stamp(image, true_psf, x1, y1, flux=flux)
+                psf.place_psf_stamp(
+                    image,
+                    true_psf,
+                    x1 + 3 * fwhm * np.cos(angle),
+                    y1 + 3 * fwhm * np.sin(angle),
+                    flux=flux,
+                )
+                rows.append((x1, y1, flux))
+        obj = Table(rows=rows, names=['x', 'y', 'flux'])
+        det = photometry.get_objects_sep(image, thresh=5, aper=fwhm, verbose=False)
+
+        model = psf.create_psf_model(image, obj=obj, fwhm=fwhm, neighbors_obj=det, isolation=0)
+
+        # Compare with the true PSF truncated to the model stamp, at zero
+        # sub-pixel shift so that no interpolation of the model is involved
+        m = psf.get_psf_stamp(model, 0, 0, 0, 0)
+        t = psf.get_psf_stamp(true_psf, 0, 0, 0, 0)
+        h = m.shape[0] // 2
+        c = t.shape[0] // 2
+        t = t[c - h : c + h + 1, c - h : c + h + 1]
+        t /= np.sum(t)
+        yy, xx = np.mgrid[-h : h + 1, -h : h + 1]
+        core = np.hypot(xx, yy) < 2 * fwhm
+
+        # Gaussian approximation of neighbours gives 0.989 and +0.8% here
+        assert m.max() / t.max() == pytest.approx(1, abs=0.006)
+        assert np.sum(m[core] * t[core]) / np.sum(m[core] ** 2) == pytest.approx(1, abs=0.0055)
+
+    @pytest.mark.unit
     def test_moffat_wings_preserved(self):
         """Outer taper should not cut significant extended wings."""
         from stdpipe import simulation
