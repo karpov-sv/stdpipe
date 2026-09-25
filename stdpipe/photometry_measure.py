@@ -99,8 +99,9 @@ def _extract_valid_positions(obj):
     valid_pos : ndarray of bool
         True where both x and y are finite.
     """
-    x_vals = np.ma.filled(np.asarray(obj['x']), fill_value=np.nan)
-    y_vals = np.ma.filled(np.asarray(obj['y']), fill_value=np.nan)
+    # np.asarray() would silently drop the mask of MaskedColumn
+    x_vals = np.ma.filled(np.ma.asarray(obj['x'], dtype=float), fill_value=np.nan)
+    y_vals = np.ma.filled(np.ma.asarray(obj['y'], dtype=float), fill_value=np.nan)
     valid_pos = np.isfinite(x_vals) & np.isfinite(y_vals)
     return x_vals, y_vals, valid_pos
 
@@ -123,8 +124,8 @@ def _store_fitted_positions(obj, x_fit, y_fit, keep_orig=True):
         Whether to store input positions in ``x_orig``/``y_orig`` columns.
     """
     if keep_orig:
-        obj['x_orig'] = np.array(obj['x'])
-        obj['y_orig'] = np.array(obj['y'])
+        obj['x_orig'] = obj['x'].copy()
+        obj['y_orig'] = obj['y'].copy()
 
     x_fit = np.asarray(x_fit, dtype=float)
     y_fit = np.asarray(y_fit, dtype=float)
@@ -1011,15 +1012,14 @@ def measure_objects(
             )
 
         # Keep original pixel positions
-        obj['x_orig'] = np.array(obj['x'])
-        obj['y_orig'] = np.array(obj['y'])
+        obj['x_orig'] = obj['x'].copy()
+        obj['y_orig'] = obj['y'].copy()
 
         # Combined mask for centroiding
         centroid_mask = mask | mask0
 
         # Get plain arrays to avoid MaskedColumn warnings
-        xs = np.array(obj['x'], dtype=float)
-        ys = np.array(obj['y'], dtype=float)
+        xs, ys, _ = _extract_valid_positions(obj)
 
         # Process each object individually
         for i in range(len(obj)):
@@ -1647,8 +1647,8 @@ def measure_objects_sep(
             log('Using SEP Gaussian windowed centroiding (maxstep=%.2f pix)' % maxstep)
 
         # Keep original pixel positions
-        obj['x_orig'] = np.array(obj['x'])
-        obj['y_orig'] = np.array(obj['y'])
+        obj['x_orig'] = obj['x'].copy()
+        obj['y_orig'] = obj['y'].copy()
 
         x_vals, y_vals, valid_pos = _extract_valid_positions(obj)
 

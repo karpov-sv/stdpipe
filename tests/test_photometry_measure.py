@@ -827,6 +827,35 @@ class TestMaskedColumnHandling:
             result_regular['flux'], result_masked['flux'], decimal=5
         )
 
+    @pytest.mark.unit
+    @pytest.mark.parametrize('method', ['aperture', 'centroid', 'sep', 'psf'])
+    def test_masked_positions_are_not_measured(
+        self, image_with_sources, detected_objects_masked, method
+    ):
+        """Masked positions must be skipped, not measured at the values
+        hidden under the mask (the masked row lies on a real source)."""
+        from stdpipe import photometry_psf
+
+        obj = detected_objects_masked
+        if method == 'aperture':
+            result = photometry_measure.measure_objects(obj, image_with_sources, aper=5.0)
+        elif method == 'centroid':
+            result = photometry_measure.measure_objects(
+                obj, image_with_sources, aper=5.0, fwhm=3.0, centroid_iter=3
+            )
+            assert result['x_orig'].mask[3]
+        elif method == 'sep':
+            if not photometry_measure._HAS_SEP_OPTIMAL:
+                pytest.skip('SEP-X not available')
+            result = photometry_measure.measure_objects_sep(obj, image_with_sources, aper=5.0)
+        else:
+            result = photometry_psf.measure_objects_psf(obj, image_with_sources, fwhm=3.0)
+
+        assert len(result) == len(obj)
+        assert np.all(np.isfinite(result['flux'][:3]))
+        assert not np.isfinite(result['flux'][3])
+        assert result['x'].mask[3] and result['y'].mask[3]
+
 
 class TestFullyMaskedFootprints:
     """Test measure_objects behavior when object footprints are fully masked.

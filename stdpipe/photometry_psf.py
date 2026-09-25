@@ -763,7 +763,7 @@ def measure_objects_psf(
 
     # Add initial flux guesses if available
     if 'flux' in obj.colnames:
-        flux0 = np.ma.filled(np.asarray(obj['flux'], dtype=float), fill_value=np.nan)
+        flux0 = np.ma.filled(np.ma.asarray(obj['flux'], dtype=float), fill_value=np.nan)
         # A non-finite initial flux poisons the fit of the source (and, in
         # grouped mode, of its whole group) — fall back to a finite guess
         bad0 = ~np.isfinite(flux0)
@@ -814,8 +814,8 @@ def measure_objects_psf(
         # Initialize output columns
         obj['flux'] = np.nan
         obj['fluxerr'] = np.nan
-        obj['x_psf'] = obj['x']
-        obj['y_psf'] = obj['y']
+        obj['x_psf'] = x_vals
+        obj['y_psf'] = y_vals
         obj['qfit_psf'] = np.nan
         obj['cfit_psf'] = np.nan
         obj['flags_psf'] = 0
@@ -970,8 +970,8 @@ def measure_objects_psf(
         # Initialize output columns with NaN (for invalid positions)
         obj['flux'] = np.nan
         obj['fluxerr'] = np.nan
-        obj['x_psf'] = np.ma.filled(np.asarray(obj['x']), fill_value=np.nan)
-        obj['y_psf'] = np.ma.filled(np.asarray(obj['y']), fill_value=np.nan)
+        obj['x_psf'] = x_vals
+        obj['y_psf'] = y_vals
         obj['qfit_psf'] = np.nan
         obj['cfit_psf'] = np.nan
         obj['flags_psf'] = 0
