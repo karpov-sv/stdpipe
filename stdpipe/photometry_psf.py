@@ -706,14 +706,16 @@ def measure_objects_psf(
                 log('Using PSFEx/ePSF PSF model (constant across field)')
             # Evaluate at the polynomial zero-point (~field centre); (0, 0)
             # would extrapolate a varying model to the image corner
-            psf_image = psf_module.get_supersampled_psf_stamp(
-                psf, x=psf.get('x0', 0), y=psf.get('y0', 0), normalize=True
+            psf_image, psf_origin = psf_module._get_sampled_psf_stamp(
+                psf, x=psf.get('x0', 0), y=psf.get('y0', 0)
             )
 
             # Handle oversampling if needed
             oversampling = _compute_oversampling(psf_sampling)
             psf_image = _scale_psf_image_for_photutils(psf_image, oversampling)
-            psf_model = photutils.psf.ImagePSF(psf_image, oversampling=oversampling)
+            psf_model = photutils.psf.ImagePSF(
+                psf_image, oversampling=oversampling, origin=psf_origin
+            )
             psf_is_position_dependent = False
 
             if psf_size is None:
@@ -861,16 +863,17 @@ def measure_objects_psf(
             try:
                 # Evaluate PSF at the group mean position (the PSF varies
                 # smoothly on the scale of a group)
-                psf_image = psf_module.get_supersampled_psf_stamp(
+                psf_image, psf_origin = psf_module._get_sampled_psf_stamp(
                     psf_model,
                     x=float(np.mean(xv[in_group])),
                     y=float(np.mean(yv[in_group])),
-                    normalize=True,
                 )
                 psf_image = _scale_psf_image_for_photutils(psf_image, oversampling)
 
                 # Create photutils PSF model for this group position
-                psf_at_pos = photutils.psf.ImagePSF(psf_image, oversampling=oversampling)
+                psf_at_pos = photutils.psf.ImagePSF(
+                    psf_image, oversampling=oversampling, origin=psf_origin
+                )
 
                 # Set up photometry for this group
                 phot_group = photutils.psf.PSFPhotometry(

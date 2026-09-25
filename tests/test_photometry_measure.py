@@ -2491,6 +2491,67 @@ def _make_field(positions, total_fluxes, sigma=2.0, shape=(200, 200), noise=0.0,
 
 
 @pytest.mark.unit
+class TestSEPPSFSampledModel:
+    """SEP PSF fitting should follow the declared sampling convention of the model."""
+
+    @pytest.mark.unit
+    @_skip_no_sep_psf
+    def test_point_sampled_supersampled_model(self):
+        """Point-sampled pixel-integrated models must not be integrated again by SEP."""
+        from scipy.special import erf
+
+        if not hasattr(sep.PSF, 'sampled'):
+            pytest.skip("SEP without support for point-sampled PSF models")
+
+        fwhm = 2.6
+        sigma = fwhm / 2.3548
+
+        def pixel_integrated(u):
+            s = np.sqrt(2) * sigma
+            return 0.5 * (erf((u + 0.5) / s) - erf((u - 0.5) / s))
+
+        n = 31  # oversampling 2, center at n // 2
+        g = (np.arange(n) - n // 2) * 0.5
+        data = np.outer(pixel_integrated(g), pixel_integrated(g))
+        data /= np.sum(data)
+        model = {
+            'data': data[np.newaxis],
+            'width': n,
+            'height': n,
+            'fwhm': fwhm,
+            'sampling': 0.5,
+            'degree': 0,
+            'x0': 0,
+            'y0': 0,
+            'sx': 1,
+            'sy': 1,
+            'subpixel_integrated': False,
+        }
+
+        image = np.zeros((128, 128))
+        xs, ys = [], []
+        u = np.arange(128)
+        for i, phase in enumerate([0.0, 0.2, 0.4, 0.6, 0.8]):
+            x0, y0 = 20.0 + 20 * i + phase, 64.0 + phase
+            image += 1e4 * np.outer(pixel_integrated(u - y0), pixel_integrated(u - x0))
+            xs.append(x0)
+            ys.append(y0)
+        obj = Table({'x': xs, 'y': ys})
+
+        result = photometry_measure.measure_objects_sep(
+            obj,
+            image,
+            psf=model,
+            fwhm=fwhm,
+            bg=np.zeros_like(image),
+            err=np.ones_like(image),
+            group_sources=False,
+        )
+
+        # Integrating samples over image pixels again biased fluxes by +2..+5%
+        np.testing.assert_allclose(result['flux'], 1e4, rtol=0.003)
+
+
 class TestMeasureApertureDeblended:
     """Tests for ``measure_aperture_deblended``."""
 

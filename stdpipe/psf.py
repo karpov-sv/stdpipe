@@ -437,6 +437,61 @@ def get_supersampled_psf_stamp(psf, x=0, y=0, normalize=True):
     return stamp
 
 
+def _psf_center(psf, shape):
+    """Center ``(x, y)`` of supersampled PSF model grid of a given shape.
+
+    Point-sampled models (PSFEx convention) have their center at pixel
+    ``size // 2`` also for even sizes, while sub-pixel integrated ones
+    (and models without declared convention) at ``(size - 1) / 2``.
+    """
+
+    h, w = shape
+    if psf.get('subpixel_integrated', None) is False:
+        return float(w // 2), float(h // 2)
+    return (w - 1) / 2.0, (h - 1) / 2.0
+
+
+def _get_sampled_psf_stamp(psf, x=0, y=0):
+    """Supersampled PSF stamp as point samples of the pixel-integrated PSF.
+
+    Sub-pixel integrated models are converted by integrating, for every
+    model pixel, the flux over the image pixel centered on it. The cumulative
+    flux is known exactly at model pixel edges, and is interpolated with a
+    cubic spline where image pixel edges fall inside model pixels (even
+    oversampling factors). Returns the stamp normalized to unit sum, and its
+    center ``(x, y)``.
+    """
+
+    from scipy.interpolate import CubicSpline
+
+    stamp = get_supersampled_psf_stamp(psf, x, y, normalize=True)
+    center = _psf_center(psf, stamp.shape)
+
+    N = int(round(1.0 / psf['sampling']))
+    if (
+        psf.get('subpixel_integrated', False)
+        and N > 1
+        and np.isclose(N * psf['sampling'], 1.0, rtol=1e-3, atol=0)
+    ):
+        for axis in (0, 1):
+            n = stamp.shape[axis]
+            # Cumulative flux at model pixel edges 0..n
+            shape = list(stamp.shape)
+            shape[axis] = 1
+            cumul = np.concatenate([np.zeros(shape), np.cumsum(stamp, axis=axis)], axis=axis)
+            spline = CubicSpline(np.arange(n + 1), cumul, axis=axis)
+            # Image pixel centered on model pixel k spans k + 0.5 -+ N / 2 in edge coordinates
+            centers = np.arange(n) + 0.5
+            lo = np.clip(centers - N / 2, 0, n)
+            hi = np.clip(centers + N / 2, 0, n)
+            stamp = spline(hi) - spline(lo)
+        total = np.sum(stamp)
+        if np.isfinite(total) and total > 0:
+            stamp /= total
+
+    return stamp, center
+
+
 def get_psf_stamp(psf, x=0, y=0, dx=None, dy=None, normalize=True):
     """Returns PSF stamp in original image pixel space with sub-pixel shift applied.
 
@@ -466,6 +521,8 @@ def get_psf_stamp(psf, x=0, y=0, dx=None, dy=None, normalize=True):
     :func:`stdpipe.psf.create_psf_model` convention), and image pixels are
     obtained by interpolation. If the key is missing, block summing is used
     whenever the model size is a multiple of an integer oversampling factor.
+    The center of point-sampled models of even size is at pixel ``size // 2``
+    (PSFEx convention), otherwise at ``(size - 1) / 2``.
 
     Parameters
     ----------
@@ -534,8 +591,7 @@ def get_psf_stamp(psf, x=0, y=0, dx=None, dy=None, normalize=True):
         stamp = shifted[: out_h * N, : out_w * N].reshape(out_h, N, out_w, N).sum(axis=(1, 3))
     else:
         # Fallback for non-integer oversampling or oversampling=1
-        ssx0 = (supersampled.shape[1] - 1) / 2.0
-        ssy0 = (supersampled.shape[0] - 1) / 2.0
+        ssx0, ssy0 = _psf_center(psf, supersampled.shape)
 
         x0 = np.floor(psf['width'] * psf['sampling'] / 2)
         y0 = np.floor(psf['height'] * psf['sampling'] / 2)
@@ -616,6 +672,74 @@ def place_psf_stamp(image, psf, x0, y0, flux=1, gain=None):
     image[y1[idx], x1[idx]] += stamp[y[idx], x[idx]]
 
 
+def _estimate_psf_stamp_size(image, obj, fwhm, mask=None, log=None, nstars=100, snr=3.0):
+    """Estimate PSF stamp size from the extent of significant stellar wings.
+
+    Stacks radial profiles of the brightest stars, normalized by their core
+    flux, and returns an odd size covering the radius where the median
+    profile stops being significant, bounded by ``max(15, 5 * fwhm)`` and
+    ``10 * fwhm``.
+    """
+
+    min_size = max(15, int(np.ceil(5 * fwhm)))
+    max_size = max(min_size, int(np.ceil(10 * fwhm)))
+    min_size += 1 - min_size % 2
+    max_size += 1 - max_size % 2
+    half = max_size // 2
+
+    x = np.asarray(obj['x'], dtype=np.float64)
+    y = np.asarray(obj['y'], dtype=np.float64)
+    ok = np.isfinite(x) & np.isfinite(y)
+    ok &= (x >= half) & (x < image.shape[1] - half - 1) & (y >= half) & (y < image.shape[0] - half - 1)
+    idx = np.flatnonzero(ok)
+    if 'flux' in obj.colnames:
+        idx = idx[np.argsort(-np.asarray(obj['flux'], dtype=np.float64)[idx])]
+    idx = idx[:nstars]
+    if len(idx) < 5:
+        return min_size
+
+    yy, xx = np.mgrid[-half : half + 1, -half : half + 1]
+    radii, values = [], []
+    for i in idx:
+        ix, iy = int(np.round(x[i])), int(np.round(y[i]))
+        cutout = image[iy - half : iy + half + 1, ix - half : ix + half + 1].astype(np.float64)
+        valid = np.isfinite(cutout)
+        if mask is not None:
+            valid &= ~mask[iy - half : iy + half + 1, ix - half : ix + half + 1]
+        r = np.hypot(xx + ix - x[i], yy + iy - y[i])
+        border = valid & (r > half - 1)
+        if not np.any(border):
+            continue
+        cutout = cutout - np.median(cutout[border])
+        core = np.sum(cutout[valid & (r < 1.5 * fwhm)])
+        if not np.isfinite(core) or core <= 0:
+            continue
+        radii.append(r[valid])
+        values.append(cutout[valid] / core)
+
+    if len(radii) < 5:
+        return min_size
+
+    radii = np.concatenate(radii)
+    values = np.concatenate(values)
+    ibin = np.floor(radii / 0.5).astype(int)
+    med, scale, count = _group_robust_stats(ibin, values, int(ibin.max()) + 1)
+    centers = (np.arange(len(med)) + 0.5) * 0.5
+    with np.errstate(invalid='ignore', divide='ignore'):
+        err = 1.2533 * scale / np.sqrt(count)
+    faint = (centers > 1.25 * fwhm) & (count >= 5) & ~(med > snr * err)
+    radius = centers[np.argmax(faint)] if np.any(faint) else half
+
+    size = int(np.clip(2 * int(np.ceil(radius)) + 1, min_size, max_size))
+    if log is not None:
+        log(
+            'Stacked profile of %d stars significant up to %.1f px, stamp size %d'
+            % (len(idx), radius, size)
+        )
+
+    return size
+
+
 def create_psf_model(
     image,
     obj=None,
@@ -671,8 +795,10 @@ def create_psf_model(
     fwhm : float, optional
         Approximate FWHM of stars in pixels. If None, will be estimated.
     size : int, optional
-        Size of cutouts to extract around stars (should be odd). If None, automatically
-        determined from FWHM as ``max(15, round_up_to_odd(5 * fwhm))``.
+        Size of cutouts to extract around stars (should be odd). If None, it is
+        determined from the radius where the stacked radial profile of the
+        brightest stars stops being significant, between
+        ``max(15, 5 * fwhm)`` and ``10 * fwhm`` (rounded up to odd).
     mask : numpy.ndarray, optional
         Image mask as a boolean array (True values will be masked).
     oversampling : int, optional
@@ -751,11 +877,6 @@ def create_psf_model(
                 fwhm = 3.0
                 log('FWHM not available, using default: %.2f pixels' % fwhm)
 
-        if size is None:
-            size = max(15, int(np.ceil(5 * fwhm)))
-        if size % 2 == 0:
-            size += 1
-
         flux_median = np.median(obj['flux'])
         # np.std is inflated by the bright tail, so a median + N*std upper
         # bound lets saturated stars through; cut the brightest few percent
@@ -765,7 +886,7 @@ def create_psf_model(
         # Select stars with flux within reasonable range
         idx = (obj['flux'] > flux_median) & (obj['flux'] < flux_upper)
         # Remove edge objects
-        edge = size
+        edge = size if size is not None else max(15, int(np.ceil(5 * fwhm)))
         idx &= (obj['x'] > edge) & (obj['x'] < image.shape[1] - edge)
         idx &= (obj['y'] > edge) & (obj['y'] < image.shape[0] - edge)
         # Remove flagged objects
@@ -782,16 +903,6 @@ def create_psf_model(
         else:
             fwhm = 3.0
             log('FWHM not available, using default: %.2f pixels' % fwhm)
-
-    # Auto-size stamps based on FWHM if not specified.
-    # 5*FWHM keeps the stamp small enough to be cheap in sep.psf_fit while
-    # still covering ~3-sigma of the PSF wings. The 8*FWHM legacy default
-    # over-extends in dense fields (large fit groups, slow rendering).
-    if size is None:
-        size = max(15, int(np.ceil(5 * fwhm)))
-    if size % 2 == 0:
-        size += 1  # Make sure size is odd
-    log('Using stamp size: %d pixels (FWHM=%.1f)' % (size, fwhm))
 
     # Auto-pick oversampling from FWHM if not explicitly set.
     # FWHM >= 2.5 image pixels is well-sampled enough that oversampling=1 is
@@ -828,6 +939,15 @@ def create_psf_model(
                 'Isolation filter: only %d stars with >%.1f px separation; '
                 'using %d most isolated instead' % (len(isolated), min_dist, len(obj))
             )
+
+    # Auto-size stamps from the extent of significant PSF wings: a model
+    # truncated while still carrying flux loses a sub-pixel phase dependent
+    # part of it when shifted, and underestimates total fluxes
+    if size is None:
+        size = _estimate_psf_stamp_size(image, obj, fwhm, mask, log)
+    if size % 2 == 0:
+        size += 1  # Make sure size is odd
+    log('Using stamp size: %d pixels (FWHM=%.1f)' % (size, fwhm))
 
     background_mode = _normalize_stamp_background_mode(subtract_background)
 

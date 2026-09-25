@@ -877,10 +877,12 @@ class TestCreatePSFModelAccuracy:
         # sub-pixel shift so that no interpolation of the model is involved
         m = psf.get_psf_stamp(model, 0, 0, 0, 0)
         t = psf.get_psf_stamp(true_psf, 0, 0, 0, 0)
-        h = m.shape[0] // 2
-        c = t.shape[0] // 2
-        t = t[c - h : c + h + 1, c - h : c + h + 1]
-        t /= np.sum(t)
+        h = min(m.shape[0], t.shape[0]) // 2
+        cm, ct = m.shape[0] // 2, t.shape[0] // 2
+        m = m[cm - h : cm + h + 1, cm - h : cm + h + 1]
+        t = t[ct - h : ct + h + 1, ct - h : ct + h + 1]
+        m = m / np.sum(m)
+        t = t / np.sum(t)
         yy, xx = np.mgrid[-h : h + 1, -h : h + 1]
         core = np.hypot(xx, yy) < 2 * fwhm
 
@@ -926,6 +928,42 @@ class TestCreatePSFModelAccuracy:
         assert isinstance(model, photutils.psf.ImagePSF)
         yy, xx = np.mgrid[-10:11, -10:11]
         assert np.sum(model(xx, yy)) == pytest.approx(1.0, rel=0.01)
+
+
+class TestMeasureObjectsPSFConvention:
+    """PSF photometry should follow the declared sampling convention of the model."""
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize('psf_type', ['gaussian', 'moffat'])
+    def test_subpixel_integrated_model(self, psf_type):
+        """Sub-pixel integrated (simulation) models must be converted for photutils."""
+        from stdpipe import simulation
+
+        fwhm = 2.6
+        model = simulation.create_psf_model(fwhm=fwhm, psf_type=psf_type, oversampling=4)
+        rng = np.random.default_rng(0)
+        image = np.zeros((256, 256))
+        xs, ys = [], []
+        for x in np.arange(30, 230, 40.0):
+            for y in np.arange(30, 230, 40.0):
+                xs.append(x + rng.uniform(-0.5, 0.5))
+                ys.append(y + rng.uniform(-0.5, 0.5))
+                psf.place_psf_stamp(image, model, xs[-1], ys[-1], flux=1e5)
+        obj = Table({'x': xs, 'y': ys, 'flux': np.full(len(xs), 1e5)})
+
+        result = photometry_psf.measure_objects_psf(
+            obj,
+            image,
+            psf=model,
+            fwhm=fwhm,
+            bg=np.zeros_like(image),
+            err=np.ones_like(image),
+            group_sources=False,
+            compute_quality=False,
+        )
+
+        # Treating integrated sub-pixels as samples biased fluxes by -2..-3%
+        assert np.median(result['flux']) / 1e5 == pytest.approx(1, abs=0.005)
 
 
 class TestCreatePSFModelPolynomial:

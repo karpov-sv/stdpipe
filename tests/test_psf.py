@@ -218,7 +218,8 @@ class TestPsfStampConvention:
         sigma = 1.8 / 2.3548
         sampling = 0.5
         n = 30  # Even size, multiple of the oversampling factor
-        g = (np.arange(n) - (n - 1) / 2) * sampling
+        # PSFEx convention: center of even-sized model is at pixel n // 2
+        g = (np.arange(n) - n // 2) * sampling
         data = self._pixel_integrated_gaussian(g[np.newaxis, :], g[:, np.newaxis], sigma)
         data *= sampling**2
         model = {

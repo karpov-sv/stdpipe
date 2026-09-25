@@ -1350,8 +1350,7 @@ def _get_sep_psf(psf, fwhm, log):
             'Converting PSFEx model to sep.PSF (FWHM=%.2f, sampling=%.3f, degree=%d)'
             % (psf['fwhm'], psf['sampling'], psf.get('degree', 0))
         )
-        sep_psf = sep.PSF(
-            psf['data'],
+        kwargs = dict(
             sampling=psf['sampling'],
             degree=psf.get('degree', 0),
             x0=psf.get('x0', 0),
@@ -1360,7 +1359,19 @@ def _get_sep_psf(psf, fwhm, log):
             sy=psf.get('sy', 1),
             fwhm=psf['fwhm'],
         )
-        return sep_psf
+        # Point samples of the pixel-integrated PSF (PSFEx, create_psf_model)
+        # must be interpolated, not integrated over image pixels once more
+        sampled = psf.get('subpixel_integrated', None) is False and psf['sampling'] < 1
+        if sampled:
+            try:
+                return sep.PSF(psf['data'], sampled=True, **kwargs)
+            except TypeError:
+                log(
+                    'Warning: this SEP version does not support point-sampled '
+                    'supersampled PSF models, fluxes may be biased'
+                )
+
+        return sep.PSF(psf['data'], **kwargs)
 
     raise TypeError("Unsupported PSF type: %s. Expected sep.PSF or PSFEx dict." % type(psf))
 
