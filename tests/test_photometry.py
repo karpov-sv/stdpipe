@@ -777,6 +777,47 @@ class TestSEPSpatialFWHM:
         assert 'fwhm_model' not in obj_scalar.colnames
 
 
+class TestBackgroundApertureColumns:
+    """Background flux/noise in the aperture agree across routines."""
+
+    @staticmethod
+    def _make_image(sky=1000.0, seed=1):
+        rng = np.random.default_rng(seed)
+        size = 256
+        image = rng.normal(sky, np.sqrt(sky), (size, size))
+        y, x = np.mgrid[:size, :size]
+        for _ in range(60):
+            x0, y0 = rng.uniform(20, size - 20, 2)
+            flux = 10 ** rng.uniform(3.5, 5)
+            image += flux / (2 * np.pi * 1.5**2) * np.exp(-((x - x0) ** 2 + (y - y0) ** 2) / 2 / 1.5**2)
+        return image
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize('gain', [1.0, 10.0])
+    def test_bg_fluxerr_consistent(self, gain):
+        """bg_fluxerr is sqrt(sum(rms**2)) over the aperture, with no extra
+        Poisson term from gain, and matches the measure_objects backends."""
+        from stdpipe import photometry_measure
+
+        sky, aper = 1000.0, 4.0
+        image = self._make_image(sky)
+
+        obj = photometry.get_objects_sep(image, aper=aper, gain=gain, verbose=False)
+        assert 'bgflux' not in obj.colnames and 'bgfluxerr' not in obj.colnames
+
+        expected = np.sqrt(np.pi * aper**2 * sky)
+        assert np.median(obj['bg_fluxerr']) == pytest.approx(expected, rel=0.05)
+        assert np.median(obj['bg_flux']) == pytest.approx(np.pi * aper**2 * sky, rel=0.01)
+        assert np.median(obj['bg']) == pytest.approx(sky, rel=0.01)
+
+        m = photometry_measure.measure_objects(obj.copy(), image, aper=aper, gain=gain)
+        assert np.median(m['bg_fluxerr']) == pytest.approx(expected, rel=0.05)
+
+        if photometry_measure._HAS_SEP_OPTIMAL:
+            ms = photometry_measure.measure_objects_sep(obj.copy(), image, aper=aper, gain=gain)
+            assert np.median(ms['bg_fluxerr']) == pytest.approx(expected, rel=0.05)
+
+
 class TestSExtractorIntegration:
     """Integration tests for SExtractor wrapper."""
 

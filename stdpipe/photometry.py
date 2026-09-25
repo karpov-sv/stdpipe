@@ -788,7 +788,10 @@ def get_objects_sep(
         ``(table, segmentation_map)``.
 
         **Columns:** x, y, xerr, yerr, flux, fluxerr, mag, magerr,
-        flags, ra, dec, bg, fwhm, a, b, theta, and optionally seg_id.
+        flags, ra, dec, bg (mean background per aperture pixel),
+        bg_flux, bg_fluxerr (background flux inside the aperture and its
+        noise, as in :func:`measure_objects`), fwhm, flux_radius, a, b,
+        theta, and optionally seg_id.
         With a position-dependent FWHM model also ``fwhm_model`` (model
         FWHM at each source, used as optimal PSF width) and, when
         *aper*/*bkgann* are scaled with it, ``aper`` (actual per-source
@@ -1183,20 +1186,14 @@ def get_objects_sep(
             clip_iters=clip_iters,
         )
 
-    # For debug purposes, let's make also the same aperture photometry on the background map
-    bgflux, bgfluxerr, bgflag = sep.sum_circle(
-        bg.back(),
-        xwin[idx],
-        ywin[idx],
-        aper_phot,
-        err=bg.rms(),
-        gain=gain,
-        mask=mask | mask_bg | mask_segm,
-        clip_sigma=clip_sigma,
-        clip_iters=clip_iters,
+    # Background flux inside the aperture and its noise. The error is
+    # sqrt(sum(rms**2)) - no gain term, as bg.rms() already includes the sky
+    # Poisson noise. SEP scales both for the masked aperture fraction.
+    bg_flux, bg_fluxerr, _ = sep.sum_circle(
+        bg.back(), xwin[idx], ywin[idx], aper_phot, err=bg.rms(), mask=mask | mask_bg | mask_segm
     )
 
-    bgnorm = bgflux / np.pi / np.asarray(aper_phot) ** 2
+    bgnorm = bg_flux / np.pi / np.asarray(aper_phot) ** 2
 
     # Fluxes to magnitudes
     mag, magerr = np.zeros_like(flux), np.zeros_like(flux)
@@ -1250,8 +1247,8 @@ def get_objects_sep(
             'ra': ra[fidx],
             'dec': dec[fidx],
             'bg': bgnorm[fidx],
-            'bgflux': bgflux[fidx],
-            'bgfluxerr': bgfluxerr[fidx],
+            'bg_flux': bg_flux[fidx],
+            'bg_fluxerr': bg_fluxerr[fidx],
             'fwhm': fwhm[fidx],
             'flux_radius': _flux_radius[fidx],
             'a': obj0['a'][idx][fidx],

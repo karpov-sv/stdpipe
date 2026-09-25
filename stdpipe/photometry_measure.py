@@ -1503,7 +1503,9 @@ def measure_objects_sep(
     -------
     obj : astropy.table.Table
         Copy of table with ``flux``, ``fluxerr``, ``mag`` and ``magerr``
-        columns from SEP measurements. When ``psf`` is provided, also
+        columns from SEP measurements, and ``bg_fluxerr`` (noise of the
+        global background model inside the aperture, 0 if both ``bg`` and
+        ``err`` are provided). When ``psf`` is provided, also
         includes ``x_psf``, ``y_psf`` (fitted positions), ``chi2_psf``,
         ``niter_psf``, and ``flags_psf`` columns.
     bg_image : ndarray
@@ -1674,6 +1676,7 @@ def measure_objects_sep(
 
     obj['flux'] = np.nan
     obj['fluxerr'] = np.nan
+    obj['bg_fluxerr'] = 0.0  # Local background flux error inside the aperture
 
     if np.any(valid_pos):
         # Evaluate FWHM at the valid source positions. For a callable
@@ -1690,6 +1693,17 @@ def measure_objects_sep(
             aper_arr = aper * fwhm_at_pos
         else:
             aper_arr = aper_pix
+
+        # Position-dependent background flux error from global background
+        # model, if available - same definition as in measure_objects()
+        if bg_est is not None:
+            res, _, _ = sep.sum_circle(
+                np.ascontiguousarray(bg_est_rms**2),
+                x_vals[valid_pos],
+                y_vals[valid_pos],
+                aper_arr,
+            )
+            obj['bg_fluxerr'][valid_pos] = np.sqrt(res)
 
         # Prepare bkgann in pixels.
         bkgann_pix = None
