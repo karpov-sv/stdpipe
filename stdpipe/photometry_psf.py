@@ -463,7 +463,7 @@ def measure_objects_psf(
     sn=None,
     fit_shape='circular',
     fit_size=None,
-    maxiters=3,
+    maxiters=100,
     recentroid=True,
     keep_negative=True,
     get_bg=False,
@@ -539,7 +539,10 @@ def measure_objects_psf(
     fit_size : int or None, optional
         Size of fitting region in pixels. If None, defaults to psf_size.
     maxiters : int, optional
-        Maximum number of iterations for PSF fitting.
+        Maximum number of model evaluations of the least-squares fitter (it
+        is passed to scipy as ``maxfev``), per source or group. Each fitting
+        step needs several evaluations to estimate the Jacobian, so too
+        small values stop the fit before convergence.
     recentroid : bool, optional
         If True, allow PSF position to vary during fitting (recommended).
     keep_negative : bool, optional
@@ -804,7 +807,7 @@ def measure_objects_psf(
     # Perform PSF photometry
     log('Performing PSF photometry on %d objects (%d valid)' % (len(obj), np.sum(valid_pos)))
     log(
-        'Settings: %d iterations, recentroid=%s, grouped=%s, position_dependent=%s'
+        'Settings: %d max evaluations, recentroid=%s, grouped=%s, position_dependent=%s'
         % (maxiters, recentroid, group_sources, psf_is_position_dependent)
     )
 

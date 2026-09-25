@@ -340,6 +340,34 @@ class TestMeasureObjectsPSF:
         assert result_free['x_orig'][0] == obj['x'][0]
 
     @pytest.mark.unit
+    def test_measure_objects_psf_default_maxiters_converges(self):
+        """Default maxiters lets the fit converge from an offset position
+        and a poor initial flux guess (no 'flux' column).
+
+        ``maxiters`` limits the function evaluations, so a few units stop
+        the fit before its first step."""
+        size = 51
+        fwhm = 3.0
+        sigma = fwhm / (2 * np.sqrt(2 * np.log(2)))
+        flux = 5e4
+        image = _make_gaussian_image(size, 25.3, 24.6, fwhm, flux / (2 * np.pi * sigma**2))
+        obj = Table({'x': [25.0], 'y': [25.0]})
+
+        result = photometry_psf.measure_objects_psf(
+            obj,
+            image,
+            fwhm=fwhm,
+            bg=np.zeros_like(image),
+            err=np.ones_like(image),
+            verbose=False,
+        )
+
+        assert result['flags_psf'][0] & 8 == 0  # converged
+        assert result['flux'][0] == pytest.approx(flux, rel=0.05)
+        assert result['x'][0] == pytest.approx(25.3, abs=0.02)
+        assert result['y'][0] == pytest.approx(24.6, abs=0.02)
+
+    @pytest.mark.unit
     def test_measure_objects_psf_fit_size_even(self):
         """Test that even fit_size is rounded to an odd size."""
         size = 51
