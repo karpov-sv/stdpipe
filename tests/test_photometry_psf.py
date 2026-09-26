@@ -368,6 +368,33 @@ class TestMeasureObjectsPSF:
         assert result['y'][0] == pytest.approx(24.6, abs=0.02)
 
     @pytest.mark.unit
+    @pytest.mark.parametrize('position_dependent', [False, True])
+    def test_measure_objects_psf_partially_masked_fit_kept(self, position_dependent):
+        """A masked pixel inside the fit region (photutils flag bit 1) does
+        not invalidate the fit; only non-convergence (bit 8) does."""
+        size = 64
+        flux = 5e4
+        psf_dict = _make_psf_dict(size=25)
+        image = _make_gaussian_image(size, 30.2, 31.7, 3 * 2.3548, flux / (2 * np.pi * 3**2))
+        mask = np.zeros(image.shape, dtype=bool)
+        mask[31, 35] = True
+
+        result = photometry_psf.measure_objects_psf(
+            Table({'x': [30.0], 'y': [32.0], 'flux': [4e4]}),
+            image,
+            psf=psf_dict,
+            mask=mask,
+            use_position_dependent_psf=position_dependent,
+            bg=np.zeros_like(image),
+            err=np.ones_like(image),
+            verbose=False,
+        )
+
+        assert result['flags_psf'][0] & 1
+        assert result['flags'][0] & 0x1000 == 0
+        assert result['flux'][0] == pytest.approx(flux, rel=0.02)
+
+    @pytest.mark.unit
     def test_measure_objects_psf_fit_size_even(self):
         """Test that even fit_size is rounded to an odd size."""
         size = 51

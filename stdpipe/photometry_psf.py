@@ -23,6 +23,11 @@ from .photometry_measure import _is_callable_fwhm, _fwhm_median
 # Re-export for backward compatibility
 from .psf import create_psf_model
 
+# photutils PSFPhotometry flag for possible non-convergence (maxfev reached).
+# Bit 1 means only that the fit region was smaller than fit_shape, due to
+# masked pixels or image edges, and does not invalidate the fit.
+_PHOTUTILS_FLAG_NONCONVERGED = 8
+
 
 def _odd_int(value, min_value=1):
     value = int(np.round(value))
@@ -928,20 +933,19 @@ def measure_objects_psf(
                         obj['flags'][i] |= 0x1000
                     # Also flag if fit didn't converge or returned input unchanged
                     elif 'flags' in result_group.colnames:
-                        # Check bit 0 (convergence failure)
-                        bit0_set = (result_group['flags'][row] & 1) != 0
+                        # Possible non-convergence reported by photutils
+                        unconverged = (
+                            result_group['flags'][row] & _PHOTUTILS_FLAG_NONCONVERGED
+                        ) != 0
 
-                        # Check for exact match with input when photutils claims it converged
-                        # (bit 0 NOT set). This catches cases where photutils returns input
-                        # unchanged but doesn't set bit 0.
-                        converged_but_unchanged = (
-                            (result_group['flags'][row] & 1) == 0
-                            and obj['flux'][i] == init_group['flux'][row]
+                        # Fit returned the input unchanged without reporting it
+                        unchanged = (
+                            obj['flux'][i] == init_group['flux'][row]
                             and obj['x_psf'][i] == init_group['x'][row]
                             and obj['y_psf'][i] == init_group['y'][row]
                         )
 
-                        if bit0_set or converged_but_unchanged:
+                        if unconverged or unchanged:
                             log(
                                 'Warning: PSF fit did not converge or returned unchanged parameters for object %d, setting flux to NaN'
                                 % i
@@ -1087,26 +1091,22 @@ def measure_objects_psf(
                         obj['spread_model'][valid_pos] = quality['spread_model']
                         obj['dspread_model'][valid_pos] = quality['dspread_model']
 
-                # Flag fits that didn't converge (photutils returns initial guess unchanged)
-                # Check for flags_psf bit 0 (convergence failure) or exact match with input
+                # Flag fits that didn't converge, or returned the initial guess unchanged
                 if 'flags_psf' in obj.colnames and 'flux' in init_params.colnames:
-                    # Photutils flags: bit 0 = fit did not converge
-                    # When fit doesn't converge, photutils returns initial parameters unchanged
-                    unconverged = valid_pos & ((obj['flags_psf'] & 1) != 0)
+                    unconverged = valid_pos & (
+                        (obj['flags_psf'] & _PHOTUTILS_FLAG_NONCONVERGED) != 0
+                    )
 
-                    # Also check for exact byte-level match between input and output when photutils
-                    # claims the fit converged (bit 0 NOT set). This catches cases where photutils
-                    # returns input unchanged but doesn't set bit 0.
-                    converged_but_unchanged = (
+                    # photutils may return input unchanged without reporting it
+                    unchanged = (
                         valid_pos
-                        & ((obj['flags_psf'] & 1) == 0)
                         & (obj['flux'] == init_params['flux'])
                         & (obj['x_psf'] == init_params['x'])
                         & (obj['y_psf'] == init_params['y'])
                     )
 
                     # Combine both conditions
-                    failed = unconverged | converged_but_unchanged
+                    failed = unconverged | unchanged
 
                     if np.sum(failed) > 0:
                         log(

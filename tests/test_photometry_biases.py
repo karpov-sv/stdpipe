@@ -313,8 +313,12 @@ def test_psf_photometry_crowding_grouped_vs_ungrouped(separation_fwhm, rng):
         f"Sep={separation_fwhm:.2f} FWHM: Grouped PSF fitting error {mean_err_grouped:.2f}% > 2%"
     )
 
-    # At close separations, ungrouped should be much worse
-    if separation_fwhm < 1.5:
+    # At close separations, ungrouped should be much worse - or fail to
+    # converge at all, which is flagged and reported as NaN flux
+    ungrouped_failed = ~np.isfinite(result_ungrouped['flux'])
+    if separation_fwhm < 1.5 and np.any(ungrouped_failed):
+        assert np.all(result_ungrouped['flags'][ungrouped_failed] & 0x1000)
+    elif separation_fwhm < 1.5:
         assert mean_err_ungrouped > 5.0, (
             f"Sep={separation_fwhm:.2f} FWHM: Ungrouped should have > 5% error, got {mean_err_ungrouped:.2f}%"
         )
