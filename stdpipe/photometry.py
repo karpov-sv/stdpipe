@@ -25,6 +25,19 @@ import photutils.background
 import photutils.aperture
 import photutils.segmentation
 import photutils.detection
+from astropy.utils import minversion
+
+# photutils 3.0 renamed a number of arguments, attributes and table columns;
+# old names still work there, with deprecation warnings, until 4.0.
+_PHOTUTILS_3 = minversion(photutils, '3.0')
+if _PHOTUTILS_3:
+    _PU_NPIXELS, _PU_NLEVELS = 'n_pixels', 'n_levels'
+    _PU_XCENTROID, _PU_YCENTROID = 'x_centroid', 'y_centroid'
+    _PU_SEMIMAJOR, _PU_SEMIMINOR = 'semimajor_axis', 'semiminor_axis'
+else:
+    _PU_NPIXELS, _PU_NLEVELS = 'npixels', 'nlevels'
+    _PU_XCENTROID, _PU_YCENTROID = 'xcentroid', 'ycentroid'
+    _PU_SEMIMAJOR, _PU_SEMIMINOR = 'semimajor_sigma', 'semiminor_sigma'
 
 # Put these to common namespace
 from .photometry_model import match, make_sn_model, get_detection_limit_sn, format_color_term
@@ -2020,26 +2033,29 @@ def get_objects_photutils(
         segm = photutils.segmentation.detect_sources(
             image_bgsub,
             threshold=threshold,
-            npixels=npixels,
+            **{_PU_NPIXELS: npixels},
             connectivity=connectivity,
             mask=mask_det,
         )
 
-        if segm is None or segm.nlabels == 0:
+        if segm is None or len(segm.labels) == 0:
             log('No sources detected')
             return _empty_table(get_segmentation)
 
-        log(f'Detected {segm.nlabels} initial segments')
+        log(f'Detected {len(segm.labels)} initial segments')
 
         # Optionally deblend sources
-        if deblend and segm.nlabels > 0:
+        if deblend and len(segm.labels) > 0:
             log(f'Deblending with nlevels {nlevels}, contrast {contrast}')
             try:
                 segm_deblend = photutils.segmentation.deblend_sources(
-                    image_bgsub, segm, npixels=npixels, nlevels=nlevels, contrast=contrast
+                    image_bgsub,
+                    segm,
+                    **{_PU_NPIXELS: npixels, _PU_NLEVELS: nlevels},
+                    contrast=contrast,
                 )
                 segm = segm_deblend
-                log(f'Deblended to {segm.nlabels} sources')
+                log(f'Deblended to {len(segm.labels)} sources')
             except Exception as e:
                 log(f'Warning: Deblending failed: {e}')
 
@@ -2053,13 +2069,20 @@ def get_objects_photutils(
         )
 
         # Convert to arrays (handle both Quantity and ndarray)
-        x = get_value(catalog.xcentroid)
-        y = get_value(catalog.ycentroid)
+        x = get_value(getattr(catalog, _PU_XCENTROID))
+        y = get_value(getattr(catalog, _PU_YCENTROID))
         area = get_value(catalog.area)
 
     elif method in ['dao', 'iraf']:
         # Calculate threshold
         threshold_value = thresh * np.nanmedian(err)
+
+        if _PHOTUTILS_3:
+            range_kw = dict(
+                sharpness_range=(sharplo, sharphi), roundness_range=(roundlo, roundhi)
+            )
+        else:
+            range_kw = dict(sharplo=sharplo, sharphi=sharphi, roundlo=roundlo, roundhi=roundhi)
 
         # Select appropriate finder
         if method == 'dao':
@@ -2067,10 +2090,7 @@ def get_objects_photutils(
             finder = photutils.detection.DAOStarFinder(
                 fwhm=fwhm,
                 threshold=threshold_value,
-                sharplo=sharplo,
-                sharphi=sharphi,
-                roundlo=roundlo,
-                roundhi=roundhi,
+                **range_kw,
                 exclude_border=True,
             )
         else:  # method == 'iraf'
@@ -2078,10 +2098,7 @@ def get_objects_photutils(
             finder = photutils.detection.IRAFStarFinder(
                 fwhm=fwhm,
                 threshold=threshold_value,
-                sharplo=sharplo,
-                sharphi=sharphi,
-                roundlo=roundlo,
-                roundhi=roundhi,
+                **range_kw,
                 exclude_border=True,
             )
 
@@ -2099,8 +2116,8 @@ def get_objects_photutils(
         log(f'Detected {len(sources)} sources')
 
         # Extract positions (handle both Quantity and ndarray)
-        x = get_value(sources['xcentroid'])
-        y = get_value(sources['ycentroid'])
+        x = get_value(sources[_PU_XCENTROID])
+        y = get_value(sources[_PU_YCENTROID])
         # StarFinder doesn't provide area, use approximate
         area = np.full(len(sources), np.pi * (fwhm / 2) ** 2)
 
@@ -2168,8 +2185,8 @@ def get_objects_photutils(
     # Add shape parameters
     if method == 'segmentation':
         # Extract from catalog (handle both Quantity and ndarray)
-        semimajor = get_value(catalog.semimajor_sigma)
-        semiminor = get_value(catalog.semiminor_sigma)
+        semimajor = get_value(getattr(catalog, _PU_SEMIMAJOR))
+        semiminor = get_value(getattr(catalog, _PU_SEMIMINOR))
         orientation = get_value(catalog.orientation)
 
         obj['a'] = semimajor * 2.355  # Convert sigma to FWHM

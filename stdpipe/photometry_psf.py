@@ -8,6 +8,7 @@ fields or when PSF wings are significant.
 
 import numpy as np
 from astropy.table import Table
+from astropy.utils import minversion
 from astropy.nddata import NDData
 from astropy.stats import sigma_clipped_stats
 
@@ -27,6 +28,18 @@ from .psf import create_psf_model
 # Bit 1 means only that the fit region was smaller than fit_shape, due to
 # masked pixels or image edges, and does not invalidate the fit.
 _PHOTUTILS_FLAG_NONCONVERGED = 8
+
+# photutils 3.0 renamed the local background arguments and the ``npixfit``
+# result column; old names still work there, with deprecation warnings,
+# until 4.0.
+if minversion(photutils, '3.0'):
+    _LOCALBKG_ARG = 'local_bkg_estimator'
+    _INCLUDE_LOCALBKG_ARG = 'include_local_bkg'
+    _NPIXFIT_COL = 'n_pixels_fit'
+else:
+    _LOCALBKG_ARG = 'localbkg_estimator'
+    _INCLUDE_LOCALBKG_ARG = 'include_localbkg'
+    _NPIXFIT_COL = 'npixfit'
 
 
 def _odd_int(value, min_value=1):
@@ -99,7 +112,7 @@ def _compute_psf_quality_columns(
     # local background therefore leaks into ``fracflux`` / ``spread_model``.
     try:
         full_model = phot_obj.make_model_image(
-            image1.shape, psf_shape=(sz, sz), include_localbkg=False
+            image1.shape, psf_shape=(sz, sz), **{_INCLUDE_LOCALBKG_ARG: False}
         )
     except Exception as e:
         log('Skipping PSF quality stats (model image build failed: %s)' % e)
@@ -896,7 +909,7 @@ def measure_objects_psf(
                     fitter_maxiters=maxiters,
                     xy_bounds=xy_bounds,
                     aperture_radius=fit_size / 2,
-                    localbkg_estimator=localbkg_estimator,
+                    **{_LOCALBKG_ARG: localbkg_estimator},
                 )
 
                 # Measure this group
@@ -923,8 +936,8 @@ def measure_objects_psf(
                         obj['cfit_psf'][i] = result_group['cfit'][row]
                     if 'flags' in result_group.colnames:
                         obj['flags_psf'][i] = result_group['flags'][row]
-                    if 'npixfit' in result_group.colnames:
-                        obj['npix_psf'][i] = result_group['npixfit'][row]
+                    if _NPIXFIT_COL in result_group.colnames:
+                        obj['npix_psf'][i] = result_group[_NPIXFIT_COL][row]
                     if 'reduced_chi2' in result_group.colnames:
                         obj['reduced_chi2_psf'][i] = result_group['reduced_chi2'][row]
 
@@ -1029,7 +1042,7 @@ def measure_objects_psf(
                     fitter_maxiters=maxiters,
                     xy_bounds=xy_bounds,
                     aperture_radius=fit_size / 2,
-                    localbkg_estimator=localbkg_estimator,
+                    **{_LOCALBKG_ARG: localbkg_estimator},
                 )
 
                 # Do the photometry - photutils 2.x API
@@ -1050,8 +1063,8 @@ def measure_objects_psf(
                     obj['cfit_psf'][valid_pos] = result['cfit']
                 if 'flags' in result.colnames:
                     obj['flags_psf'][valid_pos] = result['flags']
-                if 'npixfit' in result.colnames:
-                    obj['npix_psf'][valid_pos] = result['npixfit']
+                if _NPIXFIT_COL in result.colnames:
+                    obj['npix_psf'][valid_pos] = result[_NPIXFIT_COL]
                 if 'reduced_chi2' in result.colnames:
                     # Available in photutils >= 2.3.0
                     obj['reduced_chi2_psf'][valid_pos] = result['reduced_chi2']
