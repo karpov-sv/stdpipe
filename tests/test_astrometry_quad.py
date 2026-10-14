@@ -895,6 +895,28 @@ class TestWCSRefinementInterface:
             assert wcs_refined is not None, f"Order {order} failed"
 
     @pytest.mark.unit
+    def test_auto_order(self, detections_from_catalog, catalog_with_wcs,
+                        wcs_with_error):
+        """order='auto' is accepted, other strings are rejected."""
+        wcs_refined = refine_wcs_quadhash(
+            detections_from_catalog, catalog_with_wcs,
+            wcs=wcs_with_error,
+            order='auto',
+            **_test_refinement_params(),
+            verbose=False
+        )
+        assert wcs_refined is not None
+
+        with pytest.raises(ValueError):
+            refine_wcs_quadhash(
+                detections_from_catalog, catalog_with_wcs,
+                wcs=wcs_with_error,
+                order='best',
+                **_test_refinement_params(),
+                verbose=False
+            )
+
+    @pytest.mark.unit
     def test_header_input(self, detections_from_catalog, catalog_with_wcs,
                          header_with_wcs):
         """Test using header instead of WCS."""
@@ -1652,7 +1674,7 @@ def _corner_displacement_arcsec(wcs_true, wcs_initial):
 
 
 def _run_quadhash_widefield(obj, cat, wcs_init, auto_match_resolution=True,
-                             adaptive_n_retry=2, sr_arcsec=30.0):
+                             adaptive_n_retry=2, sr_arcsec=30.0, sip_degree=3):
     """Run quad-hash solver with given feature flags."""
     cfg = AstrometryConfig(
         n_det=200,
@@ -1665,7 +1687,7 @@ def _run_quadhash_widefield(obj, cat, wcs_init, auto_match_resolution=True,
         stage2_radius_arcsec=sr_arcsec,
         top_k_hypotheses=80,
         max_quads_tested=8000,
-        sip_degree=3,
+        sip_degree=sip_degree,
         refine_clip_sigma=4.0,
         refine_clip_sigma_start=5.0,
         refine_min_match_fraction=0.5,
@@ -1738,6 +1760,31 @@ class TestWideFieldDistortion:
         assert g_rms < max_median_arcsec * 3, (
             f"Grid RMS {g_rms:.3f}\" too large relative to median {g_med:.3f}\""
         )
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("distortion_scale,expected_degree", [
+        (0.0, 0),
+        (1.0, 3),
+    ])
+    def test_auto_sip_degree(self, widefield_setup, distortion_scale, expected_degree):
+        """sip_degree='auto' picks no SIP for undistorted field, and the true
+        (cubic) degree for distorted one, without losing accuracy."""
+        cat, wcs_init = widefield_setup
+        wcs_true = _make_true_wcs(distortion_scale=distortion_scale)
+        obj = _make_widefield_detections(cat, wcs_true)
+        sr = max(15.0, _corner_displacement_arcsec(wcs_true, wcs_init) * 0.3)
+
+        wcs_refined, diag = _run_quadhash_widefield(
+            obj, cat, wcs_init, sr_arcsec=sr, sip_degree='auto',
+        )
+        assert wcs_refined is not None
+
+        assert diag['sip_degree'] == expected_degree, diag['auto_residuals_arcsec']
+        assert 0 in diag['auto_residuals_arcsec']
+        assert 1 not in diag['auto_residuals_arcsec']
+
+        g_med = _evaluate_wcs_grid(wcs_refined, wcs_true)[0]
+        assert g_med < 0.5
 
     @pytest.mark.unit
     def test_baseline_vs_adaptive(self, widefield_setup):

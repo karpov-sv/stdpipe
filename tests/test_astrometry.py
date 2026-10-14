@@ -8,6 +8,7 @@ import pytest
 import numpy as np
 from astropy.wcs import WCS
 from astropy.io import fits
+from astropy.table import Table
 
 from stdpipe import astrometry
 
@@ -263,6 +264,79 @@ class TestAstrometricResiduals:
         xq = np.array([100.0, 200.0]); yq = np.array([100.0, 200.0])
         cx, cy = correct(xq, yq)
         assert cx.shape == (2,) and cy.shape == (2,)
+
+
+def _make_simple_refine_data(distortion, n=300, noise=0.1, seed=1):
+    """Matched object/catalogue pairs on a 2048x2048, 1 arcsec/pixel frame,
+    optionally with cubic SIP distortion, and positional noise in pixels."""
+    rng = np.random.default_rng(seed)
+
+    header = fits.Header()
+    header['CTYPE1'], header['CTYPE2'] = 'RA---TAN', 'DEC--TAN'
+    header['CRPIX1'] = header['CRPIX2'] = 1024.5
+    header['CRVAL1'], header['CRVAL2'] = 180.0, 45.0
+    header['CD1_1'], header['CD2_2'] = -1 / 3600, 1 / 3600
+    header['CD1_2'] = header['CD2_1'] = 0.0
+    if distortion:
+        header['CTYPE1'], header['CTYPE2'] = 'RA---TAN-SIP', 'DEC--TAN-SIP'
+        header['A_ORDER'] = header['B_ORDER'] = 3
+        header['A_3_0'] = header['A_1_2'] = 1e-8
+        header['B_0_3'] = header['B_2_1'] = 1e-8
+    wcs_true = WCS(header)
+
+    x, y = rng.uniform(20, 2028, n), rng.uniform(20, 2028, n)
+    ra, dec = wcs_true.all_pix2world(x, y, 0)
+
+    obj = Table({
+        'x': x + rng.normal(0, noise, n),
+        'y': y + rng.normal(0, noise, n),
+        'ra': ra,
+        'dec': dec,
+    })
+    cat = Table({'RAJ2000': ra, 'DEJ2000': dec})
+
+    return obj, cat
+
+
+class TestRefineWcsSimple:
+    """Test refine_wcs_simple including automatic SIP order selection."""
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("distortion,expected_order", [(False, 0), (True, 3)])
+    def test_auto_order(self, distortion, expected_order):
+        obj, cat = _make_simple_refine_data(distortion)
+
+        messages = []
+        wcs = astrometry.refine_wcs_simple(
+            obj, cat, order='auto', match=False, verbose=messages.append
+        )
+        assert wcs is not None
+        assert 'Using SIP order %d' % expected_order in messages
+
+        if expected_order:
+            assert wcs.sip is not None and wcs.sip.a_order == expected_order
+        else:
+            assert wcs.sip is None
+
+        # Residuals at the level of the positional noise
+        ra, dec = wcs.all_pix2world(obj['x'], obj['y'], 0)
+        dist = 3600 * astrometry.spherical_distance(ra, dec, cat['RAJ2000'], cat['DEJ2000'])
+        assert np.median(dist) < 0.2
+
+    @pytest.mark.unit
+    def test_auto_order_with_matching(self):
+        obj, cat = _make_simple_refine_data(True)
+
+        wcs = astrometry.refine_wcs_simple(obj, cat, order='auto', match=True, sr=3 / 3600)
+        assert wcs is not None
+        assert wcs.sip is not None
+
+    @pytest.mark.unit
+    def test_invalid_order(self):
+        obj, cat = _make_simple_refine_data(False)
+
+        with pytest.raises(ValueError):
+            astrometry.refine_wcs_simple(obj, cat, order='best', match=False)
 
 
 class TestRefineAstrometryResidualField:

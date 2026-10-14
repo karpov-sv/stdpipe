@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -68,6 +68,19 @@ def _robust_sigma(x: np.ndarray) -> float:
     med = np.nanmedian(x)
     mad = np.nanmedian(np.abs(x - med))
     return 1.4826 * mad if mad > 0 else np.nanstd(x)
+
+
+def _sky_residuals(wcs: WCS, xy: np.ndarray, sky: SkyCoord) -> np.ndarray:
+    """Angular distances (radians) between pixel positions ``xy`` (2,N)
+    projected through ``wcs`` and sky positions ``sky``."""
+    ra_fit, dec_fit = wcs.all_pix2world(xy[0], xy[1], 0)
+    ref_ra = sky.ra.deg
+    ref_dec = sky.dec.deg
+    cos_dec = np.cos(np.deg2rad(0.5 * (dec_fit + ref_dec)))
+    # Wrap RA difference to [-180, 180) to handle fields crossing RA=0
+    dra_deg = ((ra_fit - ref_ra + 180.0) % 360.0 - 180.0) * cos_dec
+    ddec_deg = dec_fit - ref_dec
+    return np.deg2rad(np.hypot(dra_deg, ddec_deg))
 
 
 def mag_orderings_consistent(mags_a, mags_b, tol: float = 0.5) -> bool:
@@ -696,7 +709,9 @@ class AstrometryConfig:
     max_candidates_per_bucket: int = 60  # cap ref candidates pulled per hash bucket
 
     # Final fit
-    sip_degree: int = 3
+    sip_degree: Union[int, str] = 3  # or 'auto' to select it from hold-out residuals
+    auto_max_degree: int = 5  # largest SIP degree tried when sip_degree='auto'
+    auto_threshold: float = 0.05  # relative hold-out residual tolerance for 'auto'
     refine_clip_sigma: float = 4.0
     refine_clip_sigma_start: float = 5.0  # progressive clipping: start value
     refine_min_match_fraction: float = 0.5  # keep at least this fraction of initial matches
@@ -957,6 +972,137 @@ class QuadHashAstrometry:
 
         return pairs, top_hyp, best
 
+    def _fit_clipped(
+        self,
+        xy: np.ndarray,
+        sky: SkyCoord,
+        wcs_fit_proj: WCS,
+        sip_degree: int,
+        pv_deg: int,
+        min_matches: int,
+    ) -> Tuple[WCS, np.ndarray]:
+        """Fit the WCS to matched pairs with progressive sigma-clipping (#6).
+
+        Returns the fitted WCS and the boolean mask of pairs kept as inliers.
+        """
+        refined_wcs = None
+        keep = np.ones(xy.shape[1], dtype=bool)
+
+        # Progressive clipping: interpolate from start to end sigma
+        clip_start = self.cfg.refine_clip_sigma_start
+        clip_end = self.cfg.refine_clip_sigma
+        n_iter = self.cfg.refine_max_iter
+
+        for it in range(n_iter):
+            # Linearly interpolate clip threshold from start (loose) to end (tight)
+            if n_iter > 1:
+                frac = it / (n_iter - 1)
+            else:
+                frac = 1.0
+            clip_sigma = clip_start + (clip_end - clip_start) * frac
+
+            xy_use = xy[:, keep]
+            sky_use = sky[keep]
+
+            # Wrapper handles SIP for TAN, PV for ZPN, linear for others
+            refined_wcs = fit_wcs_from_points(
+                xy_use,
+                sky_use,
+                projection=wcs_fit_proj,
+                sip_degree=sip_degree,
+                pv_deg=pv_deg,
+            )
+            wcs_fit_proj = refined_wcs
+
+            # Residuals via spherical distance (projection-independent)
+            dr = _sky_residuals(refined_wcs, xy_use, sky_use)
+
+            sig = _robust_sigma(dr)
+            if not np.isfinite(sig) or sig <= 0:
+                break
+
+            thresh = clip_sigma * sig
+            dr_full = np.full(keep.shape[0], np.nan, dtype=np.float64)
+            dr_full[keep] = dr
+            keep_new = keep & np.isfinite(dr_full) & (dr_full < thresh)
+
+            # Enforce minimum match floor (#6)
+            if keep_new.sum() < min_matches:
+                # Don't clip further if we'd go below the minimum.
+                # Keep the current inlier set instead of partially applying
+                # a clip that violates the configured floor.
+                break
+
+            if keep_new.sum() == keep.sum():
+                keep = keep_new
+                break
+            keep = keep_new
+
+        if refined_wcs is None:
+            raise RuntimeError("WCS refinement failed in fit_wcs_from_points stage.")
+
+        return refined_wcs, keep
+
+    def _select_sip_degree(
+        self,
+        xy: np.ndarray,
+        sky: SkyCoord,
+        wcs_fit_proj: WCS,
+        pv_deg: int,
+    ) -> Tuple[int, Dict[int, float]]:
+        """Choose the SIP degree by fitting one half of the matched pairs and
+        measuring the residuals on the other, unused one.
+
+        Unlike the residuals of the fit itself, these get worse as soon as it
+        starts to overfit, so we may just pick the lowest degree that reaches
+        the best of them (within ``auto_threshold``). All the degrees are
+        checked, as the improvement is not monotonic - the distortion is often
+        dominated by odd radial terms, so e.g. degree 2 may add nothing over a
+        linear solution while degree 3 improves a lot. Degree 1 is skipped, as
+        SIP only has terms of second order and above, so it equals degree 0.
+
+        Returns the selected degree and the dict of median hold-out residuals
+        (arcsec) for every degree tried.
+        """
+        n = xy.shape[1]
+        fit_idx, test_idx = np.arange(0, n, 2), np.arange(1, n, 2)
+        xy_fit, sky_fit = xy[:, fit_idx], sky[fit_idx]
+        xy_test, sky_test = xy[:, test_idx], sky[test_idx]
+        min_fit = max(8, int(len(fit_idx) * self.cfg.refine_min_match_fraction))
+
+        results = {}
+
+        for degree in [0] + list(range(2, int(self.cfg.auto_max_degree) + 1)):
+            # Linear part (CRPIX + CD) plus SIP terms with 2 <= i + j <= degree,
+            # for both axes. Require at least 3 pairs per free parameter, else
+            # the fit is too poorly constrained to judge it
+            n_sip = (degree + 1) * (degree + 2) // 2 - 3 if degree >= 2 else 0
+            if len(fit_idx) < 3 * (6 + 2 * n_sip):
+                break
+
+            try:
+                wcs_d, _ = self._fit_clipped(xy_fit, sky_fit, wcs_fit_proj, degree, pv_deg, min_fit)
+            except Exception:
+                break
+
+            # Median is robust to the outliers still present in the test half
+            res = 3600 * np.rad2deg(np.nanmedian(_sky_residuals(wcs_d, xy_test, sky_test)))
+            if not np.isfinite(res):
+                break
+
+            results[degree] = res
+
+        if not results:
+            return 0, results
+
+        # Lowest degree that is within the threshold from the best residual
+        best_res = min(results.values())
+        best_degree = min(
+            d for d, res in results.items() if res <= best_res * (1 + self.cfg.auto_threshold)
+        )
+
+        return best_degree, results
+
     def refine(
         self,
         obj: Table,
@@ -1192,76 +1338,21 @@ class QuadHashAstrometry:
         # Minimum match floor (#6): don't clip below this count
         min_matches = max(8, int(refine_matches_preclip * self.cfg.refine_min_match_fraction))
 
-        # --- Progressive sigma-clipping refinement (#6) ---
         sky = SkyCoord(ref_ra * u.deg, ref_dec * u.deg, frame="icrs")
         xy = np.vstack([det_x, det_y])  # (2,N)
-
-        refined_wcs = None
-        keep = np.ones(xy.shape[1], dtype=bool)
 
         # Projection template for WCS fitting (may differ from wcs_init
         # which is used only for the matching phase)
         wcs_fit_proj = fit_projection if fit_projection is not None else wcs_init
 
-        # Progressive clipping: interpolate from start to end sigma
-        clip_start = self.cfg.refine_clip_sigma_start
-        clip_end = self.cfg.refine_clip_sigma
-        n_iter = self.cfg.refine_max_iter
+        sip_degree = self.cfg.sip_degree
+        auto_residuals = None
+        if sip_degree == 'auto':
+            sip_degree, auto_residuals = self._select_sip_degree(xy, sky, wcs_fit_proj, pv_deg)
 
-        for it in range(n_iter):
-            # Linearly interpolate clip threshold from start (loose) to end (tight)
-            if n_iter > 1:
-                frac = it / (n_iter - 1)
-            else:
-                frac = 1.0
-            clip_sigma = clip_start + (clip_end - clip_start) * frac
-
-            xy_use = xy[:, keep]
-            sky_use = sky[keep]
-
-            # Wrapper handles SIP for TAN, PV for ZPN, linear for others
-            refined_wcs = fit_wcs_from_points(
-                xy_use,
-                sky_use,
-                projection=wcs_fit_proj,
-                sip_degree=int(self.cfg.sip_degree),
-                pv_deg=pv_deg,
-            )
-            wcs_fit_proj = refined_wcs
-
-            # Residuals via spherical distance (projection-independent)
-            ra_fit, dec_fit = refined_wcs.all_pix2world(xy_use[0], xy_use[1], 0)
-            ref_ra_use = sky_use.ra.deg
-            ref_dec_use = sky_use.dec.deg
-            cos_dec = np.cos(np.deg2rad(0.5 * (dec_fit + ref_dec_use)))
-            # Wrap RA difference to [-180, 180) to handle fields crossing RA=0
-            dra_deg = ((ra_fit - ref_ra_use + 180.0) % 360.0 - 180.0) * cos_dec
-            ddec_deg = dec_fit - ref_dec_use
-            dr = np.deg2rad(np.hypot(dra_deg, ddec_deg))
-
-            sig = _robust_sigma(dr)
-            if not np.isfinite(sig) or sig <= 0:
-                break
-
-            thresh = clip_sigma * sig
-            dr_full = np.full(keep.shape[0], np.nan, dtype=np.float64)
-            dr_full[keep] = dr
-            keep_new = keep & np.isfinite(dr_full) & (dr_full < thresh)
-
-            # Enforce minimum match floor (#6)
-            if keep_new.sum() < min_matches:
-                # Don't clip further if we'd go below the minimum.
-                # Keep the current inlier set instead of partially applying
-                # a clip that violates the configured floor.
-                break
-
-            if keep_new.sum() == keep.sum():
-                keep = keep_new
-                break
-            keep = keep_new
-
-        if refined_wcs is None:
-            raise RuntimeError("WCS refinement failed in fit_wcs_from_points stage.")
+        refined_wcs, keep = self._fit_clipped(
+            xy, sky, wcs_fit_proj, int(sip_degree), pv_deg, min_matches
+        )
 
         # Output match table
         final_idx = np.nonzero(keep)[0]
@@ -1297,6 +1388,8 @@ class QuadHashAstrometry:
             "mad_dr_arcsec": float(_robust_sigma(_as_float_array(match["dr_arcsec"])))
             if len(match)
             else np.nan,
+            "sip_degree": int(sip_degree),
+            "auto_residuals_arcsec": auto_residuals,
             "config": self.cfg,
         }
 
@@ -1309,7 +1402,7 @@ def refine_wcs_quadhash(
     wcs: WCS = None,
     header=None,
     sr: float = 10 / 3600,
-    order: int = 2,
+    order: Union[int, str] = 2,
     projection: str = None,
     pv_deg: int = 5,
     cat_col_ra: str = 'RAJ2000',
@@ -1329,6 +1422,8 @@ def refine_wcs_quadhash(
     refine_n_det: Optional[int] = None,
     refine_n_ref: Optional[int] = None,
     refine_match_radius_arcsec: Optional[float] = None,
+    auto_max_order: int = 5,
+    auto_threshold: float = 0.05,
     get_header: bool = False,
     update: bool = False,
     verbose: bool = False,
@@ -1352,12 +1447,17 @@ def refine_wcs_quadhash(
         FITS header containing the initial astrometric solution (alternative to ``wcs``).
     sr : float, optional
         Matching radius in degrees for stage 2 matching.
-    order : int, optional
+    order : int or str, optional
         SIP polynomial order for the distortion solution (0–5).
         For TAN projection, controls the SIP polynomial degree.
         For ZPN projection, controls additional SIP corrections on top
         of the PV radial model (0 means ZPN-only, 2 is recommended for
         wide-field images).  Ignored for other projections.
+        May also be ``'auto'`` to select it based on hold-out residuals: the
+        matched pairs are split in two halves, every order is fitted on one
+        and its residuals measured on the other, and the lowest order that
+        is within ``auto_threshold`` from the best one is used.  Pattern
+        matching is done only once, so it only costs a few extra fits.
     projection : str or None, optional
         Target projection type for the output WCS.  If ``None`` (default),
         uses the same projection as the input WCS.  Supported values:
@@ -1414,6 +1514,11 @@ def refine_wcs_quadhash(
     refine_match_radius_arcsec : float or None, optional
         Matching radius in arcsec for the expanded refinement pool.
         Defaults to the stage 2 radius.
+    auto_max_order : int, optional
+        Largest SIP order to try when ``order='auto'``. Default is 5.
+    auto_threshold : float, optional
+        Minimal relative improvement of hold-out residuals for accepting a
+        higher SIP order when ``order='auto'``. Default is 0.05, i.e. 5 percent.
     get_header : bool, optional
         If True, return the FITS header object instead of WCS solution.
     update : bool, optional
@@ -1452,6 +1557,9 @@ def refine_wcs_quadhash(
 
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
+
+    if isinstance(order, str) and order != 'auto':
+        raise ValueError(f"order must be an integer or 'auto', not '{order}'")
 
     # Get WCS from header if needed
     if wcs is None and header is not None:
@@ -1585,7 +1693,7 @@ def refine_wcs_quadhash(
 
         if proj_code == 'ZPN':
             log(f"  ZPN PV degree: {pv_deg}")
-        elif proj_code != 'TAN' and order > 0:
+        elif proj_code != 'TAN' and order != 0:
             log(f"  Note: SIP order={order} ignored for {proj_code} projection (linear fit only)")
 
     config = AstrometryConfig(
@@ -1598,7 +1706,9 @@ def refine_wcs_quadhash(
         use_wcs_prior=use_wcs_prior,
         scale_tolerance=scale_tolerance,
         enforce_parity=enforce_parity,
-        sip_degree=max(0, min(5, order)),  # Clamp to 0-5
+        sip_degree=order if order == 'auto' else max(0, min(5, order)),  # Clamp to 0-5
+        auto_max_degree=max(0, min(5, auto_max_order)),
+        auto_threshold=auto_threshold,
         refine_use_all=refine_use_all,
         refine_n_det=refine_n_det,
         refine_n_ref=refine_n_ref,
@@ -1611,6 +1721,12 @@ def refine_wcs_quadhash(
             obj=obj_std, cat=cat_std, wcs_init=wcs,
             fit_projection=fit_projection, pv_deg=pv_deg,
         )
+
+        if diagnostics['auto_residuals_arcsec'] is not None:
+            log("SIP order selection using half of the matches as a test set:")
+            for o, res in diagnostics['auto_residuals_arcsec'].items():
+                log(f"  order {o}: test residual {res:.3f} arcsec")
+            log(f"  Using SIP order {diagnostics['sip_degree']}")
 
         log(f"Refinement successful:")
         log(f"  Pattern matches: {diagnostics['pattern_inliers_stage2']}")

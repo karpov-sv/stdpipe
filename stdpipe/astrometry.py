@@ -594,6 +594,8 @@ def refine_wcs_simple(
     cat_col_ra='RAJ2000',
     cat_col_dec='DEJ2000',
     method='astropy',
+    auto_max_order=5,
+    auto_threshold=0.05,
     _tmpdir=None,
     verbose=False,
 ):
@@ -605,8 +607,12 @@ def refine_wcs_simple(
         List of detected objects with at least ``x``, ``y``, ``ra``, ``dec`` columns.
     cat : astropy.table.Table
         Reference astrometric catalogue.
-    order : int, optional
-        SIP polynomial order for distortion solution.
+    order : int or str, optional
+        SIP polynomial order for distortion solution, or ``'auto'`` to select it
+        based on hold-out residuals: the matched pairs are split in two halves,
+        every order is fitted on one and its residuals measured on the other,
+        and the lowest order that is within ``auto_threshold`` from the best one
+        is used.
     match : bool, optional
         If True, perform nearest-neighbor matching between objects and catalogue.
         If False, assume they are already matched line by line.
@@ -620,6 +626,11 @@ def refine_wcs_simple(
         Catalogue column name for Declination.
     method : str, optional
         Fitting method. Either ``'astropy'`` or ``'astrometrynet'``.
+    auto_max_order : int, optional
+        Largest SIP order to try when ``order='auto'``. Default is 5.
+    auto_threshold : float, optional
+        Minimal relative improvement of hold-out residuals for accepting a
+        higher SIP order when ``order='auto'``. Default is 0.05, i.e. 5 percent.
     _tmpdir : str, optional
         If specified, temporary files will be created inside this path.
     verbose : bool or callable, optional
@@ -634,6 +645,9 @@ def refine_wcs_simple(
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
+    if isinstance(order, str) and order != 'auto':
+        raise ValueError("order must be an integer or 'auto', not '%s'" % order)
+
     if match:
         # Perform simple nearest-neighbor matching within given radius
         oidx, cidx, dist = spherical_match(
@@ -646,34 +660,39 @@ def refine_wcs_simple(
         _obj = obj
         _cat = cat
 
-    wcs = None
-
-    if method == 'astropy':
-        wcs = fit_wcs_from_points(
-            [_obj['x'], _obj['y']],
-            SkyCoord(_cat[cat_col_ra], _cat[cat_col_dec], unit='deg'),
-            sip_degree=order,
-        )
-    elif method == 'astrometrynet':
-        binname = None
-
-        # Rough estimate of frame dimensions
-        width = np.max(obj['x'])
-        height = np.max(obj['y'])
-
+    binname = None
+    if method == 'astrometrynet':
         for path in ['.', '/usr/local', '/opt/local']:
             if os.path.isfile(os.path.join(path, 'astrometry', 'bin', 'fit-wcs')):
                 binname = os.path.join(path, 'astrometry', 'bin', 'fit-wcs')
                 break
 
-        if binname:
+        if not binname:
+            log("Astrometry.Net fit-wcs binary not found")
+
+    def fit(order, _obj, _cat, quiet=False):
+        """Fit WCS of a given SIP order to matched pairs of objects and catalogue stars"""
+        flog = (lambda *args, **kwargs: None) if quiet else log
+        wcs = None
+
+        if method == 'astropy':
+            wcs = fit_wcs_from_points(
+                [_obj['x'], _obj['y']],
+                SkyCoord(_cat[cat_col_ra], _cat[cat_col_dec], unit='deg'),
+                sip_degree=int(order),
+            )
+        elif method == 'astrometrynet' and binname:
+            # Rough estimate of frame dimensions
+            width = np.max(obj['x'])
+            height = np.max(obj['y'])
+
             dirname = tempfile.mkdtemp(prefix='astrometry', dir=_tmpdir)
 
             columns = [
-                fits.Column(name='FIELD_X', format='1D', array=obj['x'] + 1),
-                fits.Column(name='FIELD_Y', format='1D', array=obj['y'] + 1),
-                fits.Column(name='INDEX_RA', format='1D', array=cat[cat_col_ra]),
-                fits.Column(name='INDEX_DEC', format='1D', array=cat[cat_col_dec]),
+                fits.Column(name='FIELD_X', format='1D', array=_obj['x'] + 1),
+                fits.Column(name='FIELD_Y', format='1D', array=_obj['y'] + 1),
+                fits.Column(name='INDEX_RA', format='1D', array=_cat[cat_col_ra]),
+                fits.Column(name='INDEX_DEC', format='1D', array=_cat[cat_col_dec]),
             ]
             tbhdu = fits.BinTableHDU.from_columns(columns)
             filename = os.path.join(dirname, 'list.fits')
@@ -690,22 +709,79 @@ def refine_wcs_simple(
                 order,
             )
 
-            log('Running Astrometry.Net WCS fitter like that:')
-            log(command)
+            flog('Running Astrometry.Net WCS fitter like that:')
+            flog(command)
 
             os.system(command)
 
             if os.path.isfile(wcsname):
                 header = fits.getheader(wcsname)
                 wcs = WCS(header)
-                log('WCS fitter run succeeded')
+                flog('WCS fitter run succeeded')
             else:
-                log('WCS fitter run failed')
+                flog('WCS fitter run failed')
 
             shutil.rmtree(dirname)
 
-        else:
-            log("Astrometry.Net fit-wcs binary not found")
+        return wcs
+
+    def select_order():
+        """Choose the SIP order by fitting one half of the matched pairs and
+        measuring the residuals on the other, unused one. Unlike the residuals
+        of the fit itself, these get worse as soon as it starts to overfit, so
+        we may just pick the lowest order that reaches the best of them. All
+        the orders are checked, as the improvement is not monotonic. Order 1
+        is skipped, as SIP only has terms of second order and above."""
+        log('Selecting the SIP order using half of the matches as a test set')
+
+        obj_fit, cat_fit = _obj[::2], _cat[::2]
+        obj_test, cat_test = _obj[1::2], _cat[1::2]
+
+        results = {}
+
+        for o in [0] + list(range(2, int(auto_max_order) + 1)):
+            # Linear part (CRPIX + CD) plus SIP terms with 2 <= i + j <= order,
+            # for both axes. Require at least 3 pairs per free parameter
+            n_sip = (o + 1) * (o + 2) // 2 - 3 if o >= 2 else 0
+            if len(obj_fit) < 3 * (6 + 2 * n_sip):
+                log('  order %d: %d matches, less than %d needed' % (o, len(obj_fit), 3 * (6 + 2 * n_sip)))
+                break
+
+            try:
+                w = fit(o, obj_fit, cat_fit, quiet=True)
+            except Exception:
+                w = None
+            if w is None:
+                break
+
+            ra, dec = w.all_pix2world(obj_test['x'], obj_test['y'], 0)
+            # Median is robust to the outliers among the test pairs
+            res = 3600 * np.nanmedian(
+                spherical_distance(ra, dec, cat_test[cat_col_ra], cat_test[cat_col_dec])
+            )
+            if not np.isfinite(res):
+                break
+
+            results[o] = res
+
+            log('  order %d: test residual %.3f arcsec' % (o, res))
+
+        if not results:
+            log('Order selection failed, using order 0')
+            return 0
+
+        # Lowest order that is within the threshold from the best residual
+        best_res = min(results.values())
+        best_order = min(o for o, res in results.items() if res <= best_res * (1 + auto_threshold))
+
+        log('Using SIP order %d' % best_order)
+
+        return best_order
+
+    if order == 'auto':
+        order = select_order()
+
+    wcs = fit(order, _obj, _cat)
 
     if wcs:
         if update:
