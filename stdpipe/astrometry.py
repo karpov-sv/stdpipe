@@ -607,6 +607,7 @@ def refine_wcs_simple(
         Reference astrometric catalogue.
     order : int, optional
         SIP polynomial order for distortion solution.
+        Setting this to ``'auto'`` results in order 2.
     match : bool, optional
         If True, perform nearest-neighbor matching between objects and catalogue.
         If False, assume they are already matched line by line.
@@ -630,6 +631,9 @@ def refine_wcs_simple(
     astropy.wcs.WCS or None
         Refined WCS solution, or None on failure.
     """
+
+    if order == 'auto':
+        order = 2
 
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None

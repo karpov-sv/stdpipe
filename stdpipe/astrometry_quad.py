@@ -1309,7 +1309,7 @@ def refine_wcs_quadhash(
     wcs: WCS = None,
     header=None,
     sr: float = 10 / 3600,
-    order: int = 2,
+    order: int | str = 2,
     projection: str = None,
     pv_deg: int = 5,
     cat_col_ra: str = 'RAJ2000',
@@ -1358,6 +1358,7 @@ def refine_wcs_quadhash(
         For ZPN projection, controls additional SIP corrections on top
         of the PV radial model (0 means ZPN-only, 2 is recommended for
         wide-field images).  Ignored for other projections.
+        Setting order to ``'auto'`` results in order 2.
     projection : str or None, optional
         Target projection type for the output WCS.  If ``None`` (default),
         uses the same projection as the input WCS.  Supported values:
@@ -1449,6 +1450,9 @@ def refine_wcs_quadhash(
     ...     verbose=True
     ... )
     """
+
+    if order == 'auto':
+        order = 2
 
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
