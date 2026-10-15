@@ -411,5 +411,51 @@ class TestCatalogAugmentation:
         assert 'gmag' in result.colnames
 
 
+class _FakeVizier:
+    """Stand-in for astroquery Vizier whose default server is unreachable."""
+
+    servers = []
+
+    def __init__(self, *args, **kwargs):
+        self.VIZIER_SERVER = 'vizier.cds.unistra.fr'
+
+    def query_region(self, *args, **kwargs):
+        _FakeVizier.servers.append(self.VIZIER_SERVER)
+        if self.VIZIER_SERVER == 'vizier.cds.unistra.fr':
+            raise ConnectionError('Connection reset by peer')
+        cat = Table()
+        cat['RAJ2000'] = [10.0]
+        cat['DEJ2000'] = [20.0]
+        return [cat]
+
+
+class TestVizierMirrors:
+    """Test fallback to VizieR mirrors when the default server fails."""
+
+    @pytest.mark.unit
+    def test_falls_back_to_mirror(self, monkeypatch):
+        _FakeVizier.servers = []
+        monkeypatch.setattr(catalogs, 'Vizier', _FakeVizier)
+        monkeypatch.setattr(catalogs, 'vizier_mirrors', ['vizier.cfa.harvard.edu'])
+
+        cat = catalogs.get_cat_vizier(10.0, 20.0, 0.1, 'ps1', augment_bands=False)
+
+        assert cat is not None
+        assert len(cat) == 1
+        assert _FakeVizier.servers == [
+            'vizier.cds.unistra.fr',
+            'vizier.cds.unistra.fr',
+            'vizier.cfa.harvard.edu',
+        ]
+
+    @pytest.mark.unit
+    def test_returns_none_when_all_servers_fail(self, monkeypatch):
+        _FakeVizier.servers = []
+        monkeypatch.setattr(catalogs, 'Vizier', _FakeVizier)
+        monkeypatch.setattr(catalogs, 'vizier_mirrors', [])
+
+        assert catalogs.get_cat_vizier(10.0, 20.0, 0.1, 'ps1', augment_bands=False) is None
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
