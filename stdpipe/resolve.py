@@ -9,7 +9,7 @@ from astropy.coordinates import SkyCoord
 
 def simbadResolve(name='m31'):
     url = 'http://cdsweb.u-strasbg.fr/viz-bin/nph-sesame/-oxpi/SNVA'
-    res = requests.get(url, params=requests.utils.quote(name))
+    res = requests.get(url, params=requests.utils.quote(name), timeout=30)
 
     try:
         xml = minidom.parseString(res.content)
@@ -51,7 +51,9 @@ def tnsResolve(name='AT2023lxx'):
         if reverse:
             params.update({'reverse': True})
 
-        r = requests.post("https://api.ztf.fink-portal.org/api/v1/resolver", json=params)
+        r = requests.post(
+            "https://api.ztf.fink-portal.org/api/v1/resolver", json=params, timeout=30
+        )
 
         res = json.loads(r.content)
         if res:
@@ -237,7 +239,11 @@ def resolve(string='M33', verbose=False):
             target = SkyCoord(ra, dec, unit='deg')
 
     if target is None:
-        name, ra, dec = simbadResolve(string)
+        try:
+            name, ra, dec = simbadResolve(string)
+        except Exception as e:
+            log("Simbad resolution failed:", e)
+            name = None
 
         if name:
             log("Resolved by Simbad as", name)
@@ -245,7 +251,11 @@ def resolve(string='M33', verbose=False):
             target = SkyCoord(ra, dec, unit='deg')
 
     if target is None:
-        name, ra, dec = tnsResolve(string)
+        try:
+            name, ra, dec = tnsResolve(string)
+        except Exception as e:
+            log("TNS resolution failed:", e)
+            name = None
 
         if name:
             log("Resolved by TNS as", name)
