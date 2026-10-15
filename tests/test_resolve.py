@@ -504,6 +504,22 @@ class TestResolveWithMocks:
 
         assert target is None
 
+    @patch('stdpipe.resolve.SkyCoord.from_name')
+    @patch('stdpipe.resolve.tnsResolve')
+    @patch('stdpipe.resolve.simbadResolve')
+    def test_resolve_survives_network_errors(self, mock_simbad, mock_tns, mock_from_name):
+        """Test that resolve() falls through to the next method on network errors."""
+        mock_simbad.side_effect = Exception("Simbad unreachable")
+        mock_tns.side_effect = Exception("TNS unreachable")
+        mock_from_name.return_value = SkyCoord(ra=234.567, dec=56.789, unit='deg')
+
+        target = resolve.resolve('NGC1234')
+
+        assert target is not None
+        assert np.isclose(target.ra.deg, 234.567, rtol=1e-6)
+        mock_tns.assert_called_once()
+        mock_from_name.assert_called_once()
+
     def test_resolve_prefers_coordinate_parsing_over_network(self):
         """Test that resolve() tries coordinate parsing before network calls."""
         # No mocking needed - coordinate parsing should work without network
