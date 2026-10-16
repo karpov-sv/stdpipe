@@ -6,7 +6,10 @@ import os, posixpath, shutil, tempfile
 import numpy as np
 
 from astropy.table import Table, MaskedColumn, vstack
+import requests
+
 from astroquery.vizier import Vizier
+from astroquery.exceptions import TableParseError
 from astroquery.xmatch import XMatch
 from astroquery.imcce import Skybot
 from astroquery.ipac.ned import Ned
@@ -732,8 +735,9 @@ def get_cat_vizier(
     - ``2mass`` — 2MASS Point Source Catalogue
     - ``vhs`` — VISTA Hemisphere Survey DR5, augmented with 2MASS-system J, H, Ks
 
-    If the query fails on the default VizieR server, it is retried on the
-    servers listed in ``vizier_mirrors``.
+    If the query fails on the default VizieR server with a network error, it is
+    retried on the servers listed in ``vizier_mirrors``. An empty result is not
+    a failure: it is only re-queried once on the same server, bypassing the cache.
 
     Parameters
     ----------
@@ -791,7 +795,6 @@ def get_cat_vizier(
     log('Filters:', filters)
 
     coord = SkyCoord(ra0, dec0, unit='deg')
-    cats = None
 
     for server in [None] + list(vizier_mirrors):
         vizier = Vizier(row_limit=limit, columns=columns, column_filters=filters)
@@ -799,20 +802,23 @@ def get_cat_vizier(
             log('Retrying on VizieR mirror', server)
             vizier.VIZIER_SERVER = server
 
-        for cache in [True, False]:
-            try:
+        try:
+            cats = vizier.query_region(
+                coord, radius=sr0 * u.deg, catalog=vizier_id, cache=True
+            )
+
+            if not cats or not len(cats) == 1:
+                # Possibly a stale cached answer - re-query the same server
                 cats = vizier.query_region(
-                    coord, radius=sr0 * u.deg, catalog=vizier_id, cache=cache
+                    coord, radius=sr0 * u.deg, catalog=vizier_id, cache=False
                 )
-            except Exception as e:
-                log('VizieR query failed on', vizier.VIZIER_SERVER, ':', str(e)[:200])
-                cats = None
-
-            if cats and len(cats) == 1:
-                break
-
-        if cats and len(cats) == 1:
             break
+        except (requests.exceptions.RequestException, TableParseError) as e:
+            # Network-level failure, or an unparseable (error) response - try the next server
+            log('VizieR query failed on', vizier.VIZIER_SERVER, ':', str(e)[:200])
+    else:
+        log('All VizieR servers failed, cannot get catalogue', catalog)
+        return None
 
     if not cats or not len(cats) == 1:
         log('Error requesting catalogue', catalog)

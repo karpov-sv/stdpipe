@@ -6,7 +6,9 @@ Tests catalog querying and manipulation utilities.
 
 import pytest
 import numpy as np
+import requests
 from astropy.table import Table
+from astroquery.exceptions import TableParseError, EmptyResponseError
 
 from stdpipe import catalogs
 
@@ -411,50 +413,90 @@ class TestCatalogAugmentation:
         assert 'gmag' in result.colnames
 
 
-class _FakeVizier:
-    """Stand-in for astroquery Vizier whose default server is unreachable."""
+DEFAULT_SERVER = 'vizier.cds.unistra.fr'
+MIRROR = 'vizier.cfa.harvard.edu'
 
-    servers = []
 
-    def __init__(self, *args, **kwargs):
-        self.VIZIER_SERVER = 'vizier.cds.unistra.fr'
+def _fake_vizier(behaviour):
+    """Stand-in for astroquery Vizier.
 
-    def query_region(self, *args, **kwargs):
-        _FakeVizier.servers.append(self.VIZIER_SERVER)
-        if self.VIZIER_SERVER == 'vizier.cds.unistra.fr':
-            raise ConnectionError('Connection reset by peer')
-        cat = Table()
-        cat['RAJ2000'] = [10.0]
-        cat['DEJ2000'] = [20.0]
-        return [cat]
+    `behaviour` maps a server name to what its query_region does: an exception
+    instance to raise, 'empty' to return no tables, or 'ok' to return one table.
+    Every call is recorded as (server, cache) in the returned class' `calls`.
+    """
+
+    class FakeVizier:
+        calls = []
+
+        def __init__(self, *args, **kwargs):
+            self.VIZIER_SERVER = DEFAULT_SERVER
+
+        def query_region(self, *args, cache=True, **kwargs):
+            FakeVizier.calls.append((self.VIZIER_SERVER, cache))
+            result = behaviour[self.VIZIER_SERVER]
+            if isinstance(result, Exception):
+                raise result
+            if result == 'empty':
+                return []
+            cat = Table()
+            cat['RAJ2000'] = [10.0]
+            cat['DEJ2000'] = [20.0]
+            return [cat]
+
+    return FakeVizier
 
 
 class TestVizierMirrors:
     """Test fallback to VizieR mirrors when the default server fails."""
 
-    @pytest.mark.unit
-    def test_falls_back_to_mirror(self, monkeypatch):
-        _FakeVizier.servers = []
-        monkeypatch.setattr(catalogs, 'Vizier', _FakeVizier)
-        monkeypatch.setattr(catalogs, 'vizier_mirrors', ['vizier.cfa.harvard.edu'])
-
+    def _query(self, monkeypatch, behaviour):
+        fake = _fake_vizier(behaviour)
+        monkeypatch.setattr(catalogs, 'Vizier', fake)
+        monkeypatch.setattr(catalogs, 'vizier_mirrors', [MIRROR])
         cat = catalogs.get_cat_vizier(10.0, 20.0, 0.1, 'ps1', augment_bands=False)
+        return cat, fake.calls
+
+    @pytest.mark.unit
+    def test_empty_result_does_not_use_mirror(self, monkeypatch):
+        cat, calls = self._query(monkeypatch, {DEFAULT_SERVER: 'empty', MIRROR: 'ok'})
+
+        assert cat is None
+        assert calls == [(DEFAULT_SERVER, True), (DEFAULT_SERVER, False)]
+
+    @pytest.mark.unit
+    def test_network_error_falls_back_to_mirror(self, monkeypatch):
+        error = requests.exceptions.ConnectionError('Connection reset by peer')
+        cat, calls = self._query(monkeypatch, {DEFAULT_SERVER: error, MIRROR: 'ok'})
 
         assert cat is not None
         assert len(cat) == 1
-        assert _FakeVizier.servers == [
-            'vizier.cds.unistra.fr',
-            'vizier.cds.unistra.fr',
-            'vizier.cfa.harvard.edu',
-        ]
+        assert calls == [(DEFAULT_SERVER, True), (MIRROR, True)]
+
+    @pytest.mark.unit
+    def test_unparseable_response_falls_back_to_mirror(self, monkeypatch):
+        error = TableParseError('Failed to parse VIZIER result!')
+        cat, calls = self._query(monkeypatch, {DEFAULT_SERVER: error, MIRROR: 'ok'})
+
+        assert cat is not None
+        assert calls == [(DEFAULT_SERVER, True), (MIRROR, True)]
+
+    @pytest.mark.unit
+    def test_other_errors_propagate(self, monkeypatch):
+        with pytest.raises(ValueError):
+            self._query(monkeypatch, {DEFAULT_SERVER: ValueError('bad filter'), MIRROR: 'ok'})
+
+    @pytest.mark.unit
+    def test_unknown_catalogue_propagates(self, monkeypatch):
+        with pytest.raises(EmptyResponseError):
+            self._query(monkeypatch, {DEFAULT_SERVER: EmptyResponseError('not found'), MIRROR: 'ok'})
 
     @pytest.mark.unit
     def test_returns_none_when_all_servers_fail(self, monkeypatch):
-        _FakeVizier.servers = []
-        monkeypatch.setattr(catalogs, 'Vizier', _FakeVizier)
-        monkeypatch.setattr(catalogs, 'vizier_mirrors', [])
+        error = requests.exceptions.Timeout('timed out')
+        cat, calls = self._query(monkeypatch, {DEFAULT_SERVER: error, MIRROR: error})
 
-        assert catalogs.get_cat_vizier(10.0, 20.0, 0.1, 'ps1', augment_bands=False) is None
+        assert cat is None
+        assert calls == [(DEFAULT_SERVER, True), (MIRROR, True)]
 
 
 if __name__ == '__main__':
