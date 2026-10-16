@@ -6,7 +6,10 @@ import os, posixpath, shutil, tempfile
 import numpy as np
 
 from astropy.table import Table, MaskedColumn, vstack
+import requests
+
 from astroquery.vizier import Vizier
+from astroquery.exceptions import TableParseError
 from astroquery.xmatch import XMatch
 from astroquery.imcce import Skybot
 from astroquery.ipac.ned import Ned
@@ -697,6 +700,10 @@ def augment_cat_bands(cat, catalog=None, verbose=False):
     return cat
 
 
+# VizieR servers tried, in order, when the default one (astroquery.vizier.conf.server) fails
+vizier_mirrors = ['vizier.cfa.harvard.edu']
+
+
 def get_cat_vizier(
     ra0,
     dec0,
@@ -727,6 +734,10 @@ def get_cat_vizier(
     - ``gsc`` — Guide Star Catalogue 2.2
     - ``2mass`` — 2MASS Point Source Catalogue
     - ``vhs`` — VISTA Hemisphere Survey DR5, augmented with 2MASS-system J, H, Ks
+
+    If the query fails on the default VizieR server with a network error, it is
+    retried on the servers listed in ``vizier_mirrors``. An empty result is not
+    a failure: it is only re-queried once on the same server, bypassing the cache.
 
     Parameters
     ----------
@@ -783,22 +794,35 @@ def get_cat_vizier(
     log('Center: %.3f %.3f' % (ra0, dec0), 'radius: %.3f' % sr0)
     log('Filters:', filters)
 
-    vizier = Vizier(row_limit=limit, columns=columns, column_filters=filters)
-    cats = vizier.query_region(
-        SkyCoord(ra0, dec0, unit='deg'), radius=sr0 * u.deg, catalog=vizier_id
-    )
+    coord = SkyCoord(ra0, dec0, unit='deg')
+
+    for server in [None] + list(vizier_mirrors):
+        vizier = Vizier(row_limit=limit, columns=columns, column_filters=filters)
+        if server is not None:
+            log('Retrying on VizieR mirror', server)
+            vizier.VIZIER_SERVER = server
+
+        try:
+            cats = vizier.query_region(
+                coord, radius=sr0 * u.deg, catalog=vizier_id, cache=True
+            )
+
+            if not cats or not len(cats) == 1:
+                # Possibly a stale cached answer - re-query the same server
+                cats = vizier.query_region(
+                    coord, radius=sr0 * u.deg, catalog=vizier_id, cache=False
+                )
+            break
+        except (requests.exceptions.RequestException, TableParseError) as e:
+            # Network-level failure, or an unparseable (error) response - try the next server
+            log('VizieR query failed on', vizier.VIZIER_SERVER, ':', str(e)[:200])
+    else:
+        log('All VizieR servers failed, cannot get catalogue', catalog)
+        return None
 
     if not cats or not len(cats) == 1:
-        cats = vizier.query_region(
-            SkyCoord(ra0, dec0, unit='deg'),
-            radius=sr0 * u.deg,
-            catalog=vizier_id,
-            cache=False,
-        )
-
-        if not cats or not len(cats) == 1:
-            log('Error requesting catalogue', catalog)
-            return None
+        log('Error requesting catalogue', catalog)
+        return None
 
     cat = cats[0]
     cat.meta['vizier_id'] = vizier_id
