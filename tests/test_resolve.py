@@ -9,6 +9,7 @@ Tests cover all coordinate formats including comma-separated coordinates.
 
 import pytest
 import numpy as np
+import requests
 from unittest.mock import patch, Mock, MagicMock
 from astropy.coordinates import SkyCoord
 
@@ -312,6 +313,65 @@ class TestSimbadResolve:
         # Network errors are not caught by simbadResolve - they propagate
         with pytest.raises(Exception, match="Network error"):
             resolve.simbadResolve('M31')
+
+        # Non-network errors are not retried on mirrors
+        mock_get.assert_called_once()
+
+    @patch('stdpipe.resolve.requests.get')
+    def test_simbad_resolve_falls_back_to_mirror(self, mock_get, monkeypatch):
+        """Test that a network error on the first Sesame server falls back to the next one."""
+        monkeypatch.setattr(resolve, 'sesame_mirrors', ['https://first', 'https://second'])
+
+        mock_response = Mock()
+        mock_response.content = b"""<?xml version="1.0" encoding="UTF-8"?>
+        <Sesame><Resolver><oname>M 31</oname>
+        <jradeg>10.6847083</jradeg><jdedeg>41.2687500</jdedeg></Resolver></Sesame>
+        """
+        mock_get.side_effect = [requests.exceptions.ConnectionError('Connection refused'), mock_response]
+
+        name, ra, dec = resolve.simbadResolve('M31')
+
+        assert name == 'M 31'
+        assert [c.args[0] for c in mock_get.call_args_list] == [
+            'https://first/-oxpi/S',
+            'https://second/-oxpi/S',
+        ]
+
+    @patch('stdpipe.resolve.requests.get')
+    def test_simbad_resolve_http_error_falls_back_to_mirror(self, mock_get, monkeypatch):
+        """Test that an HTTP error status on the first server falls back to the next one."""
+        monkeypatch.setattr(resolve, 'sesame_mirrors', ['https://first', 'https://second'])
+
+        bad_response = Mock()
+        bad_response.raise_for_status.side_effect = requests.exceptions.HTTPError('503')
+        good_response = Mock()
+        good_response.content = b"Nothing found"
+        mock_get.side_effect = [bad_response, good_response]
+
+        assert resolve.simbadResolve('Unknown') == (None, None, None)
+        assert mock_get.call_count == 2
+
+    @patch('stdpipe.resolve.requests.get')
+    def test_simbad_resolve_not_found_does_not_use_mirror(self, mock_get, monkeypatch):
+        """Test that a 'not found' answer is not retried on mirrors."""
+        monkeypatch.setattr(resolve, 'sesame_mirrors', ['https://first', 'https://second'])
+
+        mock_response = Mock()
+        mock_response.content = b"<Sesame><Target><INFO> *** Nothing found *** </INFO></Target></Sesame>"
+        mock_get.return_value = mock_response
+
+        assert resolve.simbadResolve('Unknown') == (None, None, None)
+        mock_get.assert_called_once()
+
+    @patch('stdpipe.resolve.requests.get')
+    def test_simbad_resolve_all_mirrors_fail(self, mock_get, monkeypatch):
+        """Test that the network error propagates when all servers fail."""
+        monkeypatch.setattr(resolve, 'sesame_mirrors', ['https://first', 'https://second'])
+        mock_get.side_effect = requests.exceptions.Timeout('timed out')
+
+        with pytest.raises(requests.exceptions.Timeout):
+            resolve.simbadResolve('M31')
+        assert mock_get.call_count == 2
 
     @patch('stdpipe.resolve.requests.get')
     def test_simbad_resolve_missing_fields(self, mock_get):
