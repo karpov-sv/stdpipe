@@ -44,6 +44,7 @@ def get_hips_image(
     normalize=True,
     upscale=False,
     get_header=True,
+    cache=True,
     verbose=False,
 ):
     """Load an image from any HiPS survey using the CDS hips2fits service.
@@ -85,6 +86,11 @@ def get_hips_image(
         pixel scales.
     get_header : bool, optional
         If True, also return the FITS header alongside the image.
+    cache : bool, optional
+        If True, store the downloaded image in astropy's download cache so that
+        repeated identical requests (e.g. small cutouts on re-runs) are not sent
+        to the server again. Set to False for large one-off images (e.g.
+        full-frame templates) to avoid filling the cache.
     verbose : bool or callable, optional
         Whether to show verbose messages. May be boolean or a ``print``-like callable.
 
@@ -166,7 +172,7 @@ def get_hips_image(
         url = baseurl + '?' + urlencode(params)
 
         t0 = time.time()
-        hdu = fits_open_remote(url, verbose=verbose)
+        hdu = fits_open_remote(url, cache=cache, verbose=verbose)
         if hdu is not None:
             log('Downloaded HiPS image in %.2f s' % (time.time() - t0))
             break

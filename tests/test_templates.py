@@ -601,6 +601,23 @@ class TestGetHipsImage:
         assert result.shape == (20, 20)
 
     @pytest.mark.unit
+    @pytest.mark.parametrize('cache', [True, False])
+    @patch('stdpipe.templates.fits_open_remote')
+    def test_cache_passed_through(self, mock_fits_open, cache):
+        """cache option should be forwarded, defaulting to True."""
+        mock_fits_open.return_value = _make_mock_hdu(np.ones((20, 20)))
+
+        kwargs = {} if cache else {'cache': False}
+        templates.get_hips_image(
+            'CDS/P/DSS2/red',
+            ra=180, dec=45, fov=0.01,
+            width=20, height=20,
+            **kwargs,
+        )
+
+        assert mock_fits_open.call_args.kwargs['cache'] is cache
+
+    @pytest.mark.unit
     @patch('stdpipe.templates.fits_open_remote')
     def test_download_failure_returns_none(self, mock_fits_open):
         """If all download attempts fail, should return (None, None)."""

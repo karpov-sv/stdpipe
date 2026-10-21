@@ -14,7 +14,7 @@ Image subtraction requires template image that has to be astrometrically aligned
 
    # Get r band image from PanSTARRS with science image original resolution and orientation
    tmpl = templates.get_hips_image('PanSTARRS/DR1/r', wcs=wcs,
-                width=image.shape[1], height=image.shape[0], get_header=False, verbose=True)
+                width=image.shape[1], height=image.shape[0], get_header=False, cache=False, verbose=True)
 
    # Now mask some brighter stars in the template as we know they are saturated in Pan-STARRS
    tmask = templates.mask_template(tmpl, cat, cat_col_mag='rmag', cat_saturation_mag=15,
