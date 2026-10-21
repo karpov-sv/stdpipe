@@ -1,12 +1,14 @@
 import numpy as np
 
 import os
+import io
 import json
 import tempfile
 import shlex
 import time
 import shutil
 
+import requests
 from urllib.parse import urlencode
 
 from astropy.wcs import WCS
@@ -163,15 +165,11 @@ def get_hips_image(
     ]:
         url = baseurl + '?' + urlencode(params)
 
-        try:
-            t0 = time.time()
-            hdu = fits.open(url)
-            t1 = time.time()
-            log('Downloaded HiPS image in %.2f s' % (t1 - t0))
+        t0 = time.time()
+        hdu = fits_open_remote(url, verbose=verbose)
+        if hdu is not None:
+            log('Downloaded HiPS image in %.2f s' % (time.time() - t0))
             break
-        except Exception:
-            log('Failed downloading HiPS image from', url)
-            hdu = None
 
     if hdu is None:
         log('Cannot download HiPS image!')
@@ -647,28 +645,53 @@ def find_skycells(
     return results
 
 
-def fits_open_remote(url, **kwargs):
+def fits_open_remote(url, cache=False, timeout=60, verbose=False, **kwargs):
     """
-    Simple wrapper around astropy.io.fits.open() that handles cache corrution errors
-    and downloads the image directly if necessary
-    """
-    try:
-        # First try opening using the cache
-        hdu = fits.open(url, **kwargs)
-    except OSError:
-        # If that fails, cache may be corrupted - let's skip it
-        kwargs.update({'cache': False})
+    Open a remote FITS file, leaving nothing on disk by default.
 
+    Note that `fits.open(url, cache=False)` is not enough for that, as astropy still
+    downloads the data into a temporary file that is only removed when the
+    interpreter exits. Here, the file is downloaded into memory and opened from there.
+
+    Parameters
+    ----------
+    url : str
+        URL of the FITS file.
+    cache : bool, optional
+        If True, use astropy's download cache instead, falling back to direct
+        download if the cached copy cannot be opened (e.g. is corrupted).
+    timeout : float, optional
+        Network timeout in seconds for direct download.
+    verbose : bool or callable, optional
+        Whether to show verbose messages during the run.
+    **kwargs
+        Passed to :func:`astropy.io.fits.open`.
+
+    Returns
+    -------
+    astropy.io.fits.HDUList or None
+        Opened FITS file, or None if it cannot be downloaded or opened.
+    """
+
+    # Simple wrapper around print for logging in verbose mode only
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
+
+    if cache:
         try:
-            hdu = fits.open(url, **kwargs)
-        except Exception:
-            import traceback
+            return fits.open(url, cache=True, **kwargs)
+        except OSError:
+            # Cache may be corrupted - let's skip it
+            log('Cannot open %s via astropy cache, downloading it directly' % url)
 
-            traceback.print_exc()
+    try:
+        response = requests.get(url, timeout=timeout)
+        response.raise_for_status()
 
-            return None
+        return fits.open(io.BytesIO(response.content), **kwargs)
+    except Exception as e:
+        log('Failed downloading %s: %s' % (url, e))
 
-    return hdu
+        return None
 
 
 def get_skycells(
@@ -742,17 +765,10 @@ def get_skycells(
                 else:
                     log('Downloading %s' % cellname)
 
-                    try:
-                        # Bypass astropy's URL cache - the file is stored in
-                        # our own persistent cache below, so a second copy in
-                        # ~/.astropy/cache/download would never be re-used
-                        hdu = fits.open(cell, cache=False)
-                    except Exception:
-                        import traceback
-
-                        traceback.print_exc()
-
-                        hdu = None
+                    # Bypass astropy's URL cache - the file is stored in
+                    # our own persistent cache below, so a second copy in
+                    # ~/.astropy/cache/download would never be re-used
+                    hdu = fits_open_remote(cell, verbose=verbose)
                     if hdu is not None:
                         image, header = hdu[1].data, hdu[1].header
 
@@ -761,15 +777,14 @@ def get_skycells(
                                 image, header = normalize_ps1_skycell(image, header)
 
                             if survey == 'ls' and ext == 'image':
-                                try:
-                                    # Get invvar file to mask not covered regions
-                                    ihdu = fits.open(cell.replace('-image-', '-invvar-'), cache=False)
-                                    if ihdu is not None:
-                                        invvar = ihdu[1].data
-                                        image[invvar == 0] = np.nan
-                                        ihdu.close()
-                                except Exception:
-                                    pass
+                                # Get invvar file to mask not covered regions
+                                ihdu = fits_open_remote(
+                                    cell.replace('-image-', '-invvar-'), verbose=verbose
+                                )
+                                if ihdu is not None:
+                                    invvar = ihdu[1].data
+                                    image[invvar == 0] = np.nan
+                                    ihdu.close()
 
                         if _cache_downscale > 1:
                             image, header = cutouts.downscale_image(

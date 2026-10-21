@@ -4,6 +4,9 @@ Unit tests for templates.py — template image retrieval and processing utilitie
 Tests pure functions and mockable code paths without requiring network access.
 """
 
+import io
+import tempfile
+
 import pytest
 import numpy as np
 from unittest.mock import patch, MagicMock
@@ -71,7 +74,7 @@ def catalog_on_image(simple_wcs):
 
 
 def _make_mock_hdu(image, header=None):
-    """Create a mock HDU list for patching fits.open."""
+    """Create a mock HDU list for patching fits_open_remote."""
     if header is None:
         header = fits.Header()
     hdu = MagicMock()
@@ -399,6 +402,85 @@ class TestFindSkycells:
 
 
 # ========================================================================
+# TestFitsOpenRemote
+# ========================================================================
+
+
+def _make_fits_response(image):
+    """Create a mock requests response carrying a FITS file with given image."""
+    buf = io.BytesIO()
+    fits.PrimaryHDU(image).writeto(buf)
+    response = MagicMock()
+    response.content = buf.getvalue()
+    response.raise_for_status = MagicMock()
+    return response
+
+
+class TestFitsOpenRemote:
+    """Test remote FITS opening without leaving files on disk."""
+
+    @pytest.mark.unit
+    @patch('stdpipe.templates.requests.get')
+    def test_in_memory_download(self, mock_get, tmp_path, monkeypatch):
+        """Default mode should open the data from memory, writing no temporary files."""
+        image = np.arange(12, dtype=np.float32).reshape(3, 4)
+        mock_get.return_value = _make_fits_response(image)
+        monkeypatch.setattr(tempfile, 'tempdir', str(tmp_path))
+
+        with patch('stdpipe.templates.fits.open', wraps=fits.open) as mock_open:
+            hdu = templates.fits_open_remote('https://example.com/test.fits')
+
+        assert hdu is not None
+        np.testing.assert_array_equal(hdu[0].data, image)
+        hdu.close()
+
+        # Never handed the URL to astropy, and nothing was written to temp dir
+        assert not isinstance(mock_open.call_args.args[0], str)
+        assert list(tmp_path.iterdir()) == []
+
+    @pytest.mark.unit
+    @patch('stdpipe.templates.requests.get')
+    def test_download_failure_returns_none(self, mock_get):
+        """HTTP errors should result in None."""
+        response = MagicMock()
+        response.raise_for_status.side_effect = Exception('404 Not Found')
+        mock_get.return_value = response
+
+        assert templates.fits_open_remote('https://example.com/test.fits') is None
+
+    @pytest.mark.unit
+    @patch('stdpipe.templates.requests.get')
+    @patch('stdpipe.templates.fits.open')
+    def test_cache_true_uses_astropy(self, mock_open, mock_get):
+        """cache=True should open the URL through astropy's cache."""
+        mock_open.return_value = 'hdu'
+
+        assert templates.fits_open_remote('https://example.com/test.fits', cache=True) == 'hdu'
+        mock_open.assert_called_once_with('https://example.com/test.fits', cache=True)
+        mock_get.assert_not_called()
+
+    @pytest.mark.unit
+    @patch('stdpipe.templates.requests.get')
+    def test_cache_true_falls_back_on_error(self, mock_get):
+        """Unreadable cached copy should fall back to direct download."""
+        image = np.ones((2, 2), dtype=np.float32)
+        mock_get.return_value = _make_fits_response(image)
+        real_open = fits.open
+
+        def fake_open(name, *args, **kwargs):
+            if isinstance(name, str):
+                raise OSError('Corrupted cache')
+            return real_open(name, *args, **kwargs)
+
+        with patch('stdpipe.templates.fits.open', side_effect=fake_open):
+            hdu = templates.fits_open_remote('https://example.com/test.fits', cache=True)
+
+        assert hdu is not None
+        np.testing.assert_array_equal(hdu[0].data, image)
+        hdu.close()
+
+
+# ========================================================================
 # TestGetHipsImage
 # ========================================================================
 
@@ -423,7 +505,7 @@ class TestGetHipsImage:
         assert result is None
 
     @pytest.mark.unit
-    @patch('stdpipe.templates.fits.open')
+    @patch('stdpipe.templates.fits_open_remote')
     def test_panstarrs_auto_asinh(self, mock_fits_open):
         """PanSTARRS non-g band should auto-detect asinh scaling."""
         raw_value = 1.0
@@ -443,7 +525,7 @@ class TestGetHipsImage:
         np.testing.assert_allclose(result[10, 10], expected, rtol=1e-10)
 
     @pytest.mark.unit
-    @patch('stdpipe.templates.fits.open')
+    @patch('stdpipe.templates.fits_open_remote')
     def test_asinh_false_override(self, mock_fits_open):
         """Explicit asinh=False should skip linearization even for PanSTARRS."""
         raw_value = 1.0
@@ -464,7 +546,7 @@ class TestGetHipsImage:
         np.testing.assert_allclose(result[10, 10], raw_value, rtol=1e-10)
 
     @pytest.mark.unit
-    @patch('stdpipe.templates.fits.open')
+    @patch('stdpipe.templates.fits_open_remote')
     def test_normalize_rescales(self, mock_fits_open):
         """normalize=True should produce median≈100 and mad_std≈10."""
         rng = np.random.RandomState(42)
@@ -482,7 +564,7 @@ class TestGetHipsImage:
         assert abs(mad_std(result, ignore_nan=True) - 10) < 1.0
 
     @pytest.mark.unit
-    @patch('stdpipe.templates.fits.open')
+    @patch('stdpipe.templates.fits_open_remote')
     def test_panstarrs_g_no_asinh(self, mock_fits_open):
         """PanSTARRS g-band should NOT auto-detect asinh."""
         raw_value = 1.0
@@ -500,7 +582,7 @@ class TestGetHipsImage:
         np.testing.assert_allclose(result[10, 10], raw_value, rtol=1e-10)
 
     @pytest.mark.unit
-    @patch('stdpipe.templates.fits.open')
+    @patch('stdpipe.templates.fits_open_remote')
     def test_get_header_false(self, mock_fits_open):
         """get_header=False should return just the image."""
         image = np.ones((20, 20))
@@ -519,10 +601,10 @@ class TestGetHipsImage:
         assert result.shape == (20, 20)
 
     @pytest.mark.unit
-    @patch('stdpipe.templates.fits.open')
+    @patch('stdpipe.templates.fits_open_remote')
     def test_download_failure_returns_none(self, mock_fits_open):
         """If all download attempts fail, should return (None, None)."""
-        mock_fits_open.side_effect = Exception("Connection refused")
+        mock_fits_open.return_value = None
 
         result = templates.get_hips_image(
             'CDS/P/DSS2/red',
@@ -533,10 +615,10 @@ class TestGetHipsImage:
         assert result == (None, None)
 
     @pytest.mark.unit
-    @patch('stdpipe.templates.fits.open')
+    @patch('stdpipe.templates.fits_open_remote')
     def test_download_failure_get_header_false(self, mock_fits_open):
         """Download failure with get_header=False should return None."""
-        mock_fits_open.side_effect = Exception("Connection refused")
+        mock_fits_open.return_value = None
 
         result = templates.get_hips_image(
             'CDS/P/DSS2/red',
