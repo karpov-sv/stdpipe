@@ -1310,6 +1310,51 @@ def get_objects_sep(
         return obj
 
 
+def _filtered_noise_scale(image, mask, kernel, err=None, bg_size=64, clip=5.0):
+    """Ratio of the background noise after and before smoothing with the kernel.
+
+    Measured directly on the image, as the noise is rarely white on the
+    scales of wide kernels. The background-subtracted image is normalized by
+    the noise map (*err*, or background RMS map if not provided) so that only
+    the noise correlation, not its spatial variations, enters the ratio.
+    Pixels above *clip* sigmas, and the vicinity of them and of masked pixels,
+    are excluded to suppress the contribution of sources.
+    """
+    from scipy.signal import fftconvolve
+
+    mask = mask | ~np.isfinite(image)
+    if err is not None:
+        err = np.asarray(err, dtype=np.float64)
+        mask = mask | ~np.isfinite(err) | (err <= 0)
+
+    image = np.where(mask, np.nanmedian(image[~mask]), image).astype(np.float64)
+
+    bg, rms = get_background(image, mask=mask, method='sep', size=bg_size, get_rms=True)
+    if err is None:
+        err = rms
+        mask = mask | ~np.isfinite(err) | (err <= 0)
+
+    z = np.zeros_like(image)
+    z[~mask] = (image - bg)[~mask] / err[~mask]
+
+    # Treat significant positive outliers (sources) as masked
+    mask = mask | dilate(z > clip, np.ones((3, 3), dtype=np.uint8))
+    z[mask] = 0
+    fz = fftconvolve(z, kernel / np.sum(kernel), mode='same')
+
+    # Exclude the vicinity of masked pixels and image edges, affected by zero filling
+    good = ~dilate(mask, np.ones(kernel.shape, dtype=np.uint8))
+    hy, hx = kernel.shape[0] // 2, kernel.shape[1] // 2
+    good[:hy] = good[-hy:] = False
+    good[:, :hx] = good[:, -hx:] = False
+
+    if np.sum(good) < 100:
+        # Too crowded or masked, fall back to just unmasked pixels
+        good = ~mask
+
+    return mad_std(fz[good]) / mad_std(z[good])
+
+
 def get_objects_sextractor(
     image,
     header=None,
@@ -1319,6 +1364,7 @@ def get_objects_sextractor(
     thresh=2.0,
     aper=3.0,
     r0=0.0,
+    filter_type='conv',
     gain=1,
     edge=0,
     minarea=5,
@@ -1373,6 +1419,18 @@ def get_objects_sextractor(
         each aperture.
     r0 : float
         Smoothing kernel sigma (pixels, i.e. FWHM / 2.355).
+    filter_type : {'conv', 'matched'}
+        How *thresh* is interpreted when *r0* is non-zero, following
+        ``sep.extract()`` naming. ``'conv'`` (default) is the native
+        SExtractor behaviour: the threshold is applied to the filtered image
+        but expressed in units of the unfiltered noise, so the effective
+        significance grows with kernel size. ``'matched'`` interprets
+        *thresh* in units of the filtered image noise, similar to the
+        default in :func:`get_objects_sep`. The ratio of filtered to
+        unfiltered noise is measured on the background-subtracted image
+        normalized by the noise map (*err* or background RMS), so it
+        accounts for correlated noise, and is applied to ``DETECT_THRESH``
+        as a single scalar factor.
     gain : float
         Detector gain, e-/ADU.
     edge : int
@@ -1422,6 +1480,9 @@ def get_objects_sextractor(
     # Simple wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
+    if filter_type not in ('conv', 'matched'):
+        raise ValueError(f"Unknown filter_type '{filter_type}', should be 'conv' or 'matched'")
+
     # Find the binary
     binname = None
 
@@ -1466,6 +1527,19 @@ def get_objects_sextractor(
             image.copy() if np.issubdtype(image.dtype, np.floating) else image.astype(np.float64)
         )
         image[mask_det] = np.nan
+
+    kernel = make_kernel(r0, ext=2.0) if r0 else None
+
+    if kernel is not None and filter_type == 'matched':
+        scale = _filtered_noise_scale(
+            image,
+            mask | mask_det,
+            kernel,
+            err=err,
+            bg_size=bg_size or extra.get('BACK_SIZE', 64),
+        )
+        thresh = thresh * scale
+        log(f"Filtered image noise is {scale:.3g} of unfiltered, using DETECT_THRESH {thresh:.3g}")
 
     # Prepare
     if type(image) == str:
@@ -1563,10 +1637,9 @@ def get_objects_sextractor(
     opts['CATALOG_NAME'] = catname
     opts['CATALOG_TYPE'] = 'FITS_LDAC'
 
-    if not r0:
+    if kernel is None:
         opts['FILTER'] = 'N'
     else:
-        kernel = make_kernel(r0, ext=2.0)
         kernelname = os.path.join(workdir, 'kernel.txt')
         np.savetxt(
             kernelname,

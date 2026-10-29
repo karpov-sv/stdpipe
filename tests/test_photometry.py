@@ -6,6 +6,7 @@ Tests object detection, photometry, and calibration utilities.
 
 import pytest
 import numpy as np
+import scipy.ndimage
 from astropy.table import Table
 
 from stdpipe import photometry
@@ -852,6 +853,105 @@ class TestSExtractorIntegration:
 
         # Should detect similar number of objects (within reason)
         assert abs(len(obj_sep) - len(obj_sex)) < 5
+
+    @pytest.mark.integration
+    @pytest.mark.requires_sextractor
+    def test_sextractor_filter_type_matched_wide_psf(self):
+        """Test detection of faint wide-PSF sources with threshold in filtered noise units."""
+        rng = np.random.default_rng(42)
+        image = rng.normal(100, 10, (512, 512))
+
+        # Faint sources with sigma=6 pixels (FWHM ~14) and optimal S/N ~ 15
+        sigma = 6.0
+        flux = 15 * 10 * np.sqrt(4 * np.pi * sigma**2)
+        positions = [(x, y) for x in range(80, 512, 120) for y in range(80, 512, 120)]
+        y, x = np.mgrid[:512, :512]
+        for sx, sy in positions:
+            image += flux / (2 * np.pi * sigma**2) * np.exp(-((x - sx)**2 + (y - sy)**2) / (2 * sigma**2))
+
+        def n_detected(obj):
+            if not len(obj):
+                return 0, 0
+            d = np.hypot(obj['x'][:, None] - [_[0] for _ in positions], obj['y'][:, None] - [_[1] for _ in positions])
+            return np.sum(d.min(axis=0) < 3), np.sum(d.min(axis=1) >= 3)
+
+        # Threshold in units of unfiltered noise misses most of them
+        obj = photometry.get_objects_sextractor(image, thresh=5.0, r0=4.0, aper=8.0, minarea=5)
+        assert n_detected(obj)[0] < len(positions) // 2
+
+        obj = photometry.get_objects_sextractor(
+            image, thresh=5.0, r0=4.0, filter_type='matched', aper=8.0, minarea=5
+        )
+        n_true, n_false = n_detected(obj)
+        assert n_true == len(positions)
+        assert n_false < 3
+
+    @pytest.mark.unit
+    def test_sextractor_filter_type_invalid(self):
+        """Test that unknown filter_type is rejected."""
+        image = np.zeros((64, 64))
+        with pytest.raises(ValueError, match='filter_type'):
+            photometry.get_objects_sextractor(image, r0=1.0, filter_type='foo')
+
+
+@pytest.mark.unit
+class TestFilteredNoiseScale:
+    """Test measurement of filtered to unfiltered noise ratio."""
+
+    @staticmethod
+    def white_expected(kernel):
+        return np.sqrt(np.sum(kernel**2)) / np.sum(kernel)
+
+    def test_white(self):
+        """Filtered noise scale for white noise matches analytic expectation."""
+        rng = np.random.default_rng(42)
+        image = rng.normal(100, 10, (512, 512))
+        mask = np.zeros_like(image, dtype=bool)
+        kernel = photometry.make_kernel(3.0, ext=2.0)
+
+        scale = photometry._filtered_noise_scale(image, mask, kernel)
+        assert scale == pytest.approx(self.white_expected(kernel), rel=0.1)
+
+    def test_varying_noise(self):
+        """Spatially varying noise level does not bias the scale, with or without err."""
+        rng = np.random.default_rng(42)
+        y, x = np.mgrid[:512, :512]
+        err = 5 + 30 * x / 512
+        image = 100 + rng.normal(0, 1, (512, 512)) * err
+        mask = np.zeros_like(image, dtype=bool)
+        kernel = photometry.make_kernel(3.0, ext=2.0)
+        expected = self.white_expected(kernel)
+
+        scale = photometry._filtered_noise_scale(image, mask, kernel)
+        assert scale == pytest.approx(expected, rel=0.1)
+
+        scale = photometry._filtered_noise_scale(image, mask, kernel, err=err)
+        assert scale == pytest.approx(expected, rel=0.1)
+
+    def test_correlated_noise(self):
+        """Correlated noise gives larger scale than white-noise expectation."""
+        rng = np.random.default_rng(42)
+        image = rng.normal(0, 10, (512, 512))
+        # Correlate the noise by smoothing it, as e.g. resampling does
+        image = scipy.ndimage.convolve(image, photometry.make_kernel(1.0, ext=2.0)) + 100
+        mask = np.zeros_like(image, dtype=bool)
+        kernel = photometry.make_kernel(3.0, ext=2.0)
+
+        scale = photometry._filtered_noise_scale(image, mask, kernel)
+        assert scale > 1.5 * self.white_expected(kernel)
+
+    def test_crowded(self):
+        """Bright sources do not inflate the filtered noise estimate."""
+        rng = np.random.default_rng(42)
+        image = rng.normal(100, 10, (512, 512))
+        y, x = np.mgrid[:512, :512]
+        for sx, sy in rng.uniform(10, 502, (300, 2)):
+            image += 1000 * np.exp(-((x - sx)**2 + (y - sy)**2) / (2 * 2.0**2))
+        mask = np.zeros_like(image, dtype=bool)
+        kernel = photometry.make_kernel(3.0, ext=2.0)
+
+        scale = photometry._filtered_noise_scale(image, mask, kernel)
+        assert scale == pytest.approx(self.white_expected(kernel), rel=0.15)
 
 
 class TestGetObjectsPhotutils:
