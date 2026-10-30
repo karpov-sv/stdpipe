@@ -1090,7 +1090,7 @@ def measure_objects(
         obj['flags'] = 0
 
     # Dedicated column for local background on top of global estimation
-    obj['bg_local'] = 0
+    obj['bg_local'] = 0.0
 
     # Local background - it has to be computed prior to optimal photometry
     # as otherwise it is too difficult to subtract it from its (weighted) results
