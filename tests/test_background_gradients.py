@@ -636,3 +636,116 @@ def test_comparison_linear_vs_quadratic_gradient(bkg_order, test_config, rng):
         assert err_quad < 40.0, (
             f"order=2 should handle quadratic gradients reasonably, got {err_quad:.1f}%"
         )
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("bkg_order", [0, 1])
+def test_local_background_estimator_low_count_sky(bkg_order, rng):
+    """Mean estimator is unbiased for skewed Poisson noise of low sky level, mode is not."""
+    # ~6 e- of sky, 1.4 e- read noise, gain 0.25 e-/ADU - strongly skewed noise
+    gain = 0.25
+    size = 1200
+    image = (rng.poisson(6.0, (size, size)) + rng.normal(0, 1.4, (size, size))) / gain + 500
+
+    # Empty apertures with wide PSF
+    xs, ys = np.meshgrid(np.arange(160, size - 150, 110), np.arange(160, size - 150, 110))
+    obj = Table({'x': xs.ravel().astype(float), 'y': ys.ravel().astype(float)})
+    kw = dict(aper=15, bkgann=[75, 105], bkg_order=bkg_order, bg=np.full(image.shape, 500.0))
+
+    res = {}
+    for estimator in ['mode', 'median', 'mean'] if bkg_order == 0 else ['mode', 'mean']:
+        m = photometry_measure.measure_objects(obj.copy(), image, bg_estimator=estimator, **kw)
+        res[estimator] = np.mean(m['flux']), np.std(m['flux']) / np.sqrt(len(m))
+
+    flux, err = res['mean']
+    assert abs(flux) < 4 * err
+
+    if bkg_order == 0:
+        # Mode is below the mean by ~skew*sigma/2 per pixel, median - by ~skew*sigma/6,
+        # integrated over the aperture
+        flux, err = res['mode']
+        assert flux > 4 * err
+        flux_median, err = res['median']
+        assert 4 * err < flux_median < flux
+
+
+@pytest.mark.unit
+def test_local_background_estimator_invalid(rng):
+    image = rng.normal(100, 10, (200, 200))
+    obj = Table({'x': [100.0], 'y': [100.0]})
+    with pytest.raises(ValueError):
+        photometry_measure.measure_objects(obj, image, aper=3, bkgann=[5, 7], bg_estimator='foo')
+    with pytest.raises(ValueError):
+        photometry_measure.measure_objects(
+            obj, image, aper=3, bkgann=[5, 7], bkg_order=1, bg_estimator='median'
+        )
+
+
+def _low_count_sky_field(rng, size=1200):
+    """Empty field with skewed noise of low sky level, and a grid of positions."""
+    # ~6 e- of sky, 1.4 e- read noise, gain 0.25 e-/ADU
+    gain = 0.25
+    image = (rng.poisson(6.0, (size, size)) + rng.normal(0, 1.4, (size, size))) / gain + 500
+    xs, ys = np.meshgrid(np.arange(160, size - 150, 110), np.arange(160, size - 150, 110))
+    obj = Table({'x': xs.ravel().astype(float), 'y': ys.ravel().astype(float)})
+    return image, obj
+
+
+@pytest.mark.unit
+@pytest.mark.skipif(not photometry_measure._HAS_SEP_OPTIMAL, reason="Requires SEP 1.4+")
+@pytest.mark.parametrize("optimal", [False, True])
+def test_sep_local_background_estimator_low_count_sky(optimal, rng):
+    """SEP backend: loosely clipped mean is unbiased for skewed noise, median and mode are not."""
+    image, obj = _low_count_sky_field(rng)
+    if optimal:
+        # aper and bkgann in FWHM units: 15 px aperture, 75-105 px annulus
+        kw = dict(aper=2.5, bkgann=[12.5, 17.5], fwhm=6.0, optimal=True, group_sources=False)
+    else:
+        kw = dict(aper=15, bkgann=[75, 105])
+    kw['bg'] = np.full(image.shape, 500.0)
+
+    res = {}
+    for estimator in ['mode', 'median', 'mean']:
+        m = photometry_measure.measure_objects_sep(
+            obj.copy(), image, bg_estimator=estimator, **kw
+        )
+        res[estimator] = np.mean(m['flux']), np.std(m['flux']) / np.sqrt(len(m))
+
+    flux, err = res['mean']
+    assert abs(flux) < 4 * err
+
+    flux_mode, err = res['mode']
+    assert flux_mode > 4 * err
+    flux_median, err = res['median']
+    assert 4 * err < flux_median < flux_mode
+
+
+@pytest.mark.unit
+@pytest.mark.skipif(not photometry_measure._HAS_SEP_OPTIMAL, reason="Requires SEP 1.4+")
+def test_sep_optimal_background_linear_subtraction(rng):
+    """SEP optimal extraction with externally estimated background matches SEP internal one."""
+    size = 300
+    image = rng.normal(100, 5, (size, size))
+    y, x = np.mgrid[:size, :size]
+    xs, ys = np.array([60.0, 150.0, 240.0]), np.array([60.0, 150.0, 240.0])
+    sigma = 2.0
+    for sx, sy in zip(xs, ys):
+        image += 5000 / (2 * np.pi * sigma**2) * np.exp(-((x - sx)**2 + (y - sy)**2) / (2 * sigma**2))
+    obj = Table({'x': xs, 'y': ys})
+    kw = dict(aper=1.5, bkgann=[3, 5], fwhm=2.355 * sigma, optimal=True, bg=np.zeros_like(image))
+
+    m_mean = photometry_measure.measure_objects_sep(obj.copy(), image, bg_estimator='mean', **kw)
+    m_median = photometry_measure.measure_objects_sep(obj.copy(), image, bg_estimator='median', **kw)
+
+    assert np.all(np.isfinite(m_median['flux']))
+    assert np.allclose(m_median['flux'], m_mean['flux'], rtol=0.02)
+    assert np.allclose(m_median['flux'], 5000, rtol=0.05)
+
+
+@pytest.mark.unit
+@pytest.mark.skipif(not photometry_measure._HAS_SEP_OPTIMAL, reason="Requires SEP 1.4+")
+def test_sep_local_background_estimator_invalid(rng):
+    image = rng.normal(100, 10, (200, 200))
+    obj = Table({'x': [100.0], 'y': [100.0]})
+    with pytest.raises(ValueError):
+        photometry_measure.measure_objects_sep(obj, image, aper=3, bkgann=[5, 7], bg_estimator='foo')

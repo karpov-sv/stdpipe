@@ -12,6 +12,7 @@ import photutils.aperture
 import photutils.centroids
 import photutils.psf
 from photutils.utils import calc_total_error
+from astropy.stats import SigmaClip
 
 # Note: psf and photometry_psf modules imported lazily in functions to avoid circular dependency
 
@@ -798,6 +799,9 @@ def measure_objects(
     aper=3,
     bkgann=None,
     bkg_order=0,
+    bg_estimator='mode',
+    clip_sigma=5.0,
+    clip_iters=5,
     fwhm=None,
     psf=None,
     optimal=False,
@@ -841,9 +845,31 @@ def measure_objects(
         Background annulus (inner, outer radii) for local background
         estimation. If None, global background model is used instead.
     bkg_order : int
-        Polynomial order for local background fitting. 0 = constant (mean),
+        Polynomial order for local background fitting. 0 = constant,
         1 = plane (linear gradient, recommended), 2 = quadratic surface.
         Only used if ``bkgann`` is set.
+    bg_estimator : {'mode', 'median', 'mean'}
+        Local background estimator. ``'mode'`` (default) uses the
+        sigma-clipped mode estimate (``3*median - 2*mean``) for
+        ``bkg_order=0``, and 3-sigma clipped polynomial fit for higher
+        orders. It is robust to contamination by neighbours, but biased low
+        for skewed noise distributions, e.g. Poisson noise of a low sky
+        level, as the aperture integrates the mean, not the mode, of the
+        sky. The bias, up to half an electron per pixel, is multiplied by
+        the aperture area. ``'mean'`` uses the mean (or polynomial fit)
+        with loose sigma-clipping at *clip_sigma* sigmas that only rejects
+        outliers and keeps the skewed noise tail. It is unbiased for such
+        noise, and better suited for uncrowded low-flux images with large
+        apertures. ``'median'`` is in between, with the bias about three
+        times smaller than for the mode, and only supports
+        ``bkg_order=0``. Only used if ``bkgann`` is set.
+    clip_sigma : float
+        Sigma-clipping threshold for ``bg_estimator='mean'`` or
+        ``'median'``. Values below ~4 start clipping the tail of the skewed
+        noise distribution, and re-introduce the bias.
+    clip_iters : int
+        Maximum number of sigma-clipping iterations for
+        ``bg_estimator='mean'`` or ``'median'``.
     fwhm : float, callable, or None
         If provided, ``aper`` and ``bkgann`` are measured in units of FWHM.
         Also used to define Gaussian PSF for optimal extraction if ``psf``
@@ -1100,11 +1126,22 @@ def measure_objects(
             # so we use the median of the spatial FWHM here.
             bkgann = [_ * fwhm_s for _ in bkgann]
 
-        order_names = {0: 'constant (mean)', 1: 'plane', 2: 'quadratic'}
+        if bg_estimator not in ('mode', 'median', 'mean'):
+            raise ValueError(
+                f"Unknown bg_estimator '{bg_estimator}', should be 'mode', 'median' or 'mean'"
+            )
+        if bg_estimator == 'median' and bkg_order != 0:
+            raise ValueError("bg_estimator='median' only supports bkg_order=0")
+
+        order_names = {0: 'constant', 1: 'plane', 2: 'quadratic'}
         order_name = order_names.get(bkg_order, f'order {bkg_order}')
+        if bg_estimator in ('mean', 'median'):
+            estimator_name = f'{bg_estimator}, {clip_sigma:g}-sigma clipped'
+        else:
+            estimator_name = 'mode' if bkg_order == 0 else 'mean, 3-sigma clipped'
         log(
-            'Using local background annulus between %.1f and %.1f pixels with %s fitting'
-            % (bkgann[0], bkgann[1], order_name)
+            'Using local background annulus between %.1f and %.1f pixels with %s (%s) fitting'
+            % (bkgann[0], bkgann[1], order_name, estimator_name)
         )
 
         x_vals, y_vals, valid_pos = _extract_valid_positions(obj)
@@ -1116,10 +1153,20 @@ def measure_objects(
         if np.any(valid_pos):
             if bkg_order == 0:
                 # Use photutils LocalBackground for order=0 (performance)
+                if bg_estimator == 'mean':
+                    estimator = photutils.background.MeanBackground(
+                        sigma_clip=SigmaClip(sigma=clip_sigma, maxiters=clip_iters)
+                    )
+                elif bg_estimator == 'median':
+                    estimator = photutils.background.MedianBackground(
+                        sigma_clip=SigmaClip(sigma=clip_sigma, maxiters=clip_iters)
+                    )
+                else:
+                    estimator = photutils.background.ModeEstimatorBackground()
                 lbg = photutils.background.LocalBackground(
                     bkgann[0],
                     bkgann[1],
-                    bkg_estimator=photutils.background.ModeEstimatorBackground(),
+                    bkg_estimator=estimator,
                 )
                 obj['bg_local'][valid_pos] = lbg(
                     image1, x_vals[valid_pos], y_vals[valid_pos], mask=mask | mask0
@@ -1130,7 +1177,13 @@ def measure_objects(
                 # Lazy import to avoid circular dependency
                 from .photometry_psf import GradientLocalBackground
 
-                grad_bkg = GradientLocalBackground(bkgann[0], bkgann[1], order=bkg_order)
+                if bg_estimator == 'mean':
+                    clip_kw = dict(sigma=clip_sigma, maxiters=clip_iters)
+                else:
+                    clip_kw = {}
+                grad_bkg = GradientLocalBackground(
+                    bkgann[0], bkgann[1], order=bkg_order, **clip_kw
+                )
                 obj['bg_local'][valid_pos] = grad_bkg(
                     image1, x_vals[valid_pos], y_vals[valid_pos], mask=mask | mask0
                 )
@@ -1404,6 +1457,27 @@ def _get_sep_psf(psf, fwhm, log):
     raise TypeError("Unsupported PSF type: %s. Expected sep.PSF or PSFEx dict." % type(psf))
 
 
+def _sep_annulus_bg(image, x, y, bkgann, mask, bg_estimator, clip_sigma, clip_iters):
+    """Local background in circular annuli using ``sep.stats_circann()``."""
+    _, _, bg_median, _, bg_mean_clip, _ = sep.stats_circann(
+        image,
+        x,
+        y,
+        bkgann[0],
+        bkgann[1],
+        mask=mask,
+        clip_sigma=clip_sigma,
+        clip_iters=clip_iters,
+    )
+
+    if bg_estimator == 'median':
+        return bg_median
+    elif bg_estimator == 'mode':
+        return 3 * bg_median - 2 * bg_mean_clip
+    else:
+        return bg_mean_clip
+
+
 def measure_objects_sep(
     obj,
     image,
@@ -1430,7 +1504,8 @@ def measure_objects_sep(
     centroid_psf=None,
     keep_negative=True,
     get_bg=False,
-    clip_sigma=3.0,
+    bg_estimator='mean',
+    clip_sigma=5.0,
     clip_iters=5,
     verbose=False,
 ):
@@ -1451,10 +1526,9 @@ def measure_objects_sep(
     aper : float
         Circular aperture radius in pixels for flux measurement.
     bkgann : tuple of float or None
-        Background annulus (inner, outer radii) for local background.
-        For optimal extraction, SEP handles this internally with
-        sigma-clipping. For aperture photometry, ``sep.stats_circann()``
-        is used.
+        Background annulus (inner, outer radii) for local background,
+        estimated according to *bg_estimator*. Used for aperture photometry
+        and optimal extraction.
     fwhm : float, callable, or None
         If provided, ``aper`` and ``bkgann`` are measured in units of FWHM.
         Also used for Gaussian PSF in optimal extraction, PSF fitting,
@@ -1518,8 +1592,18 @@ def measure_objects_sep(
         If False, measurements with negative fluxes will be discarded.
     get_bg : bool
         If True, also return estimated background and noise images.
+    bg_estimator : {'mean', 'median', 'mode'}
+        Local background estimator in the ``bkgann`` annulus, see
+        :func:`measure_objects`. ``'mean'`` (default) is the sigma-clipped
+        mean, ``'median'`` is the unclipped median, and ``'mode'`` is
+        ``3*median - 2*mean`` using the sigma-clipped mean. For optimal
+        extraction ``'mean'`` is computed by SEP per group of sources, while
+        ``'median'`` and ``'mode'`` are computed per source and subtracted
+        using linearity of the extraction.
     clip_sigma : float
-        Sigma value for clipping when ``bkgann`` is provided.
+        Sigma value for clipping when ``bkgann`` is provided. Values below
+        ~4 start clipping the tail of the skewed noise distribution of low
+        sky levels, and bias the mean low.
     clip_iters : int
         Maximum number of clipping iterations when ``bkgann`` is provided.
         Set to 0 to disable clipping.
@@ -1553,6 +1637,11 @@ def measure_objects_sep(
     - 0x1000: PSF fit returned non-zero quality flag, or PSF fit failed (NaN result)
     - 0x2000: Large centroid shift during PSF fit (>1 pixel)
     """
+    if bg_estimator not in ('mode', 'median', 'mean'):
+        raise ValueError(
+            f"Unknown bg_estimator '{bg_estimator}', should be 'mode', 'median' or 'mean'"
+        )
+
     if not _HAS_SEP_OPTIMAL:
         raise RuntimeError(
             "measure_objects_sep() requires SEP-X (the sep-x package) providing "
@@ -1820,14 +1909,18 @@ def measure_objects_sep(
             if bkgann_pix is not None:
                 if fwhm_at_pos is not None:
                     log(
-                        'Using SEP optimal extraction with sigma-clipped background annulus '
+                        'Using SEP optimal extraction with %s background annulus '
                         '(per-source, median %.1f-%.1f)'
-                        % (float(np.median(bkgann_pix[0])), float(np.median(bkgann_pix[1])))
+                        % (
+                            bg_estimator,
+                            float(np.median(bkgann_pix[0])),
+                            float(np.median(bkgann_pix[1])),
+                        )
                     )
                 else:
                     log(
-                        'Using SEP optimal extraction with sigma-clipped background annulus (%.1f, %.1f)'
-                        % tuple(bkgann_pix)
+                        'Using SEP optimal extraction with %s background annulus (%.1f, %.1f)'
+                        % (bg_estimator, *bkgann_pix)
                     )
             else:
                 log('Using SEP optimal extraction (no local background)')
@@ -1849,22 +1942,39 @@ def measure_objects_sep(
             # SEP accepts scalar or per-source arrays for aper and fwhm and
             # broadcasts them (fwhm array disables the grouped fast path but
             # still uses the generic grouped C solver).
-            flux, fluxerr, flag = sep.sum_circle_optimal(
-                image1,
-                x_vals[valid_pos],
-                y_vals[valid_pos],
-                aper_arr,
+            opt_kw = dict(
                 fwhm=fwhm_at_pos if fwhm_at_pos is not None else fwhm_s,
                 err=err,
                 gain=gain if gain else 1.0,
                 mask=mask | mask0,
-                bkgann=bkgann_pix,
                 grouped=group_sources,
                 group_radius_factor=group_radius_factor,
                 group_halo_factor=group_halo_factor,
                 clip_sigma=clip_sigma,
                 clip_iters=clip_iters,
             )
+            sep_bkgann = bkgann_pix if bg_estimator == 'mean' else None
+            flux, fluxerr, flag = sep.sum_circle_optimal(
+                image1, x_vals[valid_pos], y_vals[valid_pos], aper_arr, bkgann=sep_bkgann, **opt_kw
+            )
+
+            if bkgann_pix is not None and sep_bkgann is None:
+                # Optimal extraction is linear in the data, so the local background
+                # may be subtracted as its level times the extraction of unit image
+                bg_local = _sep_annulus_bg(
+                    image1,
+                    x_vals[valid_pos],
+                    y_vals[valid_pos],
+                    bkgann_pix,
+                    mask | mask0,
+                    bg_estimator,
+                    clip_sigma,
+                    clip_iters,
+                )
+                flux1, _, _ = sep.sum_circle_optimal(
+                    np.ones_like(image1), x_vals[valid_pos], y_vals[valid_pos], aper_arr, **opt_kw
+                )
+                flux = flux - bg_local * flux1
 
             obj['flux'][valid_pos] = flux
             obj['fluxerr'][valid_pos] = fluxerr
@@ -1893,23 +2003,23 @@ def measure_objects_sep(
 
             # For aperture photometry, compute local background separately
             if bkgann_pix is not None:
-                log('Computing sigma-clipped local background for aperture photometry')
+                log('Computing local background (%s) for aperture photometry' % bg_estimator)
 
-                bg_mean, bg_std, bg_median, bg_mad, bg_mean_clip, bg_flags = sep.stats_circann(
+                bg_local = _sep_annulus_bg(
                     image1,
                     x_vals[valid_pos],
                     y_vals[valid_pos],
-                    bkgann_pix[0],
-                    bkgann_pix[1],
-                    mask=mask | mask0,
-                    clip_sigma=clip_sigma,
-                    clip_iters=clip_iters,
+                    bkgann_pix,
+                    mask | mask0,
+                    bg_estimator,
+                    clip_sigma,
+                    clip_iters,
                 )
 
-                # Subtract local background (use median). aper_arr is either
-                # a scalar or a per-source array, both broadcast correctly.
+                # Subtract local background. aper_arr is either a scalar
+                # or a per-source array, both broadcast correctly.
                 aper_area = np.pi * np.asarray(aper_arr) ** 2
-                obj['flux'][valid_pos] -= bg_median * aper_area
+                obj['flux'][valid_pos] -= bg_local * aper_area
 
     # Flag objects where measurement failed
     if psf is not None:
