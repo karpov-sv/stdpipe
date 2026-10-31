@@ -427,8 +427,10 @@ def _fake_vizier(behaviour):
 
     class FakeVizier:
         calls = []
+        kwargs = []
 
         def __init__(self, *args, **kwargs):
+            FakeVizier.kwargs.append(kwargs)
             self.VIZIER_SERVER = DEFAULT_SERVER
 
         def query_region(self, *args, cache=True, **kwargs):
@@ -489,6 +491,15 @@ class TestVizierMirrors:
     def test_unknown_catalogue_propagates(self, monkeypatch):
         with pytest.raises(EmptyResponseError):
             self._query(monkeypatch, {DEFAULT_SERVER: EmptyResponseError('not found'), MIRROR: 'ok'})
+
+    @pytest.mark.unit
+    def test_timeout_passed_to_every_server(self, monkeypatch):
+        fake = _fake_vizier({DEFAULT_SERVER: requests.exceptions.Timeout('timed out'), MIRROR: 'ok'})
+        monkeypatch.setattr(catalogs, 'Vizier', fake)
+        monkeypatch.setattr(catalogs, 'vizier_mirrors', [MIRROR])
+        catalogs.get_cat_vizier(10.0, 20.0, 0.1, 'ps1', augment_bands=False, timeout=(3, 30))
+
+        assert [kw['timeout'] for kw in fake.kwargs] == [(3, 30), (3, 30)]
 
     @pytest.mark.unit
     def test_returns_none_when_all_servers_fail(self, monkeypatch):

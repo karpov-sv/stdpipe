@@ -700,8 +700,10 @@ def augment_cat_bands(cat, catalog=None, verbose=False):
     return cat
 
 
-# VizieR servers tried, in order, when the default one (astroquery.vizier.conf.server) fails
-vizier_mirrors = ['vizier.cfa.harvard.edu']
+# VizieR servers tried, in order, when the default one (astroquery.vizier.conf.server) fails.
+# CfA is a full mirror; IDIA lacks some large catalogues (PS1, Gaia DR2/EDR3, ATLAS-RefCat2,
+# SkyMapper, VHS) and returns empty results for them, so it goes last
+vizier_mirrors = ['vizier.cfa.harvard.edu', 'vizier.idia.ac.za']
 
 
 def get_cat_vizier(
@@ -714,6 +716,7 @@ def get_cat_vizier(
     extra=[],
     get_distance=False,
     augment_bands=True,
+    timeout=(10, 60),
     verbose=False,
 ):
     """Download any catalogue from Vizier.
@@ -760,6 +763,11 @@ def get_cat_vizier(
         If True, include a ``_r`` column with angular distance from field center.
     augment_bands : bool, optional
         If True (default), augment photometry with derived bands where supported.
+    timeout : float or tuple of float, optional
+        Network timeout in seconds for each server, passed to :mod:`requests`.
+        May be a ``(connect, read)`` tuple; the default keeps the connection
+        timeout short so that an unreachable server is skipped quickly, while
+        allowing slow responses for large queries.
     verbose : bool or callable, optional
         Whether to show verbose messages. May be boolean or a ``print``-like callable.
 
@@ -797,7 +805,9 @@ def get_cat_vizier(
     coord = SkyCoord(ra0, dec0, unit='deg')
 
     for server in [None] + list(vizier_mirrors):
-        vizier = Vizier(row_limit=limit, columns=columns, column_filters=filters)
+        vizier = Vizier(
+            row_limit=limit, columns=columns, column_filters=filters, timeout=timeout
+        )
         if server is not None:
             log('Retrying on VizieR mirror', server)
             vizier.VIZIER_SERVER = server
