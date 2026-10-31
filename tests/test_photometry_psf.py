@@ -1592,12 +1592,14 @@ class TestPositionDependentPSF:
 # ============================================================================
 
 try:
-    from hypothesis import given, strategies as st
+    from hypothesis import given, settings, strategies as st
 
     class TestPhotometryPSFProperties:
         """Property-based tests for PSF photometry functions."""
 
         @pytest.mark.unit
+        # Examples take ~50 ms, but exceed the default 200 ms deadline under parallel (-n auto) load
+        @settings(deadline=None)
         @given(
             fwhm=st.floats(min_value=1.0, max_value=10.0),
             psf_size=st.integers(min_value=15, max_value=51)
