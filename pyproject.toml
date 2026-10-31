@@ -103,7 +103,7 @@ Homepage = "https://github.com/karpov-sv/stdpipe"
 Documentation = "https://stdpipe.readthedocs.io/"
 Repository = "https://github.com/karpov-sv/stdpipe"
 "Bug Tracker" = "https://github.com/karpov-sv/stdpipe/issues"
-Changelog = "https://github.com/karpov-sv/stdpipe/commits/master"
+Changelog = "https://github.com/karpov-sv/stdpipe/blob/master/CHANGELOG.md"
 
 # ============================================================================
 # Tool configurations
