@@ -4,7 +4,9 @@ All notable changes to STDPipe are documented in this file. Changes in
 releases up to 0.4.0 are only available in the
 [commit history](https://github.com/karpov-sv/stdpipe/commits/master).
 
-## 0.4.2 - 2026-10-31
+## 0.5.0 - 2026-10-31
+
+Also published as 0.4.2, which was yanked.
 
 ### Changed
 
