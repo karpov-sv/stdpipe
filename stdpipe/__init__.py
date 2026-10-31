@@ -6,4 +6,4 @@ detection related tasks, intended for quick and easy implementation of custom
 pipelines, as well as for interactive data analysis.
 """
 
-__version__ = "0.4.1"
+__version__ = "0.4.2"
