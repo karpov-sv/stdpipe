@@ -13,7 +13,7 @@ astropy>=4.1
 matplotlib
 pandas
 astroquery>0.4.1
-sep-x
+sep-x>=1.5.2
 photutils
 statsmodels
 tqdm

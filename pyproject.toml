@@ -47,7 +47,7 @@ dependencies = [
     "astropy>=4.1",
     "matplotlib",
     "astroquery>0.4.1",
-    "sep-x",
+    "sep-x>=1.5.2",
     "astroscrappy",
     "photutils>=2.2",
     "scikit-image>=0.22.0",  # Requires >=0.22.0 for NumPy 2.0 compatibility
