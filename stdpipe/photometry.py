@@ -41,13 +41,16 @@ else:
 
 # Put these to common namespace
 from .photometry_model import match, make_sn_model, get_detection_limit_sn, format_color_term
-from .photometry_measure import measure_objects, _is_callable_fwhm, _fwhm_median
+from .photometry_measure import measure_objects, _is_callable_fwhm, _fwhm_median, _get_sep_psf
 
 # Conditionally import SEP-based photometry if available
 try:
     from .photometry_measure import measure_objects_sep, _HAS_SEP_OPTIMAL
 except ImportError:
     _HAS_SEP_OPTIMAL = False
+
+# PSF-matched detection significance (sep-x 1.5+)
+_HAS_SEP_PSF_SNR = hasattr(sep, 'psf_snr')
 
 from .photometry_background import (
     get_background,
@@ -660,6 +663,7 @@ def get_objects_sep(
     clip_sigma=3.0,
     clip_iters=5,
     fwhm_spatial_order=0,
+    psf=None,
     verbose=True,
     **kwargs,
 ):
@@ -696,7 +700,8 @@ def get_objects_sep(
     err : numpy.ndarray, optional
         Noise map.
     thresh : float
-        Detection threshold in sigmas above local background.
+        Detection threshold in sigmas above local background. With *psf*,
+        in units of the PSF-matched S/N.
     aper : float
         Aperture radius in pixels, or in FWHM units when *fwhm* is
         provided/estimated.
@@ -705,7 +710,8 @@ def get_objects_sep(
         Uses arithmetic mean of unmasked pixels inside the annulus.
         If None, the global background model is used.
     r0 : float
-        Smoothing kernel sigma (pixels) for detection.
+        Smoothing kernel sigma (pixels) for detection. Ignored when *psf*
+        is given.
     gain : float
         Detector gain, e-/ADU.
     edge : int
@@ -769,8 +775,9 @@ def get_objects_sep(
         Pixel-count threshold for large-object rejection.
     subtract_bg : bool
         Subtract background before detection (default True).
-    sn : float
-        Minimum S/N (``magerr < 1/sn``) for output.
+    sn : float or None
+        Minimum S/N (``magerr < 1/sn``) for output. ``None`` or ``0``
+        disables the cut (objects with non-positive flux are still dropped).
     get_segmentation : bool
         Also return the segmentation map and add ``seg_id`` column.
     deblend_fwhm : float
@@ -791,6 +798,17 @@ def get_objects_sep(
         and for the optimal-extraction PSF width; the windowed centroider
         still uses the scalar median. Ignored when a numeric ``fwhm`` is
         supplied directly. See :class:`FWHMMap`.
+    psf : dict or sep.PSF, optional
+        PSF model for PSF-matched detection: a PSFEx model from
+        :func:`stdpipe.psf.run_psfex` / :func:`stdpipe.psf.load_psf`, a model
+        from :func:`stdpipe.psf.create_psf_model`, or a ``sep.PSF``. If given,
+        objects are detected on the PSF-matched significance image
+        (``sep.psf_snr``), which follows spatial PSF variation of the model,
+        instead of on the image smoothed with the *r0* kernel. Object shapes,
+        fluxes and FWHM are still measured on the image, inside the detection
+        footprints. Requires sep-x 1.5+. Note that *minnthresh* still counts
+        unsmoothed image pixels above *thresh*; set it to 0 to keep faint
+        detections that are significant only after PSF matching.
     verbose : bool or callable
         Print progress messages.
 
@@ -826,10 +844,41 @@ def get_objects_sep(
     # Simple Wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
-    if r0 > 0.0:
+    sep_psf = None
+    if psf is not None:
+        if not _HAS_SEP_PSF_SNR:
+            raise RuntimeError(
+                "PSF-matched detection (psf=...) requires sep-x 1.5+ with psf_snr()"
+            )
+        sep_psf = _get_sep_psf(psf, None, log)
+        kernel = None
+    elif r0 > 0.0:
         kernel = make_kernel(r0)
     else:
         kernel = None
+
+    def _detect(img, **extract_kwargs):
+        """sep.extract(), on the PSF-matched significance image if *psf* is set."""
+        if sep_psf is None:
+            return sep.extract(img, **extract_kwargs)
+
+        # Detect and deblend on the PSF-matched S/N image, then measure the
+        # objects on the image inside these footprints: moments, flux and
+        # FWHM of the S/N image are those of the PSF-convolved profile.
+        det_err = extract_kwargs.pop('err')
+        snr = sep.psf_snr(img, sep_psf, err=det_err, mask=extract_kwargs['mask'])
+        obj_snr, segm = sep.extract(snr, **extract_kwargs)
+        if not len(obj_snr):
+            # Released sep-x (<= 1.5.2) crashes on a segmentation map
+            # without objects
+            return obj_snr, segm
+        return sep.extract(
+            img,
+            thresh=extract_kwargs['thresh'],
+            err=det_err,
+            mask=extract_kwargs['mask'],
+            segmentation_map=segm,
+        )
 
     log("Preparing background mask")
 
@@ -870,7 +919,7 @@ def get_objects_sep(
         log("Extracting initial objects")
 
         # Minimal extraction, just to get large objects
-        obj0, segm = sep.extract(
+        obj0, segm = _detect(
             image1,
             err=err,
             thresh=thresh,
@@ -906,7 +955,9 @@ def get_objects_sep(
     # Merge with any additional kwargs
     extract_kwargs.update(kwargs)
 
-    obj0, segm = sep.extract(image1, **extract_kwargs)
+    if sep_psf is not None:
+        log("Detecting on PSF-matched significance image")
+    obj0, segm = _detect(image1, **extract_kwargs)
 
     # Flag objects whose footprints overlap the user mask.
     # 0x100 = object has masked pixels within its detection footprint.
@@ -1231,7 +1282,9 @@ def get_objects_sep(
     flag |= obj0['flag'][idx] | flag_win[idx]
 
     # Quality cuts
-    fidx = (flux > 0) & (magerr < 1.0 / sn)
+    fidx = flux > 0
+    if sn is not None and sn > 0:
+        fidx &= magerr < 1.0 / sn
 
     if wcs is None and header is not None:
         # If header is provided, we may build WCS from it

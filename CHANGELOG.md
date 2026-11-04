@@ -4,6 +4,19 @@ All notable changes to STDPipe are documented in this file. Changes in
 releases up to 0.4.0 are only available in the
 [commit history](https://github.com/karpov-sv/stdpipe/commits/master).
 
+## Unreleased
+
+### Added
+
+- `photometry.get_objects_sep()` accepts a `psf` model (PSFEx, `create_psf_model()`
+  or `sep.PSF`) for PSF-matched detection on the `sep.psf_snr()` significance
+  image, following spatial PSF variation; shapes, fluxes and FWHM are still
+  measured on the image. The detection filter then matches the actual PSF,
+  without tuning `r0`; with `minnthresh=0`, faint-star completeness equals that
+  of a Gaussian kernel matched to the PSF width, and is far above that of the
+  default `r0=0.5` kernel for typical PSFs. Requires sep-x.
+- `get_objects_sep()` accepts `sn=None` (or 0) to disable the S/N cut.
+
 ## 0.5.0 - 2026-10-31
 
 Also published as 0.4.2, which was yanked.

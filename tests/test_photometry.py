@@ -497,6 +497,27 @@ class TestSEPPhotometry:
         assert np.all(obj['flux'] > 0)
 
     @pytest.mark.unit
+    @pytest.mark.parametrize("sn", [None, 0])
+    def test_get_objects_sep_sn_disabled(self, sn):
+        """sn=None or 0 disables the S/N cut but keeps the positive-flux cut."""
+        rng = np.random.default_rng(5)
+        image = rng.normal(100, 5, (128, 128))
+        yy, xx = np.mgrid[:128, :128]
+        # One bright and four faint (aperture S/N ~5-8) sources
+        for (x0, y0), amp in zip(
+            [(30, 30), (90, 30), (30, 90), (90, 90), (60, 60)], [600, 30, 25, 20, 15]
+        ):
+            image += amp * np.exp(-((xx - x0) ** 2 + (yy - y0) ** 2) / (2 * 1.27**2))
+
+        kw = dict(thresh=3.0, aper=3.0, verbose=False)
+        obj = photometry.get_objects_sep(image, sn=sn, **kw)
+        ref = photometry.get_objects_sep(image, sn=10.0, **kw)
+
+        assert len(ref) == 1
+        assert len(obj) == 5
+        assert np.all(obj['flux'] > 0)
+
+    @pytest.mark.unit
     def test_get_objects_sep_with_mask(self, image_with_sources, mask_with_bad_pixels):
         """Test that masking works properly."""
         # Detect without mask
@@ -662,6 +683,133 @@ class TestSEPPhotometry:
         assert seen["grouped"] is True
         assert seen["group_radius_factor"] == pytest.approx(0.9)
         assert seen["group_halo_factor"] == pytest.approx(1.4)
+
+
+@pytest.mark.skipif(
+    not photometry._HAS_SEP_PSF_SNR, reason="requires sep-x with psf_snr()"
+)
+class TestSEPPSFDetection:
+    """PSF-matched detection in get_objects_sep (psf=...)."""
+
+    @staticmethod
+    def _gaussian_psf_dict(fwhm=3.0, size=15):
+        """PSFEx-like model dict for a constant native-sampled Gaussian."""
+        y, x = np.mgrid[:size, :size] - size // 2
+        sigma = fwhm / 2.3548
+        stamp = np.exp(-(x**2 + y**2) / (2 * sigma**2))
+        return {
+            'data': (stamp / stamp.sum())[np.newaxis].astype(np.float32),
+            'sampling': 1.0,
+            'degree': 0,
+            'x0': 0.0,
+            'y0': 0.0,
+            'sx': 1.0,
+            'sy': 1.0,
+            'fwhm': fwhm,
+        }
+
+    @pytest.mark.unit
+    def test_detects_sources_with_image_measurements(self, image_with_sources):
+        """Positions and FWHM come from the image, not the S/N map."""
+        psf = self._gaussian_psf_dict(fwhm=3.0)
+        obj = photometry.get_objects_sep(
+            image_with_sources, thresh=5.0, aper=3.0, psf=psf, verbose=False
+        )
+        ref = photometry.get_objects_sep(
+            image_with_sources, thresh=5.0, aper=3.0, verbose=False
+        )
+
+        truth = np.array([(50, 50), (120, 80), (200, 150), (80, 200)], dtype=float)
+        dist = np.hypot(
+            obj['x'][:, None] - truth[None, :, 0], obj['y'][:, None] - truth[None, :, 1]
+        )
+        assert np.all(dist.min(axis=0) < 0.3)
+
+        # The S/N map is the PSF convolved with itself (~sqrt(2) wider), so
+        # FWHM must match the image-based default path, not be inflated
+        i_obj = dist.argmin(axis=0)
+        dist_ref = np.hypot(
+            ref['x'][:, None] - truth[None, :, 0], ref['y'][:, None] - truth[None, :, 1]
+        )
+        i_ref = dist_ref.argmin(axis=0)
+        np.testing.assert_allclose(obj['fwhm'][i_obj], ref['fwhm'][i_ref], rtol=0.1)
+        np.testing.assert_allclose(obj['flux'][i_obj], ref['flux'][i_ref], rtol=0.02)
+
+    @pytest.mark.unit
+    def test_accepts_sep_psf_and_spatially_varying_model(self, image_with_sources):
+        """A spatially varying PSFEx-like dict and a sep.PSF are both accepted."""
+        psf = self._gaussian_psf_dict(fwhm=3.0)
+        varying = dict(psf)
+        zeros = np.zeros_like(psf['data'][0])
+        varying.update(
+            data=np.stack([psf['data'][0], zeros, zeros]),
+            degree=1,
+            x0=128.0,
+            y0=128.0,
+            sx=128.0,
+            sy=128.0,
+        )
+        sep_psf = photometry.sep.PSF(psf['data'][0], sampling=1.0, fwhm=3.0)
+
+        for model in (varying, sep_psf):
+            obj = photometry.get_objects_sep(
+                image_with_sources, thresh=5.0, aper=3.0, psf=model, verbose=False
+            )
+            assert len(obj) >= 4
+
+    @pytest.mark.unit
+    def test_no_detections_returns_empty_table(self, simple_image):
+        """No significant pixels: empty result rather than a crash in SEP."""
+        obj = photometry.get_objects_sep(
+            simple_image,
+            thresh=20.0,
+            psf=self._gaussian_psf_dict(),
+            minnthresh=0,
+            verbose=False,
+        )
+        assert isinstance(obj, Table)
+        assert len(obj) == 0
+
+    @pytest.mark.unit
+    def test_faint_sources_and_false_detections(self):
+        """PSF matching recovers faint stars at the nominal S/N threshold."""
+        rng = np.random.default_rng(11)
+        size, fwhm, noise = 256, 3.0, 10.0
+        sigma = fwhm / 2.3548
+        n_eff = 4 * np.pi * sigma**2
+        yy, xx = np.mgrid[:size, :size]
+        xs = rng.uniform(15, size - 15, 40)
+        ys = rng.uniform(15, size - 15, 40)
+        image = rng.normal(1000.0, noise, (size, size))
+        blank = rng.normal(1000.0, noise, (size, size))
+        for x0, y0 in zip(xs, ys):
+            # Integrated PSF S/N of 9 at the background noise level
+            flux = 9.0 * noise * np.sqrt(n_eff)
+            image += flux / (2 * np.pi * sigma**2) * np.exp(
+                -((xx - x0) ** 2 + (yy - y0) ** 2) / (2 * sigma**2)
+            )
+
+        def recovered(obj):
+            d = np.hypot(obj['x'][:, None] - xs[None], obj['y'][:, None] - ys[None])
+            return np.sum(d.min(axis=0) < 1.5) if len(obj) else 0
+
+        kw = dict(thresh=4.0, aper=1.0, fwhm=fwhm, minnthresh=0, sn=3, verbose=False)
+        psf = self._gaussian_psf_dict(fwhm=fwhm)
+        n_psf = recovered(photometry.get_objects_sep(image, psf=psf, **kw))
+        n_default = recovered(photometry.get_objects_sep(image, **kw))
+
+        assert n_psf >= 32
+        assert n_psf > n_default
+        assert len(photometry.get_objects_sep(blank, psf=psf, **kw)) <= 1
+
+    @pytest.mark.unit
+    def test_requires_psf_snr(self, monkeypatch, simple_image):
+        """Clear error when the installed SEP lacks psf_snr()."""
+        monkeypatch.setattr(photometry, "_HAS_SEP_PSF_SNR", False)
+        with pytest.raises(RuntimeError, match="psf_snr"):
+            photometry.get_objects_sep(
+                simple_image, psf=self._gaussian_psf_dict(), verbose=False
+            )
 
 
 class TestSEPSpatialFWHM:
