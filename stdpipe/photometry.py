@@ -1055,22 +1055,39 @@ def get_objects_sep(
             verbose=verbose,
         )
 
+        if not _is_callable_fwhm(fwhm_value) and not np.isfinite(fwhm_value) and len(obj0):
+            # In crowded fields all objects may be flagged (e.g. deblended),
+            # leaving no candidates; their moments are still usable
+            log("Robust FWHM estimation failed for unflagged objects, using all objects")
+            fwhm_value = estimate_fwhm_from_objects(
+                _obj0_for_fwhm,
+                snr_min=None,
+                use_flags=False,
+                spatial_order=fwhm_spatial_order,
+                image_shape=image.shape,
+                verbose=verbose,
+            )
+
         if not _is_callable_fwhm(fwhm_value) and not np.isfinite(fwhm_value):
-            # Fall back to plain median of moment-based FWHM for unflagged objects
-            idx_fwhm = obj0['flag'] == 0
-            if 'fwhm' in obj0.dtype.names:
-                fwhm_value = np.nanmedian(obj0['fwhm'][idx_fwhm])
-            else:
-                fwhm_value = np.nanmedian(
-                    2.0 * np.sqrt(np.log(2) * (obj0['a'][idx_fwhm] ** 2 + obj0['b'][idx_fwhm] ** 2))
-                )
+            # Fall back to plain median of per-object FWHM
+            values = np.asarray(_obj0_for_fwhm['fwhm'], dtype=float)
+            values = values[np.isfinite(values) & (values > 0)]
+            fwhm_value = np.median(values) if len(values) else np.nan
             log("Robust FWHM estimation failed, falling back to median")
 
-        if fwhm is True:
+        if not _is_callable_fwhm(fwhm_value) and not np.isfinite(fwhm_value):
+            # Nothing to estimate it from: proceed without FWHM rather than
+            # with NaN apertures, which would silently drop every object
+            log("Cannot estimate FWHM, apertures are in pixels and optimal extraction is disabled")
+            fwhm_value = None
+            optimal = False
+        elif fwhm is True:
             # Scale aperture/annulus when explicitly requested (fwhm=True)
             scale_with_fwhm = True
 
-        if isinstance(fwhm_value, FWHMMap):
+        if fwhm_value is None:
+            pass
+        elif isinstance(fwhm_value, FWHMMap):
             log(
                 "Estimated spatial FWHM (order=%d, median=%.2g)"
                 % (fwhm_value.order, fwhm_value.median)

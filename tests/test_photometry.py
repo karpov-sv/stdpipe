@@ -497,6 +497,42 @@ class TestSEPPhotometry:
         assert np.all(obj['flux'] > 0)
 
     @pytest.mark.unit
+    def test_get_objects_sep_fwhm_all_objects_flagged(self):
+        """FWHM estimation falls back to flagged objects instead of NaN.
+
+        When every object is deblended (flagged), the estimate from
+        unflagged objects fails; NaN apertures used to drop every object.
+        """
+        rng = np.random.default_rng(3)
+        image = rng.normal(1000.0, 10.0, (200, 200))
+        yy, xx = np.mgrid[:200, :200]
+        sigma = 2.5 / 2.3548
+        for cy in range(30, 200, 40):
+            for cx in range(30, 200, 40):
+                for x0 in (cx - 2.5, cx + 2.5):  # 2 FWHM apart, deblended
+                    image += 3000.0 * np.exp(
+                        -((xx - x0) ** 2 + (yy - cy) ** 2) / (2 * sigma**2)
+                    )
+
+        obj = photometry.get_objects_sep(
+            image, thresh=5.0, aper=1.5, fwhm=True, sn=None, r0=0.5, verbose=False
+        )
+
+        assert len(obj) == 50
+        assert np.all(obj['flags'] & photometry.sep.OBJ_MERGED)  # all deblended
+        assert np.isfinite(obj.meta['fwhm_phot'])
+        assert np.all(np.isfinite(obj['flux']))
+
+    @pytest.mark.unit
+    def test_get_objects_sep_fwhm_without_objects(self, simple_image):
+        """No detections: FWHM-dependent options do not fail."""
+        obj = photometry.get_objects_sep(
+            simple_image, thresh=50.0, fwhm=True, optimal=True, verbose=False
+        )
+        assert isinstance(obj, Table)
+        assert len(obj) == 0
+
+    @pytest.mark.unit
     @pytest.mark.parametrize("sn", [None, 0])
     def test_get_objects_sep_sn_disabled(self, sn):
         """sn=None or 0 disables the S/N cut but keeps the positive-flux cut."""

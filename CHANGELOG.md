@@ -17,6 +17,13 @@ releases up to 0.4.0 are only available in the
   default `r0=0.5` kernel for typical PSFs. Requires sep-x.
 - `get_objects_sep()` accepts `sn=None` (or 0) to disable the S/N cut.
 
+### Fixed
+
+- `get_objects_sep(fwhm=True)` returned an empty table when every detection
+  was flagged (e.g. all deblended in a crowded field): the FWHM estimate was
+  NaN, and so were the apertures and fluxes. It now falls back to flagged
+  objects, and without any FWHM estimate proceeds with pixel apertures.
+
 ## 0.5.0 - 2026-10-31
 
 Also published as 0.4.2, which was yanked.
