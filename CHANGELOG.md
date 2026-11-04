@@ -17,6 +17,15 @@ releases up to 0.4.0 are only available in the
   default `r0=0.5` kernel for typical PSFs. Requires sep-x.
 - `get_objects_sep()` accepts `sn=None` (or 0) to disable the S/N cut.
 
+### Changed
+
+- `get_objects_sep()` with a numeric or callable `fwhm` now smooths for
+  detection with a kernel of sigma `0.8 * FWHM / 2.355` instead of the fixed
+  `r0=0.5`, and defaults to `minnthresh=0` (also with `psf`). This recovers
+  most S/N 6-9 stars (e.g. 0.94 instead of 0.06 completeness at FWHM=3) with
+  no more false detections, and still resolves pairs ~1.2 FWHM apart. Calls
+  without `fwhm`, or with explicit `r0`/`minnthresh`, behave as before.
+
 ### Fixed
 
 - `get_objects_sep(fwhm=True)` returned an empty table when every detection

@@ -496,6 +496,73 @@ class TestSEPPhotometry:
         # Fluxes should be positive
         assert np.all(obj['flux'] > 0)
 
+    @staticmethod
+    def _faint_star_frames(fwhm=3.0, n=40, snr=9.0, size=256, noise=10.0, seed=11):
+        """Frame with faint isolated stars of given PSF S/N, and a blank frame."""
+        rng = np.random.default_rng(seed)
+        sigma = fwhm / 2.3548
+        yy, xx = np.mgrid[:size, :size]
+        xs = rng.uniform(15, size - 15, n)
+        ys = rng.uniform(15, size - 15, n)
+        image = rng.normal(1000.0, noise, (size, size))
+        blank = rng.normal(1000.0, noise, (size, size))
+        flux = snr * noise * np.sqrt(4 * np.pi * sigma**2)
+        for x0, y0 in zip(xs, ys):
+            image += flux / (2 * np.pi * sigma**2) * np.exp(
+                -((xx - x0) ** 2 + (yy - y0) ** 2) / (2 * sigma**2)
+            )
+        return image, blank, xs, ys
+
+    @pytest.mark.unit
+    def test_get_objects_sep_kernel_follows_fwhm(self, monkeypatch):
+        """With a known FWHM, the default kernel and minnthresh follow it."""
+        fwhm = 3.0
+        image, blank, xs, ys = self._faint_star_frames(fwhm=fwhm)
+
+        def recovered(obj):
+            d = np.hypot(obj['x'][:, None] - xs[None], obj['y'][:, None] - ys[None])
+            return np.sum(d.min(axis=0) < 1.5) if len(obj) else 0
+
+        seen = []
+        make_kernel = photometry.make_kernel
+        monkeypatch.setattr(
+            photometry, "make_kernel", lambda r0, **kw: seen.append(r0) or make_kernel(r0, **kw)
+        )
+
+        kw = dict(thresh=4.0, aper=1.0, sn=3, verbose=False)
+        n_fwhm = recovered(photometry.get_objects_sep(image, fwhm=fwhm, **kw))
+        assert seen[-1] == pytest.approx(
+            photometry._DETECT_KERNEL_FWHM_FRACTION * fwhm / 2.3548
+        )
+
+        # Without FWHM, or with explicit r0, the previous behaviour is kept
+        n_nofwhm = recovered(photometry.get_objects_sep(image, **kw))
+        assert seen[-1] == pytest.approx(0.5)
+        n_explicit = recovered(photometry.get_objects_sep(image, fwhm=fwhm, r0=0.5, **kw))
+        assert seen[-1] == pytest.approx(0.5)
+
+        assert n_fwhm >= 32
+        assert n_nofwhm < 20 and n_explicit < 20
+        assert len(photometry.get_objects_sep(blank, fwhm=fwhm, **kw)) <= 1
+
+    @pytest.mark.unit
+    def test_get_objects_sep_kernel_follows_callable_fwhm(self, monkeypatch):
+        """A callable FWHM sets the kernel from its median."""
+        seen = []
+        make_kernel = photometry.make_kernel
+        monkeypatch.setattr(
+            photometry, "make_kernel", lambda r0, **kw: seen.append(r0) or make_kernel(r0, **kw)
+        )
+        fmap = photometry.FWHMMap(
+            coeffs=[4.0, 0.0, 0.0], order=1, x0=128, y0=128, sx=128, sy=128,
+            median=4.0, n_used=100, fwhm_range=(1.0, 20.0),
+        )
+        image, *_ = self._faint_star_frames(fwhm=4.0)
+        photometry.get_objects_sep(image, fwhm=fmap, thresh=4.0, verbose=False)
+        assert seen[-1] == pytest.approx(
+            photometry._DETECT_KERNEL_FWHM_FRACTION * 4.0 / 2.3548
+        )
+
     @pytest.mark.unit
     def test_get_objects_sep_fwhm_all_objects_flagged(self):
         """FWHM estimation falls back to flagged objects instead of NaN.
@@ -829,13 +896,14 @@ class TestSEPPSFDetection:
             d = np.hypot(obj['x'][:, None] - xs[None], obj['y'][:, None] - ys[None])
             return np.sum(d.min(axis=0) < 1.5) if len(obj) else 0
 
-        kw = dict(thresh=4.0, aper=1.0, fwhm=fwhm, minnthresh=0, sn=3, verbose=False)
+        kw = dict(thresh=4.0, aper=1.0, fwhm=fwhm, sn=3, verbose=False)
         psf = self._gaussian_psf_dict(fwhm=fwhm)
         n_psf = recovered(photometry.get_objects_sep(image, psf=psf, **kw))
-        n_default = recovered(photometry.get_objects_sep(image, **kw))
+        # Small fixed kernel (the default when FWHM is unknown)
+        n_small = recovered(photometry.get_objects_sep(image, r0=0.5, **kw))
 
         assert n_psf >= 32
-        assert n_psf > n_default
+        assert n_psf > n_small
         assert len(photometry.get_objects_sep(blank, psf=psf, **kw)) <= 1
 
     @pytest.mark.unit

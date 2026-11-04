@@ -52,6 +52,11 @@ except ImportError:
 # PSF-matched detection significance (sep-x 1.5+)
 _HAS_SEP_PSF_SNR = hasattr(sep, 'psf_snr')
 
+# Detection kernel sigma as a fraction of the PSF sigma when it follows a known
+# FWHM in get_objects_sep(): near-matched-filter completeness for faint stars,
+# while pairs ~1.2 FWHM apart are still resolved (they merge at 1.0).
+_DETECT_KERNEL_FWHM_FRACTION = 0.8
+
 from .photometry_background import (
     get_background,
     get_background_percentile,
@@ -636,10 +641,10 @@ def get_objects_sep(
     thresh=4.0,
     aper=3.0,
     bkgann=None,
-    r0=0.5,
+    r0=None,
     gain=1,
     edge=0,
-    minnthresh=2,
+    minnthresh=None,
     minarea=5,
     relfluxradius=2.0,
     wcs=None,
@@ -709,15 +714,22 @@ def get_objects_sep(
         Background annulus ``(r_in, r_out)`` in pixels (or FWHM units).
         Uses arithmetic mean of unmasked pixels inside the annulus.
         If None, the global background model is used.
-    r0 : float
-        Smoothing kernel sigma (pixels) for detection. Ignored when *psf*
-        is given.
+    r0 : float or None
+        Smoothing kernel sigma (pixels) for detection; 0 disables smoothing.
+        If None (default), it follows *fwhm* when that is a number or a
+        callable (its median): ``r0 = 0.8 * FWHM / 2.355``, which is close to
+        a matched filter for faint stars but still resolves pairs ~1.2 FWHM
+        apart; otherwise ``r0 = 0.5``. Ignored when *psf* is given.
     gain : float
         Detector gain, e-/ADU.
     edge : int
         Reject objects closer to image edge than this many pixels.
-    minnthresh : int
-        Minimum number of pixels above threshold per detection.
+    minnthresh : int or None
+        Minimum number of unsmoothed image pixels above *thresh* per
+        detection. If None (default), 0 when the detection filter is matched
+        to the PSF (*psf* given, or *r0* following *fwhm*) and 2 otherwise:
+        faint stars detected significantly by a PSF-sized filter often have
+        no single pixel above the threshold.
     minarea : int
         Minimum number of pixels in an object footprint.
     relfluxradius : float
@@ -806,9 +818,7 @@ def get_objects_sep(
         (``sep.psf_snr``), which follows spatial PSF variation of the model,
         instead of on the image smoothed with the *r0* kernel. Object shapes,
         fluxes and FWHM are still measured on the image, inside the detection
-        footprints. Requires sep-x 1.5+. Note that *minnthresh* still counts
-        unsmoothed image pixels above *thresh*; set it to 0 to keep faint
-        detections that are significant only after PSF matching.
+        footprints. Requires sep-x 1.5+. *minnthresh* then defaults to 0.
     verbose : bool or callable
         Print progress messages.
 
@@ -843,6 +853,22 @@ def get_objects_sep(
 
     # Simple Wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
+
+    # Detection filter matched to the PSF: a PSF model, or a smoothing kernel
+    # following the known FWHM (unless r0 is set explicitly)
+    filter_matched = psf is not None
+    if psf is None and r0 is None:
+        r0 = 0.5
+        if _is_callable_fwhm(fwhm) or (
+            isinstance(fwhm, (int, float)) and not isinstance(fwhm, bool) and fwhm > 0
+        ):
+            fwhm_det = _fwhm_median(fwhm, image.shape)
+            if fwhm_det is not None and np.isfinite(fwhm_det) and fwhm_det > 0:
+                r0 = _DETECT_KERNEL_FWHM_FRACTION * fwhm_det / 2.3548
+                filter_matched = True
+                log("Detection kernel sigma %.2g pixels follows FWHM %.2g" % (r0, fwhm_det))
+    if minnthresh is None:
+        minnthresh = 0 if filter_matched else 2
 
     sep_psf = None
     if psf is not None:
