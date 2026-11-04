@@ -563,6 +563,94 @@ class TestSEPPhotometry:
             photometry._DETECT_KERNEL_FWHM_FRACTION * 4.0 / 2.3548
         )
 
+    @staticmethod
+    def _record_kernels(monkeypatch):
+        seen = []
+        make_kernel = photometry.make_kernel
+        monkeypatch.setattr(
+            photometry, "make_kernel", lambda r0, **kw: seen.append(r0) or make_kernel(r0, **kw)
+        )
+        return seen
+
+    @staticmethod
+    def _bright_and_faint_frame(fwhm=3.0, seed=11):
+        """Bright stars (for FWHM estimation) plus faint S/N~9 ones."""
+        image, blank, xs, ys = TestSEPPhotometry._faint_star_frames(fwhm=fwhm, seed=seed)
+        rng = np.random.default_rng(seed + 1)
+        sigma = fwhm / 2.3548
+        yy, xx = np.mgrid[: image.shape[0], : image.shape[1]]
+        for x0, y0 in zip(rng.uniform(15, 241, 15), rng.uniform(15, 241, 15)):
+            image += 3e4 / (2 * np.pi * sigma**2) * np.exp(
+                -((xx - x0) ** 2 + (yy - y0) ** 2) / (2 * sigma**2)
+            )
+        return image, xs, ys
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("fwhm_arg", [True, False])
+    def test_get_objects_sep_auto_kernel_redetects(self, monkeypatch, fwhm_arg):
+        """r0='auto' re-detects with the kernel following the estimated FWHM."""
+        fwhm = 3.0
+        image, xs, ys = self._bright_and_faint_frame(fwhm=fwhm)
+
+        def recovered(obj):
+            d = np.hypot(obj['x'][:, None] - xs[None], obj['y'][:, None] - ys[None])
+            return np.sum(d.min(axis=0) < 1.5)
+
+        kw = dict(thresh=4.0, aper=1.0, sn=3, fwhm=fwhm_arg, verbose=False)
+        seen = self._record_kernels(monkeypatch)
+        obj = photometry.get_objects_sep(image, r0='auto', **kw)
+
+        assert seen[0] == pytest.approx(0.5)
+        assert len(seen) == 2
+        expected = photometry._DETECT_KERNEL_FWHM_FRACTION * fwhm / 2.3548
+        assert seen[1] == pytest.approx(expected, rel=0.15)
+
+        n_auto = recovered(obj)
+        n_default = recovered(photometry.get_objects_sep(image, **kw))
+        assert n_auto >= 32
+        assert n_auto > n_default + 10
+
+        if fwhm_arg is True:
+            assert obj.meta['aper'] == pytest.approx(1.0 * obj.meta['fwhm_phot'])
+        else:
+            # FWHM only drives detection, apertures stay in pixels
+            assert obj.meta['aper'] == pytest.approx(1.0)
+
+    @pytest.mark.unit
+    def test_get_objects_sep_auto_kernel_known_fwhm_single_pass(self, monkeypatch):
+        """With a known FWHM, r0='auto' is the same as the default."""
+        image, *_ = self._faint_star_frames(fwhm=3.0)
+        seen = self._record_kernels(monkeypatch)
+        photometry.get_objects_sep(image, r0='auto', fwhm=3.0, thresh=4.0, verbose=False)
+        assert seen == [
+            pytest.approx(photometry._DETECT_KERNEL_FWHM_FRACTION * 3.0 / 2.3548)
+        ]
+
+    @pytest.mark.unit
+    def test_get_objects_sep_auto_kernel_needs_reliable_fwhm(self, monkeypatch):
+        """No re-detection from a fallback FWHM estimate (all objects flagged)."""
+        rng = np.random.default_rng(3)
+        image = rng.normal(1000.0, 10.0, (200, 200))
+        yy, xx = np.mgrid[:200, :200]
+        sigma = 2.5 / 2.3548
+        for cy in range(30, 200, 40):
+            for cx in range(30, 200, 40):
+                for x0 in (cx - 2.5, cx + 2.5):
+                    image += 3000.0 * np.exp(
+                        -((xx - x0) ** 2 + (yy - cy) ** 2) / (2 * sigma**2)
+                    )
+        seen = self._record_kernels(monkeypatch)
+        obj = photometry.get_objects_sep(
+            image, r0='auto', thresh=5.0, fwhm=True, sn=None, verbose=False
+        )
+        assert seen == [pytest.approx(0.5)]
+        assert len(obj) == 50
+
+    @pytest.mark.unit
+    def test_get_objects_sep_r0_invalid_string(self, simple_image):
+        with pytest.raises(ValueError, match="r0"):
+            photometry.get_objects_sep(simple_image, r0='matched', verbose=False)
+
     @pytest.mark.unit
     def test_get_objects_sep_fwhm_all_objects_flagged(self):
         """FWHM estimation falls back to flagged objects instead of NaN.

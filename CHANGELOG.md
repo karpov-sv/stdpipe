@@ -16,6 +16,11 @@ releases up to 0.4.0 are only available in the
   of a Gaussian kernel matched to the PSF width, and is far above that of the
   default `r0=0.5` kernel for typical PSFs. Requires sep-x.
 - `get_objects_sep()` accepts `sn=None` (or 0) to disable the S/N cut.
+- `get_objects_sep(r0='auto')` detects twice when the FWHM is not given: first
+  with the small default kernel, then with the kernel following the FWHM
+  robustly estimated from the first pass (see the kernel change below), e.g.
+  35 instead of 9 of 40 S/N~9 stars at FWHM=3. Without a reliable estimate
+  (only flagged objects), the first pass is kept.
 
 ### Changed
 
