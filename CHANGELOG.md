@@ -4,6 +4,16 @@ All notable changes to STDPipe are documented in this file. Changes in
 releases up to 0.4.0 are only available in the
 [commit history](https://github.com/karpov-sv/stdpipe/commits/master).
 
+## WIP - 2026-11-31
+
+### Changed
+
+- `catalogs.get_cat_vizier()` now falls back to a non-VizieR source (MAST,
+  ESA Gaia archive, SkyMapper cone-search API, IRSA, VISTA Science Archive) 
+  for `ps1`, `gaiaedr3`, `gaiadr3syn`, `skymapper`, `2mass` and `vhs` when
+  every VizieR server fails or returns nothing. The fallback data is 
+  translated into VizieR columns.
+
 ## 0.5.0 - 2026-10-31
 
 Also published as 0.4.2, which was yanked.

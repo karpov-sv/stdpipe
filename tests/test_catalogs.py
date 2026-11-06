@@ -455,6 +455,9 @@ class TestVizierMirrors:
         fake = _fake_vizier(behaviour)
         monkeypatch.setattr(catalogs, 'Vizier', fake)
         monkeypatch.setattr(catalogs, 'vizier_mirrors', [MIRROR])
+        # These tests cover mirror-selection logic only; the non-VizieR fallback
+        # layer is covered separately in TestCatalogFallbacks.
+        monkeypatch.setattr(catalogs, 'catalog_fallbacks', {})
         cat = catalogs.get_cat_vizier(10.0, 20.0, 0.1, 'ps1', augment_bands=False)
         return cat, fake.calls
 
@@ -508,6 +511,461 @@ class TestVizierMirrors:
 
         assert cat is None
         assert calls == [(DEFAULT_SERVER, True), (MIRROR, True)]
+
+
+class TestCoerceNumeric:
+    """Test the robust numeric coercion used by the CSV-based fallback sources
+    (PS1, SkyMapper) to survive a stray non-numeric value such as an embedded
+    upper-limit flag, which VizieR itself parses per-catalogue."""
+
+    @pytest.mark.unit
+    def test_clean_column_unaffected(self):
+        result = catalogs._coerce_numeric(np.array([1.0, 2.0, 3.0]))
+
+        assert list(result) == [1.0, 2.0, 3.0]
+        assert not np.any(result.mask)
+
+    @pytest.mark.unit
+    def test_non_numeric_entry_is_masked_not_raised(self):
+        result = catalogs._coerce_numeric(np.array(['15.0', '<99.0', '14.0'], dtype=object))
+
+        assert result[0] == 15.0
+        assert result[2] == 14.0
+        assert bool(result.mask[1])
+
+    @pytest.mark.unit
+    def test_none_and_masked_entries_are_masked(self):
+        result = catalogs._coerce_numeric([1.0, None, 3.0])
+
+        assert result[0] == 1.0
+        assert bool(result.mask[1])
+        assert result[2] == 3.0
+
+
+class TestApplyFilters:
+    """Test the client-side filter re-implementation used for fallback catalogues."""
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize('expr,expected', [
+        ('<15', [10.0, 12.0]),
+        ('<=12', [10.0, 12.0]),
+        ('>15', [20.0]),
+        ('>=15', [15.0, 20.0]),
+        ('==15', [15.0]),
+        ('!=15', [10.0, 12.0, 20.0]),
+    ])
+    def test_operators(self, expr, expected):
+        cat = Table()
+        cat['rmag'] = [10.0, 12.0, 15.0, 20.0]
+
+        result = catalogs._apply_filters(cat, {'rmag': expr})
+
+        assert sorted(result['rmag'].tolist()) == sorted(expected)
+
+    @pytest.mark.unit
+    def test_missing_column_is_ignored(self):
+        cat = Table()
+        cat['rmag'] = [10.0, 20.0]
+
+        result = catalogs._apply_filters(cat, {'gmag': '<15'})
+
+        assert len(result) == 2
+
+    @pytest.mark.unit
+    def test_unparseable_expression_is_ignored(self):
+        cat = Table()
+        cat['rmag'] = [10.0, 20.0]
+
+        result = catalogs._apply_filters(cat, {'rmag': 'not a filter'})
+
+        assert len(result) == 2
+
+    @pytest.mark.unit
+    def test_no_filters(self):
+        cat = Table()
+        cat['rmag'] = [10.0, 20.0]
+
+        assert len(catalogs._apply_filters(cat, {})) == 2
+        assert len(catalogs._apply_filters(cat, None)) == 2
+
+
+class TestFallbackDispatch:
+    """Test that get_cat_vizier reaches for a registered fallback once every
+    VizieR server has failed or returned nothing (all mocked)."""
+
+    def _query(self, monkeypatch, fallback_fn, catalog='ps1', **kwargs):
+        error = requests.exceptions.ConnectionError('Connection reset by peer')
+        fake = _fake_vizier({DEFAULT_SERVER: error, MIRROR: error})
+        monkeypatch.setattr(catalogs, 'Vizier', fake)
+        monkeypatch.setattr(catalogs, 'vizier_mirrors', [MIRROR])
+        monkeypatch.setattr(catalogs, 'catalog_fallbacks', {catalog: fallback_fn})
+        return catalogs.get_cat_vizier(10.0, 20.0, 0.1, catalog, augment_bands=False, **kwargs)
+
+    @pytest.mark.unit
+    def test_fallback_used_when_mirrors_exhausted(self, monkeypatch):
+        def fake_fallback(ra0, dec0, sr0, filters=None, timeout=None, verbose=False):
+            cat = Table()
+            cat['RAJ2000'] = [10.0, 10.1]
+            cat['DEJ2000'] = [20.0, 20.1]
+            cat['rmag'] = [14.0, 19.0]
+            return cat
+
+        cat = self._query(monkeypatch, fake_fallback)
+
+        assert cat is not None
+        assert len(cat) == 2
+        assert cat.meta['vizier_id'] == catalogs.catalogs['ps1']['vizier']
+
+    @pytest.mark.unit
+    def test_fallback_result_is_filtered_and_limited(self, monkeypatch):
+        def fake_fallback(ra0, dec0, sr0, filters=None, timeout=None, verbose=False):
+            cat = Table()
+            cat['RAJ2000'] = [10.0, 10.1, 10.2]
+            cat['DEJ2000'] = [20.0, 20.1, 20.2]
+            cat['rmag'] = [14.0, 16.0, 19.0]
+            return cat
+
+        cat = self._query(monkeypatch, fake_fallback, filters={'rmag': '<18'}, limit=1)
+
+        assert len(cat) == 1
+        assert cat['rmag'][0] < 18
+
+    @pytest.mark.unit
+    def test_returns_none_when_fallback_returns_none(self, monkeypatch):
+        cat = self._query(monkeypatch, lambda *a, **kw: None)
+
+        assert cat is None
+
+    @pytest.mark.unit
+    def test_returns_none_when_fallback_raises(self, monkeypatch):
+        def broken_fallback(*a, **kw):
+            raise RuntimeError('schema changed upstream')
+
+        cat = self._query(monkeypatch, broken_fallback)
+
+        assert cat is None
+
+    @pytest.mark.unit
+    def test_no_fallback_registered_returns_none(self, monkeypatch):
+        error = requests.exceptions.ConnectionError('Connection reset by peer')
+        fake = _fake_vizier({DEFAULT_SERVER: error, MIRROR: error})
+        monkeypatch.setattr(catalogs, 'Vizier', fake)
+        monkeypatch.setattr(catalogs, 'vizier_mirrors', [MIRROR])
+        monkeypatch.setattr(catalogs, 'catalog_fallbacks', {})
+
+        cat = catalogs.get_cat_vizier(10.0, 20.0, 0.1, 'atlas', augment_bands=False)
+
+        assert cat is None
+
+
+class _FakeResponse:
+    """Stand-in for requests.Response, used by the PS1 and SkyMapper fallbacks."""
+
+    def __init__(self, text):
+        self.text = text
+        self.content = text.encode()
+
+    def raise_for_status(self):
+        pass
+
+
+class TestFallbackSources:
+    """Column-mapping regression tests for each non-VizieR fallback, with every
+    external call mocked so no network access is required."""
+
+    @pytest.mark.unit
+    def test_fallback_ps1_maps_columns_and_masks_missing(self, monkeypatch):
+        csv = (
+            'raMean,decMean,raMeanErr,decMeanErr,'
+            'gMeanPSFMag,gMeanPSFMagErr,rMeanPSFMag,rMeanPSFMagErr,'
+            'iMeanPSFMag,iMeanPSFMagErr,zMeanPSFMag,zMeanPSFMagErr,'
+            'yMeanPSFMag,yMeanPSFMagErr\n'
+            '10.0,20.0,0.001,0.001,15.0,0.01,14.5,0.01,-999,-999,13.8,0.01,13.7,0.01\n'
+        )
+        monkeypatch.setattr(catalogs.requests, 'get', lambda *a, **kw: _FakeResponse(csv))
+
+        cat = catalogs._fallback_ps1(10.0, 20.0, 0.1)
+
+        assert cat is not None
+        assert cat['RAJ2000'][0] == 10.0 and cat['DEJ2000'][0] == 20.0
+        assert cat['gmag'][0] == 15.0
+        assert bool(cat['imag'].mask[0])  # -999 sentinel masked out
+
+    @pytest.mark.unit
+    def test_fallback_ps1_requires_at_least_three_detections(self, monkeypatch):
+        captured = {}
+
+        def fake_get(url, params=None, timeout=None):
+            captured.update(params)
+            csv = (
+                'raMean,decMean,raMeanErr,decMeanErr,'
+                'gMeanPSFMag,gMeanPSFMagErr,rMeanPSFMag,rMeanPSFMagErr,'
+                'iMeanPSFMag,iMeanPSFMagErr,zMeanPSFMag,zMeanPSFMagErr,'
+                'yMeanPSFMag,yMeanPSFMagErr\n'
+                '10.0,20.0,0.001,0.001,15.0,0.01,14.5,0.01,14.0,0.01,13.8,0.01,13.7,0.01\n'
+            )
+            return _FakeResponse(csv)
+
+        monkeypatch.setattr(catalogs.requests, 'get', fake_get)
+
+        catalogs._fallback_ps1(10.0, 20.0, 0.1)
+
+        assert captured.get('nDetections.gte') == 3
+
+    @pytest.mark.unit
+    def test_fallback_ps1_pushes_filter_to_mast_params(self, monkeypatch):
+        """A simple magnitude-limit filter must be forwarded to MAST as a native
+        '<column>.<decorator>' query param, not just applied after the fixed-size
+        page is fetched - otherwise coverage silently collapses in dense fields
+        once the unfiltered page fills up before reaching the cut."""
+        captured = {}
+
+        def fake_get(url, params=None, timeout=None):
+            captured.update(params)
+            csv = (
+                'raMean,decMean,raMeanErr,decMeanErr,'
+                'gMeanPSFMag,gMeanPSFMagErr,rMeanPSFMag,rMeanPSFMagErr,'
+                'iMeanPSFMag,iMeanPSFMagErr,zMeanPSFMag,zMeanPSFMagErr,'
+                'yMeanPSFMag,yMeanPSFMagErr\n'
+                '10.0,20.0,0.001,0.001,15.0,0.01,14.5,0.01,14.0,0.01,13.8,0.01,13.7,0.01\n'
+            )
+            return _FakeResponse(csv)
+
+        monkeypatch.setattr(catalogs.requests, 'get', fake_get)
+
+        cat = catalogs._fallback_ps1(10.0, 20.0, 0.1, filters={'rmag': '<20.0'})
+
+        assert cat is not None
+        assert captured.get('rMeanPSFMag.lt') == '20.0'
+        assert captured.get('rMeanPSFMag.gt') == '0'  # excludes MAST's -999 sentinel
+
+    @pytest.mark.unit
+    def test_fallback_ps1_ignores_filter_on_unmapped_column(self, monkeypatch):
+        captured = {}
+
+        def fake_get(url, params=None, timeout=None):
+            captured.update(params)
+            csv = (
+                'raMean,decMean,raMeanErr,decMeanErr,'
+                'gMeanPSFMag,gMeanPSFMagErr,rMeanPSFMag,rMeanPSFMagErr,'
+                'iMeanPSFMag,iMeanPSFMagErr,zMeanPSFMag,zMeanPSFMagErr,'
+                'yMeanPSFMag,yMeanPSFMagErr\n'
+                '10.0,20.0,0.001,0.001,15.0,0.01,14.5,0.01,14.0,0.01,13.8,0.01,13.7,0.01\n'
+            )
+            return _FakeResponse(csv)
+
+        monkeypatch.setattr(catalogs.requests, 'get', fake_get)
+
+        cat = catalogs._fallback_ps1(10.0, 20.0, 0.1, filters={'Qual': '<5'})
+
+        assert cat is not None
+        assert not any(k.startswith('Qual') for k in captured)
+
+    @pytest.mark.unit
+    def test_fallback_ps1_masks_embedded_non_numeric_placeholder(self, monkeypatch):
+        """A stray non-numeric value (e.g. an upper-limit flag like '<24.0',
+        which VizieR itself would parse per-catalogue) must be handled."""
+        csv = (
+            'raMean,decMean,raMeanErr,decMeanErr,'
+            'gMeanPSFMag,gMeanPSFMagErr,rMeanPSFMag,rMeanPSFMagErr,'
+            'iMeanPSFMag,iMeanPSFMagErr,zMeanPSFMag,zMeanPSFMagErr,'
+            'yMeanPSFMag,yMeanPSFMagErr\n'
+            '10.0,20.0,0.001,0.001,15.0,0.01,14.5,0.01,14.0,0.01,13.8,0.01,13.7,0.01\n'
+            '10.1,20.1,0.001,0.001,<24.0,0.01,14.6,0.01,14.1,0.01,13.9,0.01,13.6,0.01\n'
+        )
+        monkeypatch.setattr(catalogs.requests, 'get', lambda *a, **kw: _FakeResponse(csv))
+
+        cat = catalogs._fallback_ps1(10.0, 20.0, 0.1)
+
+        assert cat is not None
+        assert len(cat) == 2
+        assert cat['gmag'][0] == 15.0
+        assert bool(cat['gmag'].mask[1])
+
+    @pytest.mark.unit
+    def test_fallback_gaiaedr3_maps_columns(self, monkeypatch):
+        raw = Table()
+        raw['ra'] = [10.0]
+        raw['dec'] = [20.0]
+        raw['ra_error'] = [0.1]
+        raw['dec_error'] = [0.1]
+        raw['phot_g_mean_mag'] = [15.0]
+        raw['phot_bp_mean_mag'] = [15.5]
+        raw['phot_rp_mean_mag'] = [14.5]
+        raw['ruwe'] = [1.0]
+
+        class FakeJob:
+            def get_results(self):
+                return raw
+
+        monkeypatch.setattr(catalogs.Gaia, 'launch_job_async', lambda *a, **kw: FakeJob())
+
+        cat = catalogs._fallback_gaiaedr3(10.0, 20.0, 0.1)
+
+        assert cat['Gmag'][0] == 15.0
+        assert cat['BPmag'][0] == 15.5
+        assert cat['RPmag'][0] == 14.5
+        assert cat['RUWE'][0] == 1.0
+
+    @pytest.mark.unit
+    def test_fallback_gaiaedr3_pushes_filter_to_adql(self, monkeypatch):
+        raw = Table()
+        raw['ra'] = [10.0]
+        raw['dec'] = [20.0]
+        raw['ra_error'] = [0.1]
+        raw['dec_error'] = [0.1]
+        raw['phot_g_mean_mag'] = [15.0]
+        raw['phot_bp_mean_mag'] = [15.5]
+        raw['phot_rp_mean_mag'] = [14.5]
+        raw['ruwe'] = [1.0]
+        captured = {}
+
+        class FakeJob:
+            def get_results(self):
+                return raw
+
+        def fake_launch(query, verbose=False):
+            captured['query'] = query
+            return FakeJob()
+
+        monkeypatch.setattr(catalogs.Gaia, 'launch_job_async', fake_launch)
+
+        cat = catalogs._fallback_gaiaedr3(10.0, 20.0, 0.1, filters={'Gmag': '<19.0'})
+
+        assert cat is not None
+        assert 'phot_g_mean_mag < 19.0' in captured['query']
+
+    @pytest.mark.unit
+    def test_fallback_gaiadr3syn_maps_columns(self, monkeypatch):
+        raw = Table()
+        raw['source_id'] = [1]
+        raw['ra'] = [10.0]
+        raw['dec'] = [20.0]
+        for col in ['u_jkc', 'b_jkc', 'v_jkc', 'r_jkc', 'i_jkc',
+                    'u_sdss', 'g_sdss', 'r_sdss', 'i_sdss', 'z_sdss', 'y_ps1']:
+            raw[col + '_mag'] = [15.0]
+            raw[col + '_flux'] = [100.0]
+            raw[col + '_flux_error'] = [1.0]
+
+        class FakeJob:
+            def get_results(self):
+                return raw
+
+        monkeypatch.setattr(catalogs.Gaia, 'launch_job_async', lambda *a, **kw: FakeJob())
+
+        cat = catalogs._fallback_gaiadr3syn(10.0, 20.0, 0.1)
+
+        assert cat['Umag'][0] == 15.0
+        assert cat['FU'][0] == 100.0
+        assert cat['e_FU'][0] == 1.0
+        assert cat['gmag'][0] == 15.0
+        assert cat['Fg'][0] == 100.0
+        assert cat['Fy'][0] == 100.0
+
+    @pytest.mark.unit
+    def test_fallback_gaiadr3syn_pushes_filter_to_adql(self, monkeypatch):
+        raw = Table()
+        raw['source_id'] = [1]
+        raw['ra'] = [10.0]
+        raw['dec'] = [20.0]
+        for col in ['u_jkc', 'b_jkc', 'v_jkc', 'r_jkc', 'i_jkc',
+                    'u_sdss', 'g_sdss', 'r_sdss', 'i_sdss', 'z_sdss', 'y_ps1']:
+            raw[col + '_mag'] = [15.0]
+            raw[col + '_flux'] = [100.0]
+            raw[col + '_flux_error'] = [1.0]
+        captured = {}
+
+        class FakeJob:
+            def get_results(self):
+                return raw
+
+        def fake_launch(query, verbose=False):
+            captured['query'] = query
+            return FakeJob()
+
+        monkeypatch.setattr(catalogs.Gaia, 'launch_job_async', fake_launch)
+
+        cat = catalogs._fallback_gaiadr3syn(10.0, 20.0, 0.1, filters={'rmag': '<20.0'})
+
+        assert cat is not None
+        assert 's.r_sdss_mag < 20.0' in captured['query']
+
+    @pytest.mark.unit
+    def test_fallback_skymapper_maps_columns(self, monkeypatch):
+        csv = (
+            'raj2000,dej2000,e_raj2000,e_dej2000,'
+            'g_psf,e_g_psf,r_psf,e_r_psf,i_psf,e_i_psf,z_psf,e_z_psf\n'
+            '10.0,-20.0,0.001,0.001,15.0,0.01,14.5,0.01,14.0,0.01,13.8,0.01\n'
+        )
+        monkeypatch.setattr(catalogs.requests, 'get', lambda *a, **kw: _FakeResponse(csv))
+
+        cat = catalogs._fallback_skymapper(10.0, -20.0, 0.1)
+
+        assert cat['RAJ2000'][0] == 10.0 and cat['DEJ2000'][0] == -20.0
+        assert cat['gPSF'][0] == 15.0
+        assert cat['e_rPSF'][0] == 0.01
+
+    @pytest.mark.unit
+    def test_fallback_skymapper_pushes_filter_to_adql(self, monkeypatch):
+        csv = (
+            'raj2000,dej2000,e_raj2000,e_dej2000,'
+            'g_psf,e_g_psf,r_psf,e_r_psf,i_psf,e_i_psf,z_psf,e_z_psf\n'
+            '10.0,-20.0,0.001,0.001,15.0,0.01,14.5,0.01,14.0,0.01,13.8,0.01\n'
+        )
+        captured = {}
+
+        def fake_get(url, params=None, timeout=None):
+            captured['url'] = url
+            captured['query'] = params['QUERY']
+            return _FakeResponse(csv)
+
+        monkeypatch.setattr(catalogs.requests, 'get', fake_get)
+
+        cat = catalogs._fallback_skymapper(10.0, -20.0, 0.1, filters={'rPSF': '<18.0'})
+
+        assert cat is not None
+        assert captured['url'] == 'https://api.skymapper.nci.org.au/public/tap/sync'
+        assert 'r_psf < 18.0' in captured['query']
+
+    @pytest.mark.unit
+    def test_fallback_2mass_maps_columns(self, monkeypatch):
+        raw = Table()
+        raw['ra'] = [10.0]
+        raw['dec'] = [20.0]
+        raw['j_m'] = [14.0]
+        raw['j_msigcom'] = [0.02]
+        raw['h_m'] = [13.5]
+        raw['h_msigcom'] = [0.02]
+        raw['k_m'] = [13.0]
+        raw['k_msigcom'] = [0.02]
+
+        monkeypatch.setattr(catalogs.Irsa, 'query_region', lambda *a, **kw: raw)
+
+        cat = catalogs._fallback_2mass(10.0, 20.0, 0.1)
+
+        assert cat['Jmag'][0] == 14.0
+        assert cat['Hmag'][0] == 13.5
+        assert cat['Kmag'][0] == 13.0
+
+    @pytest.mark.unit
+    def test_fallback_vhs_maps_columns_and_masks_sentinel(self, monkeypatch):
+        raw = Table()
+        raw['ra'] = [10.0, 10.1]
+        raw['dec'] = [-20.0, -20.1]
+        raw['jAperMag3'] = [17.0, -999999500.0]
+        raw['jAperMag3Err'] = [0.02, -999999500.0]
+        raw['hAperMag3'] = [16.5, 16.6]
+        raw['hAperMag3Err'] = [0.02, 0.02]
+        raw['ksAperMag3'] = [16.0, 16.1]
+        raw['ksAperMag3Err'] = [0.02, 0.02]
+
+        monkeypatch.setattr(catalogs.Vsa, 'query_region', lambda *a, **kw: raw)
+
+        cat = catalogs._fallback_vhs(10.0, -20.0, 0.1)
+
+        assert cat['Jap3'][0] == 17.0
+        assert bool(cat['Jap3'].mask[1])  # VSA sentinel masked out
+        assert cat['Ksap3'][0] == 16.0
 
 
 if __name__ == '__main__':
