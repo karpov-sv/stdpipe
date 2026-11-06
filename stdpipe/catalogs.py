@@ -1135,16 +1135,15 @@ def get_cat_vizier(
 
     If the query fails on the default VizieR server with a network error, or the
     server reports it as failed (e.g. lacking the catalogue data), it is retried
-    on the servers listed in ``vizier_mirrors``. An empty result is not a failure:
-    it is only re-queried once on the same server, bypassing the cache.
+    on the servers listed in ``vizier_mirrors``. A clean empty result is not a
+    failure and is not retried elsewhere: it is only re-queried once on the same
+    server, bypassing the cache.
 
-    If every VizieR server fails or returns nothing, and ``catalog`` is one of
-    ``ps1``, ``gaiaedr3``, ``gaiadr3syn``, ``skymapper``, ``2mass`` or ``vhs``, the
-    catalogue is instead fetched from a dedicated non-VizieR mirror (MAST, the ESA
-    Gaia archive, the SkyMapper TAP service, IRSA, or the VISTA Science Archive,
-    respectively) and reshaped into the same VizieR-style column layout, so that the
-    rest of this function, and :func:`augment_cat_bands`, behave identically regardless
-    of where the data came from.
+    If that still leaves no usable data, and ``catalog`` is one of ``ps1``,
+    ``gaiaedr3``, ``gaiadr3syn``, ``skymapper``, ``2mass`` or ``vhs``, the
+    catalogue is instead fetched from a dedicated non-VizieR mirror (MAST, the
+    ESA Gaia archive, the SkyMapper TAP service, IRSA, or the VISTA Science
+    Archive, respectively) and reshaped into the VizieR format.
 
     Parameters
     ----------

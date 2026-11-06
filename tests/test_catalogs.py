@@ -686,6 +686,15 @@ class TestApplyFilters:
         assert len(catalogs._apply_filters(cat, None)) == 2
 
 
+def _one_row_cat(ra, dec):
+    """A minimal one-row Table, used as a stand-in fallback result to tell apart
+    'fallback data' from 'real VizieR data' in interaction tests below."""
+    cat = Table()
+    cat['RAJ2000'] = [ra]
+    cat['DEJ2000'] = [dec]
+    return cat
+
+
 class TestFallbackDispatch:
     """Test that get_cat_vizier reaches for a registered fallback once every
     VizieR server has failed or returned nothing (all mocked)."""
@@ -753,6 +762,50 @@ class TestFallbackDispatch:
         cat = catalogs.get_cat_vizier(10.0, 20.0, 0.1, 'atlas', augment_bands=False)
 
         assert cat is None
+
+    @pytest.mark.unit
+    def test_fallback_reached_only_after_every_mirror_genuinely_errors(self, monkeypatch):
+        """All three servers report QUERY_STATUS=ERROR (not a clean empty result):
+        the mirror loop must actually try all of them - not stop at the first
+        false-empty response - before the fallback is used."""
+        second = 'vizier.idia.ac.za'
+        fake = _fake_vizier({DEFAULT_SERVER: 'error', MIRROR: 'error', second: 'error'})
+        monkeypatch.setattr(catalogs, 'Vizier', fake)
+        monkeypatch.setattr(catalogs, 'vizier_mirrors', [MIRROR, second])
+        monkeypatch.setattr(catalogs, 'catalog_fallbacks', {'ps1': lambda *a, **kw: _one_row_cat(1.0, 2.0)})
+
+        cat = catalogs.get_cat_vizier(10.0, 20.0, 0.1, 'ps1', augment_bands=False)
+
+        assert cat is not None and cat['RAJ2000'][0] == 1.0
+        assert fake.calls == [(DEFAULT_SERVER, True), (MIRROR, True), (second, True)]
+
+    @pytest.mark.unit
+    def test_fallback_not_used_when_a_later_mirror_has_real_data(self, monkeypatch):
+        """The first server errors but the mirror has real data: the fallback
+        must not override genuine VizieR data found on a later mirror."""
+        fake = _fake_vizier({DEFAULT_SERVER: 'error', MIRROR: 'ok'})
+        monkeypatch.setattr(catalogs, 'Vizier', fake)
+        monkeypatch.setattr(catalogs, 'vizier_mirrors', [MIRROR])
+        monkeypatch.setattr(catalogs, 'catalog_fallbacks', {'ps1': lambda *a, **kw: _one_row_cat(1.0, 2.0)})
+
+        cat = catalogs.get_cat_vizier(10.0, 20.0, 0.1, 'ps1', augment_bands=False)
+
+        assert cat is not None and cat['RAJ2000'][0] == 10.0  # real VizieR data, not the 1.0 fallback stub
+
+    @pytest.mark.unit
+    def test_fallback_reached_after_single_clean_empty_server_without_trying_mirrors(self, monkeypatch):
+        """A clean empty result from the default server stops the mirror loop by
+        design (see TestVizierMirrors.test_empty_result_does_not_use_mirror) - the
+        mirror is never even tried, yet the fallback still has to kick in."""
+        fake = _fake_vizier({DEFAULT_SERVER: 'empty', MIRROR: 'ok'})
+        monkeypatch.setattr(catalogs, 'Vizier', fake)
+        monkeypatch.setattr(catalogs, 'vizier_mirrors', [MIRROR])
+        monkeypatch.setattr(catalogs, 'catalog_fallbacks', {'ps1': lambda *a, **kw: _one_row_cat(1.0, 2.0)})
+
+        cat = catalogs.get_cat_vizier(10.0, 20.0, 0.1, 'ps1', augment_bands=False)
+
+        assert cat is not None and cat['RAJ2000'][0] == 1.0
+        assert fake.calls == [(DEFAULT_SERVER, True), (DEFAULT_SERVER, False)]
 
 
 class _FakeResponse:
