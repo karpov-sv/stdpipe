@@ -719,7 +719,9 @@ def _query_vizier_region(vizier, coord, radius, catalog, cache=True):
 
     astroquery parses a VOTable with QUERY_STATUS="ERROR" (e.g. "NOT AVAILABLE YET" from a
     mirror lacking the catalogue data) into an empty table list, indistinguishable from an
-    empty field, so we fetch the raw response and check its status before parsing.
+    empty field, so we fetch the raw response and check its status before parsing. Some
+    error replies carry only ``<INFO name="Error">`` elements without QUERY_STATUS, so these
+    are treated as errors too.
 
     A result truncated at the row limit is reported as QUERY_STATUS="OVERFLOW"; for large
     catalogues some servers (e.g. IDIA) then also report "(pipe) Request has been interrupted"
@@ -731,12 +733,15 @@ def _query_vizier_region(vizier, coord, radius, catalog, cache=True):
     try:
         response.raise_for_status()
 
-        if re.search(
+        errors = re.findall(rb'<INFO\b[^>]*\bname="Error"[^>]*\bvalue="([^"]*)"', response.content)
+        status_error = re.search(
             rb'<INFO\b[^>]*\bname="QUERY_STATUS"[^>]*\bvalue="ERROR"', response.content
-        ) and not re.search(
+        )
+        overflow = re.search(
             rb'<INFO\b[^>]*\bname="QUERY_STATUS"[^>]*\bvalue="OVERFLOW"', response.content
-        ):
-            errors = re.findall(rb'<INFO\b[^>]*\bname="Error"[^>]*\bvalue="([^"]*)"', response.content)
+        )
+
+        if (errors or status_error) and not overflow:
             errors = list(dict.fromkeys(_.decode(errors='replace') for _ in errors))
             raise VizierQueryError('; '.join(errors) or 'QUERY_STATUS is ERROR')
 
