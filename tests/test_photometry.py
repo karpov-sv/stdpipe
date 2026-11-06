@@ -515,7 +515,7 @@ class TestSEPPhotometry:
 
     @pytest.mark.unit
     def test_get_objects_sep_kernel_follows_fwhm(self, monkeypatch):
-        """With a known FWHM, the default kernel and minnthresh follow it."""
+        """With r0=None and a known FWHM, the detection kernel follows it."""
         fwhm = 3.0
         image, blank, xs, ys = self._faint_star_frames(fwhm=fwhm)
 
@@ -530,20 +530,98 @@ class TestSEPPhotometry:
         )
 
         kw = dict(thresh=4.0, aper=1.0, sn=3, verbose=False)
-        n_fwhm = recovered(photometry.get_objects_sep(image, fwhm=fwhm, **kw))
+        # Default r0=0: no smoothing, as in get_objects_sextractor
+        n_default = recovered(photometry.get_objects_sep(image, fwhm=fwhm, **kw))
+        assert not seen
+
+        n_fwhm = recovered(photometry.get_objects_sep(image, fwhm=fwhm, r0=None, **kw))
         assert seen[-1] == pytest.approx(
             photometry._DETECT_KERNEL_FWHM_FRACTION * fwhm / 2.3548
         )
 
-        # Without FWHM, or with explicit r0, the previous behaviour is kept
-        n_nofwhm = recovered(photometry.get_objects_sep(image, **kw))
+        # Without FWHM, or with explicit r0, the r0=0.5 kernel is used
+        n_nofwhm = recovered(photometry.get_objects_sep(image, r0=None, **kw))
         assert seen[-1] == pytest.approx(0.5)
         n_explicit = recovered(photometry.get_objects_sep(image, fwhm=fwhm, r0=0.5, **kw))
         assert seen[-1] == pytest.approx(0.5)
 
         assert n_fwhm >= 32
-        assert n_nofwhm < 20 and n_explicit < 20
+        assert n_default < 20 and n_nofwhm < 20 and n_explicit < 20
         assert len(photometry.get_objects_sep(blank, fwhm=fwhm, **kw)) <= 1
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize("r0, minnthresh", [(None, 5), (0.5, 2)])
+    def test_get_objects_sep_minnthresh_rejects_hot_pixels(self, r0, minnthresh):
+        """minnthresh counts raw pixels above the smoothed-noise threshold:
+        hot pixels are rejected, faint stars with no pixel above thresh kept."""
+        image, _, xs, ys = self._faint_star_frames(fwhm=3.0)
+        rng = np.random.default_rng(3)
+        hx = rng.integers(15, 241, 40)
+        hy = rng.integers(15, 241, 40)
+        image[hy, hx] += rng.uniform(15, 40, 40) * 10.0
+
+        def recovered(obj, x, y):
+            d = np.hypot(obj['x'][:, None] - x[None], obj['y'][:, None] - y[None])
+            return np.sum(d.min(axis=0) < 1.5) if len(obj) else 0
+
+        kw = dict(thresh=4.0, aper=1.0, sn=None, fwhm=3.0, r0=r0, minarea=1, verbose=False)
+        obj0 = photometry.get_objects_sep(image, minnthresh=0, **kw)
+        obj4 = photometry.get_objects_sep(image, minnthresh=minnthresh, **kw)
+
+        assert recovered(obj4, xs, ys) >= 0.95 * recovered(obj0, xs, ys)
+        assert recovered(obj0, hx, hy) >= 20
+        assert recovered(obj4, hx, hy) <= 0.2 * recovered(obj0, hx, hy)
+
+    @pytest.mark.unit
+    def test_get_objects_sep_minnthresh_auto(self):
+        """minnthresh='auto' rejects hot pixels and 2-pixel cosmic rays with the
+        FWHM-following kernel, without tuning, keeping faint stars."""
+        image, blank, xs, ys = self._faint_star_frames(fwhm=3.0)
+        rng = np.random.default_rng(3)
+        hx = rng.integers(15, 241, 40)
+        hy = rng.integers(15, 241, 40)
+        amp = rng.uniform(15, 40, 40) * 10.0
+        image[hy, hx] += amp
+        image[hy[:20], hx[:20] + 1] += 0.5 * amp[:20]
+
+        def recovered(obj, x, y):
+            d = np.hypot(obj['x'][:, None] - x[None], obj['y'][:, None] - y[None])
+            return np.sum(d.min(axis=0) < 1.5) if len(obj) else 0
+
+        kw = dict(thresh=4.0, aper=1.0, sn=None, fwhm=3.0, r0=None, verbose=False)
+        obj0 = photometry.get_objects_sep(image, minnthresh=0, **kw)
+        obja = photometry.get_objects_sep(image, minnthresh='auto', **kw)
+
+        assert recovered(obja, xs, ys) >= 0.95 * recovered(obj0, xs, ys)
+        assert recovered(obj0, hx, hy) >= 35
+        assert recovered(obja, hx, hy) <= 0.2 * recovered(obj0, hx, hy)
+        assert len(photometry.get_objects_sep(blank, minnthresh='auto', **kw)) <= 1
+
+    @pytest.mark.unit
+    def test_minnthresh_auto_limits(self):
+        """Required counts follow the noise-only binomial count of the footprint."""
+        # FWHM=3 kernel (4 sigma * f = 1.11 sigma per pixel): grows with npix
+        req = photometry._minnthresh_auto([1, 5, 9, 14, 100], 1.11)
+        assert list(req) == [2, 3, 4, 6, 21]
+        # Near-delta kernel (2.57 sigma): two pixels for typical footprints
+        assert list(photometry._minnthresh_auto([5, 30], 2.57)) == [2, 2]
+
+    @pytest.mark.unit
+    def test_get_objects_sep_minnthresh_invalid_string(self, simple_image):
+        with pytest.raises(ValueError, match="minnthresh"):
+            photometry.get_objects_sep(simple_image, minnthresh='adaptive', verbose=False)
+
+    @pytest.mark.unit
+    def test_detection_noise_factor(self):
+        """f = 1/sqrt(n_eff): 1 unfiltered, ~1/(2 sqrt(pi) sigma) for Gaussians."""
+        assert photometry._detection_noise_factor() == 1.0
+        sigma = 2.0
+        f_kernel = photometry._detection_noise_factor(photometry.make_kernel(sigma, ext=3.0))
+        assert f_kernel == pytest.approx(1 / (2 * np.sqrt(np.pi) * sigma), rel=0.02)
+        psf = TestSEPPSFDetection._gaussian_psf_dict(fwhm=2.3548 * sigma, size=25)
+        psf.update(width=25, height=25)
+        f_psf = photometry._detection_noise_factor(psf=psf, shape=(256, 256))
+        assert f_psf == pytest.approx(f_kernel, rel=0.05)
 
     @pytest.mark.unit
     def test_get_objects_sep_kernel_follows_callable_fwhm(self, monkeypatch):
@@ -558,7 +636,7 @@ class TestSEPPhotometry:
             median=4.0, n_used=100, fwhm_range=(1.0, 20.0),
         )
         image, *_ = self._faint_star_frames(fwhm=4.0)
-        photometry.get_objects_sep(image, fwhm=fmap, thresh=4.0, verbose=False)
+        photometry.get_objects_sep(image, fwhm=fmap, r0=None, thresh=4.0, verbose=False)
         assert seen[-1] == pytest.approx(
             photometry._DETECT_KERNEL_FWHM_FRACTION * 4.0 / 2.3548
         )
@@ -700,7 +778,7 @@ class TestSEPPhotometry:
         ):
             image += amp * np.exp(-((xx - x0) ** 2 + (yy - y0) ** 2) / (2 * 1.27**2))
 
-        kw = dict(thresh=3.0, aper=3.0, verbose=False)
+        kw = dict(thresh=3.0, aper=3.0, r0=0.5, verbose=False)
         obj = photometry.get_objects_sep(image, sn=sn, **kw)
         ref = photometry.get_objects_sep(image, sn=10.0, **kw)
 

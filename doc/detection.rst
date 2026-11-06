@@ -16,6 +16,10 @@ The first two have mostly identical signatures and arguments, but differ in mino
 
 The detection in both cases is based on building the noise model through (grid-based) background and background rms estimation, and then extracting the groups of connected pixels above some pre-defined threshold. Optionally, before the thresholding, the image may be smoothed with some small kernel in order to improve the detection of fainter objects. We recommend checking the `SExtractor documentation <https://sextractor.readthedocs.io/>`_ to better understand the concepts of it.
 
+.. note::
+
+   The minimal footprint area (``minarea``, ``DETECT_MINAREA`` in *SExtractor*) also acts as an additional, FWHM-dependent detection threshold. For a source with a Gaussian profile of width :math:`\sigma_e` on the detection image, the footprint above the threshold :math:`t` has :math:`2\pi\sigma_e^2\ln(\nu/t)` pixels, with :math:`\nu` the peak significance, so only sources with :math:`\nu > t\,\exp({\rm minarea}/2\pi\sigma_e^2)` are detected. Here :math:`\sigma_e^2 = \sigma_{\rm PSF}^2 + \sigma_{\rm kernel}^2` with smoothing, and :math:`2\sigma_{\rm PSF}^2` for PSF-matched detection. With the default ``minarea=5``, this is negligible for well-sampled images (the threshold is raised by ~30% at FWHM = 3 pixels with PSF-matched detection), but strong for undersampled ones: a factor of ~2.7 at FWHM = 1.5 pixels, and ~4.6 at FWHM = 1.2 pixels, where faint stars have footprints of just 1-3 pixels. For such images, use a smaller ``minarea`` (down to 1), and control the false detection rate with the threshold itself. With :func:`~stdpipe.photometry.get_objects_sep`, ``minnthresh='auto'`` may then be used to reject single-pixel artefacts like hot pixels and cosmic rays.
+
 Also, the routines may automatically reject the objects detected too close to frame edge, and probably truncated or improperly measured - this is controlled by `edge` argument. Less significant detections - with :math:`\frac1{\rm magerr} < {\rm S/N}` - may also be automatically rejected by providing the `sn` argument.
 
 Both routines return the results as a standard Astropy Table, ordered by the object brightness. The table contains at least the following columns:
@@ -90,6 +94,30 @@ Finally, using SExtractor star/galaxy separators - `CLASS_STAR` and `SPREAD_MODE
 
 .. autofunction:: stdpipe.photometry.get_objects_sextractor
    :noindex:
+
+Detection filter in SEP-based detection
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+By default, :func:`~stdpipe.photometry.get_objects_sep` thresholds the unsmoothed image (``r0=0``, same as :func:`~stdpipe.photometry.get_objects_sextractor`). Faint point sources are detected much better on an image filtered with a kernel matched to the PSF, which may be requested in several ways:
+
+- ``r0`` - sigma of the Gaussian smoothing kernel, in pixels;
+- ``r0=None`` - the kernel follows the known FWHM (numeric or callable ``fwhm`` argument) with sigma ``0.8*FWHM/2.355``, close to a matched filter but still resolving pairs ~1.2 FWHM apart; without known FWHM, ``r0=0.5`` is used;
+- ``r0='auto'`` - same, but without known FWHM the objects are detected twice: first with ``r0=0.5``, then with the kernel following the FWHM estimated from the first pass;
+- ``psf=...`` - PSF-matched detection on the significance image from ``sep.psf_snr()`` (requires *sep-x*), following the spatial variation of the PSF model.
+
+Smoothing spreads sharp artefacts like hot pixels or cosmic rays into footprints looking like the ones of real objects. They may be rejected with ``minnthresh`` - minimal number of unsmoothed pixels in the footprint that are above the threshold scaled down by the noise reduction factor of the filter :math:`f = \sqrt{\sum k^2}/\sum k`, i.e. as significant individually as the filtered image had to be for the detection. Faint stars have such pixels in most of their footprint, while sharp artefacts have just one. Good values grow with the kernel size (~2 for ``r0=0.5``, ~5 for the kernel following FWHM = 3 pixels), and ``minnthresh='auto'`` sets them for every object from its footprint size and the expected number of noise pixels above that threshold. It is best suited for the filters matched to the PSF (``r0=None``, ``r0='auto'`` or ``psf``), and also rejects faint stars in undersampled images, or when the kernel is much smaller than the PSF.
+
+.. code-block:: python
+
+   # Detect faint stars using a kernel matched to the known FWHM,
+   # rejecting hot pixels and cosmic rays
+   obj = photometry.get_objects_sep(image, mask=mask, thresh=3.0, aper=1.0,
+                fwhm=fwhm, r0=None, minnthresh='auto', verbose=True)
+
+   # PSF-matched detection with the PSFEx model of the image
+   psf_model = psf.run_psfex(image, mask=mask, order=2, gain=gain)
+   obj = photometry.get_objects_sep(image, mask=mask, thresh=3.0, aper=1.0,
+                fwhm=fwhm, psf=psf_model, minnthresh='auto', verbose=True)
 
 .. autofunction:: stdpipe.photometry.get_objects_sep
    :noindex:

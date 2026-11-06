@@ -20,22 +20,46 @@ releases up to 0.4.0 are only available in the
   measured on the image. The detection filter then matches the actual PSF,
   without tuning `r0`; with `minnthresh=0`, faint-star completeness equals that
   of a Gaussian kernel matched to the PSF width, and is far above that of the
-  default `r0=0.5` kernel for typical PSFs. Requires sep-x.
+  `r0=0.5` kernel for typical PSFs. Requires sep-x.
 - `get_objects_sep()` accepts `sn=None` (or 0) to disable the S/N cut.
 - `get_objects_sep(r0='auto')` detects twice when the FWHM is not given: first
-  with the small default kernel, then with the kernel following the FWHM
+  with the small `r0=0.5` kernel, then with the kernel following the FWHM
   robustly estimated from the first pass (see the kernel change below), e.g.
   35 instead of 9 of 40 S/N~9 stars at FWHM=3. Without a reliable estimate
   (only flagged objects), the first pass is kept.
 
 ### Changed
 
-- `get_objects_sep()` with a numeric or callable `fwhm` now smooths for
-  detection with a kernel of sigma `0.8 * FWHM / 2.355` instead of the fixed
-  `r0=0.5`, and defaults to `minnthresh=0` (also with `psf`). This recovers
-  most S/N 6-9 stars (e.g. 0.94 instead of 0.06 completeness at FWHM=3) with
-  no more false detections, and still resolves pairs ~1.2 FWHM apart. Calls
-  without `fwhm`, or with explicit `r0`/`minnthresh`, behave as before.
+- `get_objects_sep()` defaults to `r0=0` (no detection smoothing, as in
+  `get_objects_sextractor()`) instead of `r0=0.5`. `r0=None` smooths with a
+  kernel of sigma `0.8 * FWHM / 2.355` when `fwhm` is numeric or callable
+  (`r0=0.5` otherwise), recovering most S/N 6-9 stars (e.g. 0.94 instead of
+  0.06 completeness at FWHM=3) with no more false detections, while still
+  resolving pairs ~1.2 FWHM apart.
+- `get_objects_sep(minnthresh=...)` now counts unsmoothed footprint pixels
+  above `thresh * err * f` instead of above `thresh * err` (SEP `tnpix`),
+  where `f = sqrt(sum(k**2)) / sum(k)` is the noise of the smoothed (or
+  PSF-matched) detection image relative to the per-pixel one. The old count
+  rejected most faint stars found by a PSF-sized filter; the new one keeps them
+  and still rejects hot pixels and cosmic rays (e.g. at FWHM=3, all S/N 9 stars
+  kept and 38 of 40 hot pixels rejected with the FWHM-following kernel and
+  `minnthresh=5`; with `r0=0.5`, `minnthresh=2` suffices). The default is now 0
+  (no cut) instead of 2.
+- `get_objects_sep(minnthresh='auto')` sets the required count per object from
+  its footprint size: one sharp pixel plus the noise-only count, by 2 standard
+  deviations. With the FWHM-following kernel (or `psf`) at FWHM 2-8, it keeps
+  97-100% of S/N 7-12 stars and rejects ~90% of hot pixels and 60-95% of
+  2-pixel cosmic rays without tuning. It also rejects faint stars in
+  undersampled images (FWHM below ~1.5 pixels) or with a kernel much smaller
+  than the PSF, which give single sharp pixels as well.
+- `psf.create_psf_model()` detects stars (when `obj` is not given) with the
+  kernel following `fwhm` if it is given, and with `r0=0.5` otherwise, keeping
+  its previous behaviour under the new `get_objects_sep()` default.
+- `get_objects_sep()` and the detection documentation describe how `minarea`
+  raises the effective detection threshold for undersampled images (x4.6 at
+  FWHM=1.2 pixels with `psf` and the default `minarea=5`), where a smaller
+  `minarea` is advisable. PSF-matched detection with `minarea=1` needs sep-x
+  newer than 1.5.2, which measured single-pixel footprints wrongly.
 
 ### Fixed
 

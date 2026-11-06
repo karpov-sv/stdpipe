@@ -868,7 +868,15 @@ def create_psf_model(
     # Detect stars if not provided
     if obj is None:
         log('Detecting stars for ePSF building')
-        obj = photometry.get_objects_sep(image, mask=mask, thresh=5.0, aper=3.0, verbose=verbose)
+        # Detection kernel following the FWHM when it is given (passing fwhm
+        # itself would also change the aperture units), small one otherwise
+        if fwhm is not None and fwhm > 0:
+            r0 = photometry._DETECT_KERNEL_FWHM_FRACTION * fwhm / 2.3548
+        else:
+            r0 = 0.5
+        obj = photometry.get_objects_sep(
+            image, mask=mask, thresh=5.0, aper=3.0, r0=r0, verbose=verbose
+        )
 
         # Select isolated, bright, non-saturated stars
         # Simple selection: median flux and not too crowded

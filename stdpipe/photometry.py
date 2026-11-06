@@ -57,6 +57,11 @@ _HAS_SEP_PSF_SNR = hasattr(sep, 'psf_snr')
 # while pairs ~1.2 FWHM apart are still resolved (they merge at 1.0).
 _DETECT_KERNEL_FWHM_FRACTION = 0.8
 
+# minnthresh='auto' in get_objects_sep(): pixels above the per-pixel threshold
+# required beyond a single sharp pixel plus this many sigma of the noise-only
+# (binomial) count in the footprint.
+_MINNTHRESH_AUTO_NSIGMA = 2.0
+
 from .photometry_background import (
     get_background,
     get_background_percentile,
@@ -87,6 +92,57 @@ def make_kernel(r0=1.0, ext=1.0):
     image = np.exp(-(r**2) / 2 / r0**2)
 
     return image
+
+
+def _detection_noise_factor(kernel=None, psf=None, shape=None):
+    """Noise of the detection image relative to the per-pixel one.
+
+    ``sqrt(sum(k**2)) / sum(k) = 1 / sqrt(n_eff)`` for the detection filter
+    *kernel*, or for the PSF stamp at the image center when *psf* (PSF-matched
+    detection) is given; 1 without filtering.
+    """
+    if psf is not None:
+        if isinstance(psf, dict):
+            from .psf import get_psf_stamp
+
+            y0, x0 = (np.asarray(shape) - 1) / 2 if shape is not None else (0, 0)
+            kernel = get_psf_stamp(psf, x=x0, y=y0, normalize=True)
+        else:
+            # sep.PSF: no stamp access, use the Gaussian of the same FWHM
+            kernel = make_kernel(psf.fwhm / 2.3548, ext=3.0)
+    if kernel is None:
+        return 1.0
+
+    kernel = np.asarray(kernel, dtype=float)
+    ksum = np.sum(kernel)
+    if not np.isfinite(ksum) or ksum <= 0:
+        return 1.0
+
+    return float(min(1.0, np.sqrt(np.sum(kernel**2)) / ksum))
+
+
+def _minnthresh_auto(npix, thresh_pixel, nsigma=_MINNTHRESH_AUTO_NSIGMA):
+    """Per-object pixel count above *thresh_pixel* (sigma) not explained by noise.
+
+    A single sharp pixel plus ``Binomial(npix - 1, p)`` noise pixels above the
+    threshold, ``p = P(z > thresh_pixel)``: the required count exceeds its mean
+    by *nsigma* standard deviations.
+    """
+    from scipy.special import ndtr
+
+    p = ndtr(-thresh_pixel)
+    n = np.maximum(np.asarray(npix, dtype=float) - 1, 0)
+    limit = 1 + n * p + nsigma * np.sqrt(n * p * (1 - p))
+
+    return np.floor(limit).astype(int) + 1
+
+
+def _count_footprint_pixels(image, err, segm, nobj, thresh):
+    """Number of pixels with ``image > thresh * err`` in each segmentation label 1..nobj."""
+    good = image > thresh * err
+    good &= segm > 0
+
+    return np.bincount(segm[good], minlength=nobj + 1)[1 : nobj + 1]
 
 
 def estimate_fwhm(values, *, good=None, fwhm_range=(1.0, 20.0), min_candidates=5):
@@ -641,10 +697,10 @@ def get_objects_sep(
     thresh=4.0,
     aper=3.0,
     bkgann=None,
-    r0=None,
+    r0=0.0,
     gain=1,
     edge=0,
-    minnthresh=None,
+    minnthresh=0,
     minarea=5,
     relfluxradius=2.0,
     wcs=None,
@@ -715,8 +771,9 @@ def get_objects_sep(
         Uses arithmetic mean of unmasked pixels inside the annulus.
         If None, the global background model is used.
     r0 : float, None or 'auto'
-        Smoothing kernel sigma (pixels) for detection; 0 disables smoothing.
-        If None (default), it follows *fwhm* when that is a number or a
+        Smoothing kernel sigma (pixels) for detection; 0 (default) disables
+        smoothing, as in :func:`get_objects_sextractor`.
+        If None, it follows *fwhm* when that is a number or a
         callable (its median): ``r0 = 0.8 * FWHM / 2.355``, which is close to
         a matched filter for faint stars but still resolves pairs ~1.2 FWHM
         apart; otherwise ``r0 = 0.5``. ``'auto'`` does the same with a known
@@ -729,15 +786,41 @@ def get_objects_sep(
         Detector gain, e-/ADU.
     edge : int
         Reject objects closer to image edge than this many pixels.
-    minnthresh : int or None
-        Minimum number of unsmoothed image pixels above *thresh* per
-        detection. If None (default), 0 when the detection filter is matched
-        to the PSF (*psf* given, or *r0* following the known or, with
-        ``r0='auto'``, estimated FWHM) and 2 otherwise:
-        faint stars detected significantly by a PSF-sized filter often have
-        no single pixel above the threshold.
+    minnthresh : int or 'auto'
+        Minimum number of unsmoothed image pixels per object footprint above
+        the per-pixel threshold ``thresh * err * f``, where
+        ``f = sqrt(sum(k**2)) / sum(k) = 1 / sqrt(n_eff)`` is the noise of
+        the detection image (smoothed with kernel *k*, or PSF-matched with
+        *psf*) relative to the per-pixel one: each pixel must be as significant
+        as the detection image had to be. Rejects sharp artefacts (hot pixels,
+        cosmic rays) that smoothing spreads into a footprint, while faint stars,
+        with no single pixel above *thresh*, are kept. Without smoothing
+        (``f = 1``) these are the pixels above *thresh*. 0 (default) disables
+        the cut. Good values grow with the kernel size (e.g. ~2 for
+        ``r0=0.5`` and ~5 for the kernel following FWHM=3), as the footprints
+        of sharp artefacts grow and more noise pixels pass the lower
+        threshold. ``'auto'`` sets it per object from its footprint size
+        *npix*: more pixels than a single sharp pixel plus the noise-only
+        count, ``1 + (npix - 1) p``, by 2 standard deviations of the latter,
+        with ``p`` the fraction of noise pixels above the threshold. This
+        assumes uncorrelated noise and a correct *err*, and also rejects stars
+        in undersampled images (FWHM below ~1.5 pixels) or, without smoothing,
+        faint stars with a single pixel above *thresh*.
     minarea : int
-        Minimum number of pixels in an object footprint.
+        Minimum number of pixels in an object footprint on the detection
+        image. For a source whose profile there is a Gaussian of width
+        ``sigma_e``, the footprint above *thresh* has
+        ``2 pi sigma_e**2 ln(peak / thresh)`` pixels, so *minarea* also raises
+        the effective detection threshold to
+        ``thresh * exp(minarea / (2 pi sigma_e**2))``, with
+        ``sigma_e**2 = sigma_psf**2 + r0**2`` for a Gaussian kernel and
+        ``2 sigma_psf**2`` for PSF-matched detection (*psf*). With the default
+        of 5 this is negligible for well-sampled PSFs (thresh x1.3 at FWHM=3
+        with *psf*), but strong for undersampled ones (x2.7 at FWHM=1.5, x4.6
+        at FWHM=1.2, where faint stars have 1-3 pixel footprints). For such
+        images use a smaller *minarea* (e.g. 1), together with a *thresh*
+        set for the acceptable false detection rate and possibly
+        ``minnthresh='auto'`` against single-pixel artefacts.
     relfluxradius : float
         Multiplier for rough FWHM when computing ``flux_radius`` search
         radius (internal use).
@@ -824,7 +907,7 @@ def get_objects_sep(
         (``sep.psf_snr``), which follows spatial PSF variation of the model,
         instead of on the image smoothed with the *r0* kernel. Object shapes,
         fluxes and FWHM are still measured on the image, inside the detection
-        footprints. Requires sep-x 1.5+. *minnthresh* then defaults to 0.
+        footprints. Requires sep-x 1.5+.
     verbose : bool or callable
         Print progress messages.
 
@@ -860,15 +943,13 @@ def get_objects_sep(
     # Simple Wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
-    # Detection filter matched to the PSF: a PSF model, or a smoothing kernel
-    # following the known FWHM (unless r0 is set explicitly)
-    filter_matched = psf is not None
     if isinstance(r0, str) and r0 != 'auto':
         raise ValueError("r0 must be a number, None or 'auto', not %r" % r0)
+    if isinstance(minnthresh, str) and minnthresh != 'auto':
+        raise ValueError("minnthresh must be a number or 'auto', not %r" % minnthresh)
     # r0='auto' without a known FWHM: second detection pass with the kernel
     # following the FWHM estimated from the first one (see below)
     redetect = False
-    minnthresh_given = minnthresh is not None
     if psf is None and (r0 is None or r0 == 'auto'):
         redetect = r0 == 'auto'
         r0 = 0.5
@@ -878,11 +959,8 @@ def get_objects_sep(
             fwhm_det = _fwhm_median(fwhm, image.shape)
             if fwhm_det is not None and np.isfinite(fwhm_det) and fwhm_det > 0:
                 r0 = _DETECT_KERNEL_FWHM_FRACTION * fwhm_det / 2.3548
-                filter_matched = True
                 redetect = False
                 log("Detection kernel sigma %.2g pixels follows FWHM %.2g" % (r0, fwhm_det))
-    if minnthresh is None:
-        minnthresh = 0 if filter_matched else 2
 
     sep_psf = None
     if psf is not None:
@@ -1161,8 +1239,6 @@ def get_objects_sep(
         if fwhm_reliable and fwhm_kernel is not None and fwhm_kernel > 0:
             r0 = _DETECT_KERNEL_FWHM_FRACTION * fwhm_kernel / 2.3548
             kernel = make_kernel(r0)
-            if not minnthresh_given:
-                minnthresh = 0
             log(
                 "Re-detecting with kernel sigma %.2g pixels following estimated FWHM %.2g"
                 % (r0, fwhm_kernel)
@@ -1261,7 +1337,29 @@ def get_objects_sep(
     )  # & (obj0['flag'] == 0)
 
     if minnthresh:
-        idx &= obj0['tnpix'] >= minnthresh
+        # Detection filter actually used (a user filter_kernel overrides r0)
+        kernel_det = kwargs.get('filter_kernel', kernel)
+        f_det = _detection_noise_factor(kernel=kernel_det, psf=psf, shape=image.shape)
+        nthresh = _count_footprint_pixels(image1, err, segm, len(obj0), thresh * f_det)
+        if minnthresh == 'auto':
+            nthresh_min = _minnthresh_auto(obj0['npix'], thresh * f_det)
+            log(
+                "Requiring %d-%d pixels above %.2g sigma (detection noise factor %.2g), "
+                "depending on footprint size"
+                % (
+                    np.min(nthresh_min) if len(nthresh_min) else 0,
+                    np.max(nthresh_min) if len(nthresh_min) else 0,
+                    thresh * f_det,
+                    f_det,
+                )
+            )
+        else:
+            nthresh_min = minnthresh
+            log(
+                "Requiring %d pixels above %.2g sigma (detection noise factor %.2g)"
+                % (minnthresh, thresh * f_det, f_det)
+            )
+        idx &= nthresh >= nthresh_min
 
     log("Measuring final objects")
 
