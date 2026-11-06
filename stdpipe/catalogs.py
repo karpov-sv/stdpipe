@@ -704,9 +704,54 @@ def augment_cat_bands(cat, catalog=None, verbose=False):
 
 
 # VizieR servers tried, in order, when the default one (astroquery.vizier.conf.server) fails.
-# CfA is a full mirror; IDIA lacks some large catalogues (PS1, Gaia DR2/EDR3, ATLAS-RefCat2,
-# SkyMapper, VHS) and returns empty results for them, so it goes last
+# Mirrors may lack data for some catalogues and then report QUERY_STATUS="ERROR" (e.g. CfA has
+# no Gaia DR3 synthetic photometry, IDIA lacks PS1, Gaia DR2/EDR3, ATLAS-RefCat2, SkyMapper, VHS),
+# so the next one is tried in that case
 vizier_mirrors = ['vizier.cfa.harvard.edu', 'vizier.idia.ac.za']
+
+
+class VizierQueryError(Exception):
+    """VizieR answered, but reported the query as failed."""
+
+
+def _query_vizier_region(vizier, coord, radius, catalog, cache=True):
+    """Region query on Vizier that fails if the server reports an error inside the VOTable.
+
+    astroquery parses a VOTable with QUERY_STATUS="ERROR" (e.g. "NOT AVAILABLE YET" from a
+    mirror lacking the catalogue data) into an empty table list, indistinguishable from an
+    empty field, so we fetch the raw response and check its status before parsing.
+
+    A result truncated at the row limit is reported as QUERY_STATUS="OVERFLOW"; for large
+    catalogues some servers (e.g. IDIA) then also report "(pipe) Request has been interrupted"
+    as an ERROR, since the extraction process is killed once enough rows are written. Such a
+    response still holds the requested rows, so it is accepted.
+    """
+    response = vizier.query_region_async(coord, radius=radius, catalog=catalog, cache=cache)
+
+    try:
+        response.raise_for_status()
+
+        if re.search(
+            rb'<INFO\b[^>]*\bname="QUERY_STATUS"[^>]*\bvalue="ERROR"', response.content
+        ) and not re.search(
+            rb'<INFO\b[^>]*\bname="QUERY_STATUS"[^>]*\bvalue="OVERFLOW"', response.content
+        ):
+            errors = re.findall(rb'<INFO\b[^>]*\bname="Error"[^>]*\bvalue="([^"]*)"', response.content)
+            errors = list(dict.fromkeys(_.decode(errors='replace') for _ in errors))
+            raise VizierQueryError('; '.join(errors) or 'QUERY_STATUS is ERROR')
+
+        cats = vizier._parse_result(response)
+        if cats is None:
+            raise VizierQueryError('Unrecognized response format')
+    except (requests.exceptions.HTTPError, VizierQueryError, TableParseError):
+        # Do not keep the failed answer in the cache
+        try:
+            vizier._last_query.remove_cache_file(vizier.cache_location)
+        except (AttributeError, OSError):
+            pass
+        raise
+
+    return cats
 
 
 _FILTER_RE = re.compile(r'^\s*(<=|>=|==|!=|<|>)?\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*$')
@@ -1088,9 +1133,10 @@ def get_cat_vizier(
     - ``2mass`` — 2MASS Point Source Catalogue
     - ``vhs`` — VISTA Hemisphere Survey DR5, augmented with 2MASS-system J, H, Ks
 
-    If the query fails on the default VizieR server with a network error, it is
-    retried on the servers listed in ``vizier_mirrors``. An empty result is not
-    a failure: it is only re-queried once on the same server, bypassing the cache.
+    If the query fails on the default VizieR server with a network error, or the
+    server reports it as failed (e.g. lacking the catalogue data), it is retried
+    on the servers listed in ``vizier_mirrors``. An empty result is not a failure:
+    it is only re-queried once on the same server, bypassing the cache.
 
     If every VizieR server fails or returns nothing, and ``catalog`` is one of
     ``ps1``, ``gaiaedr3``, ``gaiadr3syn``, ``skymapper``, ``2mass`` or ``vhs``, the
@@ -1173,21 +1219,17 @@ def get_cat_vizier(
             vizier.VIZIER_SERVER = server
 
         try:
-            cats = vizier.query_region(
-                coord, radius=sr0 * u.deg, catalog=vizier_id, cache=True
-            )
+            cats = _query_vizier_region(vizier, coord, sr0 * u.deg, vizier_id, cache=True)
 
             if not cats or not len(cats) == 1:
                 # Possibly a stale cached answer - re-query the same server
-                cats = vizier.query_region(
-                    coord, radius=sr0 * u.deg, catalog=vizier_id, cache=False
-                )
+                cats = _query_vizier_region(vizier, coord, sr0 * u.deg, vizier_id, cache=False)
 
             if cats and len(cats) == 1:
                 cat = cats[0]
             break
-        except (requests.exceptions.RequestException, TableParseError) as e:
-            # Network-level failure, or an unparseable (error) response - try the next server
+        except (requests.exceptions.RequestException, TableParseError, VizierQueryError) as e:
+            # Network-level failure, an unparseable response, or an error reported by the server - try the next server
             log('VizieR query failed on', vizier.VIZIER_SERVER, ':', str(e)[:200])
     else:
         log('All VizieR servers failed, cannot get catalogue', catalog)

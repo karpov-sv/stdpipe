@@ -41,13 +41,21 @@ else:
 
 # Put these to common namespace
 from .photometry_model import match, make_sn_model, get_detection_limit_sn, format_color_term
-from .photometry_measure import measure_objects, _is_callable_fwhm, _fwhm_median
+from .photometry_measure import measure_objects, _is_callable_fwhm, _fwhm_median, _get_sep_psf
 
 # Conditionally import SEP-based photometry if available
 try:
     from .photometry_measure import measure_objects_sep, _HAS_SEP_OPTIMAL
 except ImportError:
     _HAS_SEP_OPTIMAL = False
+
+# PSF-matched detection significance (sep-x 1.5+)
+_HAS_SEP_PSF_SNR = hasattr(sep, 'psf_snr')
+
+# Detection kernel sigma as a fraction of the PSF sigma when it follows a known
+# FWHM in get_objects_sep(): near-matched-filter completeness for faint stars,
+# while pairs ~1.2 FWHM apart are still resolved (they merge at 1.0).
+_DETECT_KERNEL_FWHM_FRACTION = 0.8
 
 from .photometry_background import (
     get_background,
@@ -633,10 +641,10 @@ def get_objects_sep(
     thresh=4.0,
     aper=3.0,
     bkgann=None,
-    r0=0.5,
+    r0=None,
     gain=1,
     edge=0,
-    minnthresh=2,
+    minnthresh=None,
     minarea=5,
     relfluxradius=2.0,
     wcs=None,
@@ -660,6 +668,7 @@ def get_objects_sep(
     clip_sigma=3.0,
     clip_iters=5,
     fwhm_spatial_order=0,
+    psf=None,
     verbose=True,
     **kwargs,
 ):
@@ -696,7 +705,8 @@ def get_objects_sep(
     err : numpy.ndarray, optional
         Noise map.
     thresh : float
-        Detection threshold in sigmas above local background.
+        Detection threshold in sigmas above local background. With *psf*,
+        in units of the PSF-matched S/N.
     aper : float
         Aperture radius in pixels, or in FWHM units when *fwhm* is
         provided/estimated.
@@ -704,14 +714,28 @@ def get_objects_sep(
         Background annulus ``(r_in, r_out)`` in pixels (or FWHM units).
         Uses arithmetic mean of unmasked pixels inside the annulus.
         If None, the global background model is used.
-    r0 : float
-        Smoothing kernel sigma (pixels) for detection.
+    r0 : float, None or 'auto'
+        Smoothing kernel sigma (pixels) for detection; 0 disables smoothing.
+        If None (default), it follows *fwhm* when that is a number or a
+        callable (its median): ``r0 = 0.8 * FWHM / 2.355``, which is close to
+        a matched filter for faint stars but still resolves pairs ~1.2 FWHM
+        apart; otherwise ``r0 = 0.5``. ``'auto'`` does the same with a known
+        *fwhm*, and otherwise detects twice: with ``r0 = 0.5``, then with the
+        kernel following the FWHM robustly estimated from unflagged first-pass
+        detections (if there is no such estimate, the first pass is kept).
+        Apertures still use the first-pass FWHM estimate. Ignored when *psf*
+        is given.
     gain : float
         Detector gain, e-/ADU.
     edge : int
         Reject objects closer to image edge than this many pixels.
-    minnthresh : int
-        Minimum number of pixels above threshold per detection.
+    minnthresh : int or None
+        Minimum number of unsmoothed image pixels above *thresh* per
+        detection. If None (default), 0 when the detection filter is matched
+        to the PSF (*psf* given, or *r0* following the known or, with
+        ``r0='auto'``, estimated FWHM) and 2 otherwise:
+        faint stars detected significantly by a PSF-sized filter often have
+        no single pixel above the threshold.
     minarea : int
         Minimum number of pixels in an object footprint.
     relfluxradius : float
@@ -769,8 +793,9 @@ def get_objects_sep(
         Pixel-count threshold for large-object rejection.
     subtract_bg : bool
         Subtract background before detection (default True).
-    sn : float
-        Minimum S/N (``magerr < 1/sn``) for output.
+    sn : float or None
+        Minimum S/N (``magerr < 1/sn``) for output. ``None`` or ``0``
+        disables the cut (objects with non-positive flux are still dropped).
     get_segmentation : bool
         Also return the segmentation map and add ``seg_id`` column.
     deblend_fwhm : float
@@ -791,6 +816,15 @@ def get_objects_sep(
         and for the optimal-extraction PSF width; the windowed centroider
         still uses the scalar median. Ignored when a numeric ``fwhm`` is
         supplied directly. See :class:`FWHMMap`.
+    psf : dict or sep.PSF, optional
+        PSF model for PSF-matched detection: a PSFEx model from
+        :func:`stdpipe.psf.run_psfex` / :func:`stdpipe.psf.load_psf`, a model
+        from :func:`stdpipe.psf.create_psf_model`, or a ``sep.PSF``. If given,
+        objects are detected on the PSF-matched significance image
+        (``sep.psf_snr``), which follows spatial PSF variation of the model,
+        instead of on the image smoothed with the *r0* kernel. Object shapes,
+        fluxes and FWHM are still measured on the image, inside the detection
+        footprints. Requires sep-x 1.5+. *minnthresh* then defaults to 0.
     verbose : bool or callable
         Print progress messages.
 
@@ -826,10 +860,65 @@ def get_objects_sep(
     # Simple Wrapper around print for logging in verbose mode only
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
-    if r0 > 0.0:
+    # Detection filter matched to the PSF: a PSF model, or a smoothing kernel
+    # following the known FWHM (unless r0 is set explicitly)
+    filter_matched = psf is not None
+    if isinstance(r0, str) and r0 != 'auto':
+        raise ValueError("r0 must be a number, None or 'auto', not %r" % r0)
+    # r0='auto' without a known FWHM: second detection pass with the kernel
+    # following the FWHM estimated from the first one (see below)
+    redetect = False
+    minnthresh_given = minnthresh is not None
+    if psf is None and (r0 is None or r0 == 'auto'):
+        redetect = r0 == 'auto'
+        r0 = 0.5
+        if _is_callable_fwhm(fwhm) or (
+            isinstance(fwhm, (int, float)) and not isinstance(fwhm, bool) and fwhm > 0
+        ):
+            fwhm_det = _fwhm_median(fwhm, image.shape)
+            if fwhm_det is not None and np.isfinite(fwhm_det) and fwhm_det > 0:
+                r0 = _DETECT_KERNEL_FWHM_FRACTION * fwhm_det / 2.3548
+                filter_matched = True
+                redetect = False
+                log("Detection kernel sigma %.2g pixels follows FWHM %.2g" % (r0, fwhm_det))
+    if minnthresh is None:
+        minnthresh = 0 if filter_matched else 2
+
+    sep_psf = None
+    if psf is not None:
+        if not _HAS_SEP_PSF_SNR:
+            raise RuntimeError(
+                "PSF-matched detection (psf=...) requires sep-x 1.5+ with psf_snr()"
+            )
+        sep_psf = _get_sep_psf(psf, None, log)
+        kernel = None
+    elif r0 > 0.0:
         kernel = make_kernel(r0)
     else:
         kernel = None
+
+    def _detect(img, **extract_kwargs):
+        """sep.extract(), on the PSF-matched significance image if *psf* is set."""
+        if sep_psf is None:
+            return sep.extract(img, **extract_kwargs)
+
+        # Detect and deblend on the PSF-matched S/N image, then measure the
+        # objects on the image inside these footprints: moments, flux and
+        # FWHM of the S/N image are those of the PSF-convolved profile.
+        det_err = extract_kwargs.pop('err')
+        snr = sep.psf_snr(img, sep_psf, err=det_err, mask=extract_kwargs['mask'])
+        obj_snr, segm = sep.extract(snr, **extract_kwargs)
+        if not len(obj_snr):
+            # Released sep-x (<= 1.5.2) crashes on a segmentation map
+            # without objects
+            return obj_snr, segm
+        return sep.extract(
+            img,
+            thresh=extract_kwargs['thresh'],
+            err=det_err,
+            mask=extract_kwargs['mask'],
+            segmentation_map=segm,
+        )
 
     log("Preparing background mask")
 
@@ -837,7 +926,6 @@ def get_objects_sep(
         mask = np.zeros_like(image, dtype=bool)
 
     mask_bg = np.zeros_like(mask)
-    mask_segm = np.zeros_like(mask)
 
     # Detection mask: non-finite pixels plus optional user-provided detection
     # mask. The main user mask is not passed to sep.extract() so that bright
@@ -865,118 +953,129 @@ def get_objects_sep(
 
     sep.set_extract_pixstack(image.shape[0] * image.shape[1])
 
-    if use_mask_large:
-        # Mask regions around huge objects as they are most probably corrupted by saturation and blooming
-        log("Extracting initial objects")
+    def _detect_objects(kernel):
+        """Detect objects with the given kernel and measure what FWHM estimation needs."""
+        mask_segm = np.zeros_like(mask)
 
-        # Minimal extraction, just to get large objects
-        obj0, segm = sep.extract(
-            image1,
-            err=err,
-            thresh=thresh,
-            minarea=minarea,
-            mask=mask_det | mask_bg,
-            filter_kernel=kernel,
-            segmentation_map=True,
-        )
+        if use_mask_large:
+            # Mask regions around huge objects as they are most probably corrupted by saturation and blooming
+            log("Extracting initial objects")
 
-        log("Dilating large objects")
+            # Minimal extraction, just to get large objects
+            obj0, segm = _detect(
+                image1,
+                err=err,
+                thresh=thresh,
+                minarea=minarea,
+                mask=mask_det | mask_bg,
+                filter_kernel=kernel,
+                segmentation_map=True,
+            )
 
-        mask_segm = np.isin(
-            segm, [_ + 1 for _, npix in enumerate(obj0['npix']) if npix > npix_large]
-        )
-        mask_segm = dilate(mask_segm, np.ones([10, 10]))
+            log("Dilating large objects")
 
-    log("Extracting final objects")
+            mask_segm = np.isin(
+                segm, [_ + 1 for _, npix in enumerate(obj0['npix']) if npix > npix_large]
+            )
+            mask_segm = dilate(mask_segm, np.ones([10, 10]))
 
-    extract_kwargs = {
-        'err': err,
-        'thresh': thresh,
-        'minarea': minarea,
-        'mask': mask_det | mask_bg | mask_segm,
-        'filter_kernel': kernel,
-        'segmentation_map': True,
-    }
+        log("Extracting final objects")
 
-    # Add deblending parameters if available (SEP 1.4+)
-    if _HAS_SEP_OPTIMAL:
-        extract_kwargs['deblend_fwhm'] = deblend_fwhm
-        extract_kwargs['deblend_method'] = deblend_method
-
-    # Merge with any additional kwargs
-    extract_kwargs.update(kwargs)
-
-    obj0, segm = sep.extract(image1, **extract_kwargs)
-
-    # Flag objects whose footprints overlap the user mask.
-    # 0x100 = object has masked pixels within its detection footprint.
-    if mask.any():
-        # For each segmentation label, check if any of its pixels are masked
-        # Use fast vectorized approach: find unique labels that overlap mask
-        masked_labels = np.unique(segm[mask & (segm > 0)])
-        # seg_id for object i is i+1 (1-based)
-        obj_seg_ids = np.arange(1, len(obj0) + 1)
-        has_masked = np.isin(obj_seg_ids, masked_labels)
-        obj0['flag'][has_masked] |= 0x100
-
-    # Compute half-light radius for all extracted objects.  This is done
-    # early so that estimate_fwhm_from_objects can use it for FWHM
-    # estimation (flux_radius is more stable than SEP's Gaussian-core FWHM).
-    _x0 = obj0['x']
-    _y0 = obj0['y']
-    _a0 = np.maximum(obj0['a'], 0.5)
-    _b0 = np.maximum(obj0['b'], 0.5)
-    _theta0 = obj0['theta']
-    _kronrad0, _ = sep.kron_radius(
-        image1,
-        _x0,
-        _y0,
-        _a0,
-        _b0,
-        _theta0,
-        6.0,
-        mask=mask | mask_bg | mask_segm,
-    )
-    _kronrad0 = np.maximum(_kronrad0, 1.0)
-    _rmax0 = np.clip(relfluxradius * _kronrad0 * np.maximum(_a0, _b0), 3.0, 50.0)
-    _flux_auto0, _, _ = sep.sum_circle(
-        image1,
-        _x0,
-        _y0,
-        _rmax0,
-        mask=mask | mask_bg | mask_segm,
-    )
-    _flux_radius0, _ = sep.flux_radius(
-        image1,
-        _x0,
-        _y0,
-        _rmax0,
-        0.5,
-        normflux=_flux_auto0,
-        subpix=5,
-    )
-    _flux_radius0 = np.asarray(_flux_radius0, dtype=float)
-
-    # Build a minimal Table from obj0 so estimate_fwhm_from_objects
-    # can see flux_radius alongside the standard SEP columns.
-    _obj0_for_fwhm = Table(
-        {
-            'fwhm': obj0['fwhm']
-            if 'fwhm' in obj0.dtype.names
-            else 2.0 * np.sqrt(np.log(2) * (obj0['a'] ** 2 + obj0['b'] ** 2)),
-            'flux_radius': _flux_radius0,
-            'a': obj0['a'],
-            'b': obj0['b'],
-            'x': obj0['x'],
-            'y': obj0['y'],
-            'flags': obj0['flag'],
+        extract_kwargs = {
+            'err': err,
+            'thresh': thresh,
+            'minarea': minarea,
+            'mask': mask_det | mask_bg | mask_segm,
+            'filter_kernel': kernel,
+            'segmentation_map': True,
         }
-    )
+
+        # Add deblending parameters if available (SEP 1.4+)
+        if _HAS_SEP_OPTIMAL:
+            extract_kwargs['deblend_fwhm'] = deblend_fwhm
+            extract_kwargs['deblend_method'] = deblend_method
+
+        # Merge with any additional kwargs
+        extract_kwargs.update(kwargs)
+
+        if sep_psf is not None:
+            log("Detecting on PSF-matched significance image")
+        obj0, segm = _detect(image1, **extract_kwargs)
+
+        # Flag objects whose footprints overlap the user mask.
+        # 0x100 = object has masked pixels within its detection footprint.
+        if mask.any():
+            # For each segmentation label, check if any of its pixels are masked
+            # Use fast vectorized approach: find unique labels that overlap mask
+            masked_labels = np.unique(segm[mask & (segm > 0)])
+            # seg_id for object i is i+1 (1-based)
+            obj_seg_ids = np.arange(1, len(obj0) + 1)
+            has_masked = np.isin(obj_seg_ids, masked_labels)
+            obj0['flag'][has_masked] |= 0x100
+
+        # Compute half-light radius for all extracted objects.  This is done
+        # early so that estimate_fwhm_from_objects can use it for FWHM
+        # estimation (flux_radius is more stable than SEP's Gaussian-core FWHM).
+        _x0 = obj0['x']
+        _y0 = obj0['y']
+        _a0 = np.maximum(obj0['a'], 0.5)
+        _b0 = np.maximum(obj0['b'], 0.5)
+        _theta0 = obj0['theta']
+        _kronrad0, _ = sep.kron_radius(
+            image1,
+            _x0,
+            _y0,
+            _a0,
+            _b0,
+            _theta0,
+            6.0,
+            mask=mask | mask_bg | mask_segm,
+        )
+        _kronrad0 = np.maximum(_kronrad0, 1.0)
+        _rmax0 = np.clip(relfluxradius * _kronrad0 * np.maximum(_a0, _b0), 3.0, 50.0)
+        _flux_auto0, _, _ = sep.sum_circle(
+            image1,
+            _x0,
+            _y0,
+            _rmax0,
+            mask=mask | mask_bg | mask_segm,
+        )
+        _flux_radius0, _ = sep.flux_radius(
+            image1,
+            _x0,
+            _y0,
+            _rmax0,
+            0.5,
+            normflux=_flux_auto0,
+            subpix=5,
+        )
+        _flux_radius0 = np.asarray(_flux_radius0, dtype=float)
+
+        # Build a minimal Table from obj0 so estimate_fwhm_from_objects
+        # can see flux_radius alongside the standard SEP columns.
+        _obj0_for_fwhm = Table(
+            {
+                'fwhm': obj0['fwhm']
+                if 'fwhm' in obj0.dtype.names
+                else 2.0 * np.sqrt(np.log(2) * (obj0['a'] ** 2 + obj0['b'] ** 2)),
+                'flux_radius': _flux_radius0,
+                'a': obj0['a'],
+                'b': obj0['b'],
+                'x': obj0['x'],
+                'y': obj0['y'],
+                'flags': obj0['flag'],
+            }
+        )
+
+        return obj0, segm, mask_segm, _flux_radius0, _obj0_for_fwhm
+
+    obj0, segm, mask_segm, _flux_radius0, _obj0_for_fwhm = _detect_objects(kernel)
 
     # Handle FWHM parameter.  ``fwhm_value`` ends up being either a scalar
     # float or a position-dependent callable (e.g. :class:`FWHMMap`) when
     # ``fwhm_spatial_order >= 1`` or a callable ``fwhm`` is supplied.
     fwhm_value = None
+    fwhm_reliable = False
     scale_with_fwhm = False
 
     if isinstance(fwhm, (int, float)) and not isinstance(fwhm, bool) and fwhm > 0:
@@ -1003,29 +1102,74 @@ def get_objects_sep(
             image_shape=image.shape,
             verbose=verbose,
         )
+        # Only the robust estimate from unflagged objects is trusted to set
+        # the detection kernel; the fallbacks below may be biased by blends
+        fwhm_reliable = _is_callable_fwhm(fwhm_value) or np.isfinite(fwhm_value)
+
+        if not _is_callable_fwhm(fwhm_value) and not np.isfinite(fwhm_value) and len(obj0):
+            # In crowded fields all objects may be flagged (e.g. deblended),
+            # leaving no candidates; their moments are still usable
+            log("Robust FWHM estimation failed for unflagged objects, using all objects")
+            fwhm_value = estimate_fwhm_from_objects(
+                _obj0_for_fwhm,
+                snr_min=None,
+                use_flags=False,
+                spatial_order=fwhm_spatial_order,
+                image_shape=image.shape,
+                verbose=verbose,
+            )
 
         if not _is_callable_fwhm(fwhm_value) and not np.isfinite(fwhm_value):
-            # Fall back to plain median of moment-based FWHM for unflagged objects
-            idx_fwhm = obj0['flag'] == 0
-            if 'fwhm' in obj0.dtype.names:
-                fwhm_value = np.nanmedian(obj0['fwhm'][idx_fwhm])
-            else:
-                fwhm_value = np.nanmedian(
-                    2.0 * np.sqrt(np.log(2) * (obj0['a'][idx_fwhm] ** 2 + obj0['b'][idx_fwhm] ** 2))
-                )
+            # Fall back to plain median of per-object FWHM
+            values = np.asarray(_obj0_for_fwhm['fwhm'], dtype=float)
+            values = values[np.isfinite(values) & (values > 0)]
+            fwhm_value = np.median(values) if len(values) else np.nan
             log("Robust FWHM estimation failed, falling back to median")
 
-        if fwhm is True:
+        if not _is_callable_fwhm(fwhm_value) and not np.isfinite(fwhm_value):
+            # Nothing to estimate it from: proceed without FWHM rather than
+            # with NaN apertures, which would silently drop every object
+            log("Cannot estimate FWHM, apertures are in pixels and optimal extraction is disabled")
+            fwhm_value = None
+            optimal = False
+        elif fwhm is True:
             # Scale aperture/annulus when explicitly requested (fwhm=True)
             scale_with_fwhm = True
 
-        if isinstance(fwhm_value, FWHMMap):
+        if fwhm_value is None:
+            pass
+        elif isinstance(fwhm_value, FWHMMap):
             log(
                 "Estimated spatial FWHM (order=%d, median=%.2g)"
                 % (fwhm_value.order, fwhm_value.median)
             )
         else:
             log("Estimated FWHM = %.2g" % fwhm_value)
+
+    if redetect:
+        # r0='auto': detect again with the kernel following the FWHM estimated
+        # from the first pass. The first-pass estimate (from brighter, cleaner
+        # stars) is kept for the apertures.
+        if fwhm_value is None:
+            fwhm_kernel = estimate_fwhm_from_objects(
+                _obj0_for_fwhm, snr_min=None, use_flags=True, verbose=verbose
+            )
+            fwhm_reliable = np.isfinite(fwhm_kernel)
+        else:
+            fwhm_kernel = _fwhm_median(fwhm_value, image.shape)
+
+        if fwhm_reliable and fwhm_kernel is not None and fwhm_kernel > 0:
+            r0 = _DETECT_KERNEL_FWHM_FRACTION * fwhm_kernel / 2.3548
+            kernel = make_kernel(r0)
+            if not minnthresh_given:
+                minnthresh = 0
+            log(
+                "Re-detecting with kernel sigma %.2g pixels following estimated FWHM %.2g"
+                % (r0, fwhm_kernel)
+            )
+            obj0, segm, mask_segm, _flux_radius0, _obj0_for_fwhm = _detect_objects(kernel)
+        else:
+            log("No reliable FWHM estimate, keeping detection kernel sigma %.2g pixels" % r0)
 
     # Stash the FWHM-units base so we can evaluate per-source apertures at
     # the photometry call sites when fwhm_value is position-dependent.
@@ -1231,7 +1375,9 @@ def get_objects_sep(
     flag |= obj0['flag'][idx] | flag_win[idx]
 
     # Quality cuts
-    fidx = (flux > 0) & (magerr < 1.0 / sn)
+    fidx = flux > 0
+    if sn is not None and sn > 0:
+        fidx &= magerr < 1.0 / sn
 
     if wcs is None and header is not None:
         # If header is provided, we may build WCS from it

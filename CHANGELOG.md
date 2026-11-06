@@ -4,15 +4,48 @@ All notable changes to STDPipe are documented in this file. Changes in
 releases up to 0.4.0 are only available in the
 [commit history](https://github.com/karpov-sv/stdpipe/commits/master).
 
-## WIP - 2026-11-31
+## Unreleased
+
+### Added
+
+- `catalogs.get_cat_vizier()` now falls back to a dedicated non-VizieR source
+  (MAST, the ESA Gaia archive, the SkyMapper TAP service, IRSA, or the VISTA
+  Science Archive) for `ps1`, `gaiaedr3`, `gaiadr3syn`, `skymapper`, `2mass`
+  and `vhs` when every VizieR server fails or returns nothing, instead of
+  returning `None`. The fallback data is reshaped into the same VizieR-style
+  columns, so `augment_cat_bands()` and downstream code behave identically
+  regardless of the source. Simple numeric `filters` (the only kind stdweb
+  issues) are pushed server-side for `ps1`, `gaiaedr3`, `gaiadr3syn` and
+  `skymapper`, and re-applied client-side otherwise.
+- `photometry.get_objects_sep()` accepts a `psf` model (PSFEx, `create_psf_model()`
+  or `sep.PSF`) for PSF-matched detection on the `sep.psf_snr()` significance
+  image, following spatial PSF variation; shapes, fluxes and FWHM are still
+  measured on the image. The detection filter then matches the actual PSF,
+  without tuning `r0`; with `minnthresh=0`, faint-star completeness equals that
+  of a Gaussian kernel matched to the PSF width, and is far above that of the
+  default `r0=0.5` kernel for typical PSFs. Requires sep-x.
+- `get_objects_sep()` accepts `sn=None` (or 0) to disable the S/N cut.
+- `get_objects_sep(r0='auto')` detects twice when the FWHM is not given: first
+  with the small default kernel, then with the kernel following the FWHM
+  robustly estimated from the first pass (see the kernel change below), e.g.
+  35 instead of 9 of 40 S/N~9 stars at FWHM=3. Without a reliable estimate
+  (only flagged objects), the first pass is kept.
 
 ### Changed
 
-- `catalogs.get_cat_vizier()` now falls back to a non-VizieR source (MAST,
-  ESA Gaia archive, SkyMapper cone-search API, IRSA, VISTA Science Archive) 
-  for `ps1`, `gaiaedr3`, `gaiadr3syn`, `skymapper`, `2mass` and `vhs` when
-  every VizieR server fails or returns nothing. The fallback data is 
-  translated into VizieR columns.
+- `get_objects_sep()` with a numeric or callable `fwhm` now smooths for
+  detection with a kernel of sigma `0.8 * FWHM / 2.355` instead of the fixed
+  `r0=0.5`, and defaults to `minnthresh=0` (also with `psf`). This recovers
+  most S/N 6-9 stars (e.g. 0.94 instead of 0.06 completeness at FWHM=3) with
+  no more false detections, and still resolves pairs ~1.2 FWHM apart. Calls
+  without `fwhm`, or with explicit `r0`/`minnthresh`, behave as before.
+
+### Fixed
+
+- `get_objects_sep(fwhm=True)` returned an empty table when every detection
+  was flagged (e.g. all deblended in a crowded field): the FWHM estimate was
+  NaN, and so were the apertures and fluxes. It now falls back to flagged
+  objects, and without any FWHM estimate proceeds with pixel apertures.
 
 ## 0.5.0 - 2026-10-31
 

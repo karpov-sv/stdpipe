@@ -417,28 +417,80 @@ DEFAULT_SERVER = 'vizier.cds.unistra.fr'
 MIRROR = 'vizier.cfa.harvard.edu'
 
 
+ERROR_VOTABLE = b"""<?xml version="1.0"?>
+<VOTABLE><RESOURCE><TABLE name="I/360/syntphot"></TABLE>
+<INFO name="Error" value="NOT AVAILABLE YET"/>
+<INFO name="Error" value="NOT AVAILABLE YET"/>
+<INFO name="QUERY_STATUS" value="ERROR">NOT AVAILABLE YET</INFO>
+</RESOURCE></VOTABLE>"""
+
+# Truncated result of a large catalogue as returned by IDIA: rows plus OVERFLOW, and a
+# spurious ERROR from the extraction process being interrupted at the row limit
+OVERFLOW_VOTABLE = b"""<?xml version="1.0"?>
+<VOTABLE><RESOURCE><TABLE name="V/154/sdss16"></TABLE>
+<INFO name="Warning" value="truncated result (maxtup=200)"/>
+<INFO name="QUERY_STATUS" value="OVERFLOW">truncated result (maxtup=200)</INFO>
+<INFO name="Error" value="(pipe) Request has been interrupted"/>
+<INFO name="QUERY_STATUS" value="ERROR">(pipe) Request has been interrupted</INFO>
+</RESOURCE></VOTABLE>"""
+
+
 def _fake_vizier(behaviour):
     """Stand-in for astroquery Vizier.
 
-    `behaviour` maps a server name to what its query_region does: an exception
-    instance to raise, 'empty' to return no tables, or 'ok' to return one table.
-    Every call is recorded as (server, cache) in the returned class' `calls`.
+    `behaviour` maps a server name to what its query_region_async does: an exception
+    instance to raise, 'empty' to return no tables, 'error' to return a VOTable with
+    QUERY_STATUS="ERROR", 'html' to return a non-VOTable page, 'overflow' to return one
+    table truncated at the row limit (OVERFLOW plus an interrupted-pipe ERROR), or 'ok' to
+    return one table.
+    Every call is recorded as (server, cache) in the returned class' `calls`, and every
+    removal of a cached response as server in `removed`.
     """
+
+    class FakeResponse:
+        def __init__(self, server, result):
+            self.server = server
+            self.result = result
+            self.content = {
+                'error': ERROR_VOTABLE,
+                'overflow': OVERFLOW_VOTABLE,
+                'html': b'<html></html>',
+            }.get(
+                result, b'<?xml version="1.0"?><VOTABLE/>'
+            )
+
+        def raise_for_status(self):
+            pass
+
+    class FakeQuery:
+        def __init__(self, server):
+            self.server = server
+
+        def remove_cache_file(self, cache_location):
+            FakeVizier.removed.append(self.server)
 
     class FakeVizier:
         calls = []
         kwargs = []
+        removed = []
+        cache_location = None
 
         def __init__(self, *args, **kwargs):
             FakeVizier.kwargs.append(kwargs)
             self.VIZIER_SERVER = DEFAULT_SERVER
 
-        def query_region(self, *args, cache=True, **kwargs):
+        def query_region_async(self, *args, cache=True, **kwargs):
             FakeVizier.calls.append((self.VIZIER_SERVER, cache))
+            self._last_query = FakeQuery(self.VIZIER_SERVER)
             result = behaviour[self.VIZIER_SERVER]
             if isinstance(result, Exception):
                 raise result
-            if result == 'empty':
+            return FakeResponse(self.VIZIER_SERVER, result)
+
+        def _parse_result(self, response):
+            if response.result == 'html':
+                return None
+            if response.result in ('empty', 'error'):
                 return []
             cat = Table()
             cat['RAJ2000'] = [10.0]
@@ -484,6 +536,51 @@ class TestVizierMirrors:
 
         assert cat is not None
         assert calls == [(DEFAULT_SERVER, True), (MIRROR, True)]
+
+    @pytest.mark.unit
+    def test_error_status_falls_back_to_mirror(self, monkeypatch):
+        fake = _fake_vizier({DEFAULT_SERVER: 'error', MIRROR: 'ok'})
+        monkeypatch.setattr(catalogs, 'Vizier', fake)
+        monkeypatch.setattr(catalogs, 'vizier_mirrors', [MIRROR])
+        cat = catalogs.get_cat_vizier(10.0, 20.0, 0.1, 'ps1', augment_bands=False)
+
+        assert cat is not None
+        assert fake.calls == [(DEFAULT_SERVER, True), (MIRROR, True)]
+        # The failed answer must not stay in the cache
+        assert fake.removed == [DEFAULT_SERVER]
+
+    @pytest.mark.unit
+    def test_error_status_tries_next_mirror(self, monkeypatch):
+        second = 'vizier.idia.ac.za'
+        error = requests.exceptions.ConnectTimeout('timed out')
+        fake = _fake_vizier({DEFAULT_SERVER: error, MIRROR: 'error', second: 'ok'})
+        monkeypatch.setattr(catalogs, 'Vizier', fake)
+        monkeypatch.setattr(catalogs, 'vizier_mirrors', [MIRROR, second])
+        cat = catalogs.get_cat_vizier(10.0, 20.0, 0.1, 'gaiadr3syn', augment_bands=False)
+
+        assert cat is not None
+        assert fake.calls == [(DEFAULT_SERVER, True), (MIRROR, True), (second, True)]
+
+    @pytest.mark.unit
+    def test_non_votable_response_falls_back_to_mirror(self, monkeypatch):
+        cat, calls = self._query(monkeypatch, {DEFAULT_SERVER: 'html', MIRROR: 'ok'})
+
+        assert cat is not None
+        assert calls == [(DEFAULT_SERVER, True), (MIRROR, True)]
+
+    @pytest.mark.unit
+    def test_vizier_error_messages(self):
+        fake = _fake_vizier({DEFAULT_SERVER: 'error'})
+        with pytest.raises(catalogs.VizierQueryError, match='^NOT AVAILABLE YET$'):
+            catalogs._query_vizier_region(fake(), None, None, 'I/360/syntphot')
+
+    @pytest.mark.unit
+    def test_truncated_result_is_accepted(self, monkeypatch):
+        cat, calls = self._query(monkeypatch, {DEFAULT_SERVER: 'overflow', MIRROR: 'ok'})
+
+        assert cat is not None
+        assert len(cat) == 1
+        assert calls == [(DEFAULT_SERVER, True)]
 
     @pytest.mark.unit
     def test_other_errors_propagate(self, monkeypatch):
