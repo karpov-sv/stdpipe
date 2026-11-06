@@ -1144,11 +1144,12 @@ def get_cat_vizier(
     failure and is not retried elsewhere: it is only re-queried once on the same
     server, bypassing the cache.
 
-    If that still leaves no usable data, and ``catalog`` is one of ``ps1``,
+    If VizieR never managed to answer at all, and ``catalog`` is one of ``ps1``,
     ``gaiaedr3``, ``gaiadr3syn``, ``skymapper``, ``2mass`` or ``vhs``, the
     catalogue is instead fetched from a dedicated non-VizieR mirror (MAST, the
     ESA Gaia archive, the SkyMapper TAP service, IRSA, or the VISTA Science
-    Archive, respectively) and reshaped into the VizieR format.
+    Archive, respectively) and reshaped into the VizieR format. A confirmed
+    empty result is trusted as is and never triggers this fallback.
 
     Parameters
     ----------
@@ -1213,6 +1214,7 @@ def get_cat_vizier(
     coord = SkyCoord(ra0, dec0, unit='deg')
 
     cat = None
+    ok = False
 
     for server in [None] + list(vizier_mirrors):
         vizier = Vizier(
@@ -1229,8 +1231,11 @@ def get_cat_vizier(
                 # Possibly a stale cached answer - re-query the same server
                 cats = _query_vizier_region(vizier, coord, sr0 * u.deg, vizier_id, cache=False)
 
-            if cats and len(cats) == 1:
-                cat = cats[0]
+            if cats is not None:
+                ok = True
+                if len(cats) == 1:
+                    cat = cats[0]
+            
             break
         except (requests.exceptions.RequestException, TableParseError, VizierQueryError) as e:
             # Network-level failure, an unparseable response, or an error reported by the server - try the next server
@@ -1240,6 +1245,8 @@ def get_cat_vizier(
 
     if cat is None or not len(cat):
         log('Error requesting catalogue', catalog, 'from VizieR')
+        if ok:
+            return None
 
         fallback = catalog_fallbacks.get(catalog)
         if fallback is not None:

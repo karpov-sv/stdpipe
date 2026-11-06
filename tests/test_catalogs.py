@@ -717,8 +717,8 @@ def _one_row_cat(ra, dec):
 
 
 class TestFallbackDispatch:
-    """Test that get_cat_vizier reaches for a registered fallback once every
-    VizieR server has failed or returned nothing (all mocked)."""
+    """Test that get_cat_vizier reaches for a registered fallback only when VizieR
+    genuinely failed to answer - never for a confirmed-empty result (all mocked)."""
 
     def _query(self, monkeypatch, fallback_fn, catalog='ps1', **kwargs):
         error = requests.exceptions.ConnectionError('Connection reset by peer')
@@ -814,10 +814,13 @@ class TestFallbackDispatch:
         assert cat is not None and cat['RAJ2000'][0] == 10.0  # real VizieR data, not the 1.0 fallback stub
 
     @pytest.mark.unit
-    def test_fallback_reached_after_single_clean_empty_server_without_trying_mirrors(self, monkeypatch):
-        """A clean empty result from the default server stops the mirror loop by
-        design (see TestVizierMirrors.test_empty_result_does_not_use_mirror) - the
-        mirror is never even tried, yet the fallback still has to kick in."""
+    def test_confirmed_empty_result_skips_fallback(self, monkeypatch):
+        """A clean empty result (no error, server genuinely answered) stops the
+        mirror loop by design (see TestVizierMirrors.test_empty_result_does_not_use_mirror)
+        - and must NOT fall through to a non-VizieR source either: VizieR confirming
+        nothing is there is trustworthy, unlike VizieR failing to answer at all.
+        Falling back here would risk padding a genuinely dark patch of sky with
+        whatever an unrelated survey happens to cover at that position."""
         fake = _fake_vizier({DEFAULT_SERVER: 'empty', MIRROR: 'ok'})
         monkeypatch.setattr(catalogs, 'Vizier', fake)
         monkeypatch.setattr(catalogs, 'vizier_mirrors', [MIRROR])
@@ -825,7 +828,7 @@ class TestFallbackDispatch:
 
         cat = catalogs.get_cat_vizier(10.0, 20.0, 0.1, 'ps1', augment_bands=False)
 
-        assert cat is not None and cat['RAJ2000'][0] == 1.0
+        assert cat is None
         assert fake.calls == [(DEFAULT_SERVER, True), (DEFAULT_SERVER, False)]
 
 

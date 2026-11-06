@@ -10,10 +10,10 @@ releases up to 0.4.0 are only available in the
 
 - `catalogs.get_cat_vizier()` now falls back to a non-VizieR source (MAST,
   ESA Gaia archive, SkyMapper TAP, IRSA, VISTA Science Archive) for `ps1`,
-  `gaiaedr3`, `gaiadr3syn`, `skymapper`, `2mass` and `vhs` when VizieR ends
-  up with no usable data, instead of returning `None`. The fallback data is
-  reshaped into VizieR columns; simple numeric `filters` are pushed
-  server-side where the source supports it.
+  `gaiaedr3`, `gaiadr3syn`, `skymapper`, `2mass` and `vhs` when VizieR never
+  manages to answer, instead of returning `None`. A confirmed empty result
+  is trusted as is. The fallback data is reshaped into VizieR columns;
+  simple numeric `filters` are pushed server-side where the source supports it.
 - `photometry.get_objects_sep()` accepts a `psf` model (PSFEx, `create_psf_model()`
   or `sep.PSF`) for PSF-matched detection on the `sep.psf_snr()` significance
   image, following spatial PSF variation; shapes, fluxes and FWHM are still
