@@ -23,7 +23,7 @@ from . import astrometry
 catalogs = {
     'ps1': {'vizier': 'II/349/ps1', 'name': 'PanSTARRS DR1'},
     'gaiadr2': {'vizier': 'I/345/gaia2', 'name': 'Gaia DR2', 'extra': ['E(BR/RP)']},
-    'gaiaedr3': {'vizier': 'I/350/gaiaedr3', 'name': 'Gaia EDR3'},
+    'gaiadr3': {'vizier': 'I/355/gaiadr3', 'name': 'Gaia DR3'},
     'gaiadr3syn': {
         'vizier': 'I/360/syntphot',
         'name': 'Gaia DR3 synthetic photometry',
