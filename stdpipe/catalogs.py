@@ -1213,8 +1213,7 @@ def get_cat_vizier(
 
     coord = SkyCoord(ra0, dec0, unit='deg')
 
-    cat = None
-    ok = False
+    cats = None
 
     for server in [None] + list(vizier_mirrors):
         vizier = Vizier(
@@ -1226,16 +1225,6 @@ def get_cat_vizier(
 
         try:
             cats = _query_vizier_region(vizier, coord, sr0 * u.deg, vizier_id, cache=True)
-
-            if not cats or not len(cats) == 1:
-                # Possibly a stale cached answer - re-query the same server
-                cats = _query_vizier_region(vizier, coord, sr0 * u.deg, vizier_id, cache=False)
-
-            if cats is not None:
-                ok = True
-                if len(cats) == 1:
-                    cat = cats[0]
-            
             break
         except (requests.exceptions.RequestException, TableParseError, VizierQueryError) as e:
             # Network-level failure, an unparseable response, or an error reported by the server - try the next server
@@ -1243,11 +1232,14 @@ def get_cat_vizier(
     else:
         log('All VizieR servers failed, cannot get catalogue', catalog)
 
-    if cat is None or not len(cat):
+    if cats and len(cats) == 1:
+        cat = cats[0]
+    else:
         log('Error requesting catalogue', catalog, 'from VizieR')
-        if ok:
+        if cats is not None:
             return None
-
+        
+        cat = None
         fallback = catalog_fallbacks.get(catalog)
         if fallback is not None:
             log(f"Warning: VizieR has no catalogue '{catalog}' available right now, trying a non-VizieR fallback source")
