@@ -2,10 +2,11 @@
 Module containing the routines for handling various online catalogues.
 """
 
-import os, posixpath, re, shutil, tempfile
+import io, os, posixpath, re, shutil, tempfile, time, warnings
 import numpy as np
 
 from astropy.table import Table, MaskedColumn, vstack
+from astropy.io.votable import parse as parse_votable
 import requests
 
 from astroquery.vizier import Vizier
@@ -756,6 +757,510 @@ def _query_vizier_region(vizier, coord, radius, catalog, cache=True):
     return cats
 
 
+_FILTER_RE = re.compile(r'^\s*(<=|>=|==|!=|<|>)?\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*$')
+
+# Fixed-size page/row caps for fallbacks without cursor-based pagination; a hit
+# result silently truncates coverage, so it is checked for and logged.
+_MAST_PAGE_SIZE = 50000
+_SKYMAPPER_ROW_LIMIT = 100000
+
+
+def _coerce_numeric(column):
+    """Cast a column to float, masking entries that are missing or cannot be
+    parsed as a number."""
+    try:
+        return np.ma.masked_invalid(np.ma.asarray(column, dtype=float))
+    except (TypeError, ValueError):
+        pass
+
+    values = np.full(len(column), np.nan)
+    mask = np.zeros(len(column), dtype=bool)
+    for i, v in enumerate(column):
+        if v is np.ma.masked or v is None:
+            mask[i] = True
+            continue
+        try:
+            values[i] = float(v)
+        except (TypeError, ValueError):
+            mask[i] = True
+    return np.ma.MaskedArray(values, mask=mask)
+
+
+def _apply_filters(cat, filters, verbose=False):
+    """Apply simple VizieR-style numeric column filters (e.g. ``'<20'``) client-side.
+
+    Note: VizieR applies ``filters`` server-side via ``column_filters``
+    """
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
+
+    ops = {
+        '<': np.less, '<=': np.less_equal,
+        '>': np.greater, '>=': np.greater_equal,
+        '==': np.equal, '!=': np.not_equal,
+    }
+
+    for col, expr in (filters or {}).items():
+        if col not in cat.colnames:
+            log(f"Warning: filter column {col!r} is not in the fallback catalogue, cannot apply {col}{expr!r}")
+            continue
+
+        m = _FILTER_RE.match(str(expr))
+        if not m:
+            log(f"Warning: cannot apply filter {col}{expr!r} to fallback catalogue, skipping")
+            continue
+
+        op = ops[m.group(1) or '==']
+        value = float(m.group(2))
+        try:
+            column = np.ma.filled(np.ma.asarray(cat[col], dtype=float), np.nan)
+        except (TypeError, ValueError):
+            log(f"Warning: column {col!r} is not numeric, cannot apply filter {col}{expr!r}")
+            continue
+
+        cat = cat[op(column, value)]
+
+    return cat
+
+
+def _tap_async_query(base_url, query, timeout=(10, 60), verbose=False):
+    """IVOA TAP async (UWS) client: submit a query, poll until it
+    completes, and fetch the result.
+
+    Note: unfortunately astroquery and pyvo don't implement a reliable timeout.
+
+    ``timeout`` may be a single value or a ``(connect, read)`` tuple. The 
+    longest timeout sets the overall deadline.
+    If the query starts towards the end of the timeout, up to 5s extra may be
+    spent in attempt to cancel it.
+    """
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
+
+    connect_cap = timeout[0] if isinstance(timeout, (tuple, list)) else timeout
+    total = max(timeout) if isinstance(timeout, (tuple, list)) else timeout
+    deadline = time.monotonic() + total
+
+    def remaining():
+        return deadline - time.monotonic()
+
+    def request_timeout():
+        left = max(remaining(), 0.001)
+        return (min(connect_cap, left), left)
+
+    session = requests.Session()
+    job_url = None
+    try:
+        r = session.post(
+            f'{base_url}/async',
+            data={'REQUEST': 'doQuery', 'LANG': 'ADQL', 'QUERY': query, 'PHASE': 'RUN'},
+            timeout=request_timeout(),
+            allow_redirects=False,
+        )
+        r.raise_for_status()
+        job_url = r.headers['Location']
+
+        phase = None
+        while True:
+            if remaining() <= 0:
+                raise TimeoutError(f'TAP job did not complete within {total}s')
+            r = session.get(f'{job_url}/phase', timeout=request_timeout())
+            r.raise_for_status()
+            phase = r.text.strip()
+            if phase in ('COMPLETED', 'ERROR', 'ABORTED'):
+                break
+            left = remaining()
+            if left <= 0:
+                raise TimeoutError(f'TAP job did not complete within {total}s')
+            time.sleep(min(1.0, left))  # only sleeps for however much of the budget remains
+
+        if phase != 'COMPLETED':
+            try:
+                detail = session.get(f'{job_url}/error', timeout=request_timeout()).text[:300]
+            except Exception:
+                detail = '(could not fetch error details)'
+            log(f"Warning: TAP job at {base_url} ended in phase {phase}: {detail}")
+            raise RuntimeError(f'TAP job ended in phase {phase}')
+
+        r = session.get(f'{job_url}/results/result', timeout=request_timeout())
+        r.raise_for_status()
+        return parse_votable(io.BytesIO(r.content)).get_first_table().to_table(use_names_over_ids=True)
+
+    except TimeoutError:
+        log(f"Warning: TAP query at {base_url} did not complete within {total}s, giving up")
+        if job_url is not None:
+            try:
+                session.post(f'{job_url}/phase', data={'PHASE': 'ABORT'}, timeout=5)
+                log(f"Warning: aborted TAP job {job_url}")
+            except Exception as abort_exc:
+                log(f"Warning: failed to abort TAP job {job_url}: {str(abort_exc)[:200]}")
+        raise
+    finally:
+        session.close()
+
+
+def _fallback_ps1(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False):
+    """Fallback for Pan-STARRS DR1 via the MAST Catalogs mean-object API."""
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
+
+    # VizieR column -> MAST column name, for server-side magnitude-limit filter
+    mast_columns = {
+        'gmag': 'gMeanPSFMag', 'rmag': 'rMeanPSFMag', 'imag': 'iMeanPSFMag',
+        'zmag': 'zMeanPSFMag', 'ymag': 'yMeanPSFMag',
+    }
+    mast_ops = {'<': 'lt', '<=': 'lte', '>': 'gt', '>=': 'gte', '==': 'eq', '!=': 'neq'}
+
+    params = {
+        'ra': ra0, 'dec': dec0, 'radius': sr0,
+        # VizieR cuts low detections by default
+        'nDetections.gte': 3,
+        'pagesize': _MAST_PAGE_SIZE,
+    }
+    for col, expr in (filters or {}).items():
+        mast_col = mast_columns.get(col)
+        m = _FILTER_RE.match(str(expr)) if mast_col else None
+        if mast_col and m:
+            op = m.group(1) or '=='
+            params[f'{mast_col}.{mast_ops[op]}'] = m.group(2)
+            if op in ('<', '<='):
+                # MAST encodes a missing value as -999
+                params[f'{mast_col}.gt'] = '0'
+
+    try:
+        log('Trying MAST PanSTARRS DR1 mean-object API as a fallback')
+        r = requests.get(
+            'https://catalogs.mast.stsci.edu/api/v0.1/panstarrs/dr1/mean.csv',
+            params=params,
+            timeout=timeout,
+        )
+        r.raise_for_status()
+        if not r.text.strip():
+            return None
+        raw = Table.read(io.BytesIO(r.content), format='ascii.csv')
+    except Exception as e:
+        log('MAST PanSTARRS fallback failed:', str(e)[:200])
+        return None
+
+    if not len(raw):
+        return None
+
+    if len(raw) >= params['pagesize']:
+        log(f"Warning: MAST PanSTARRS DR1 fallback hit the {params['pagesize']}-row page limit, results may be incomplete")
+
+    cat = Table()
+    cat['RAJ2000'] = raw['raMean']
+    cat['DEJ2000'] = raw['decMean']
+    cat['e_RAJ2000'] = raw['raMeanErr']
+    cat['e_DEJ2000'] = raw['decMeanErr']
+
+    for band in ['g', 'r', 'i', 'z', 'y']:
+        mag = _coerce_numeric(raw[band + 'MeanPSFMag'])
+        magerr = _coerce_numeric(raw[band + 'MeanPSFMagErr'])
+        # MAST encodes a missing value as -999
+        cat[band + 'mag'] = np.ma.masked_equal(mag, -999.0)
+        cat['e_' + band + 'mag'] = np.ma.masked_equal(magerr, -999.0)
+
+    cat.meta['source'] = 'MAST PanSTARRS DR1 mean-object API (fallback)'
+    return cat
+
+
+_GAIA_TAP_URL = 'https://gea.esac.esa.int/tap-server/tap'
+
+
+def _fallback_gaiaedr3(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False):
+    """Fallback for Gaia eDR3 via the ESA Gaia archive TAP service (DR3 astrometry,
+    including early)."""
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
+
+    gaia_columns = {'Gmag': 'phot_g_mean_mag', 'BPmag': 'phot_bp_mean_mag', 'RPmag': 'phot_rp_mean_mag'}
+    conditions = [f"1=CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', {ra0}, {dec0}, {sr0}))"]
+    for col, expr in (filters or {}).items():
+        gaia_col = gaia_columns.get(col)
+        m = _FILTER_RE.match(str(expr)) if gaia_col else None
+        if gaia_col and m:
+            conditions.append(f"{gaia_col} {m.group(1) or '='} {m.group(2)}")
+
+    try:
+        log('Trying ESA Gaia archive (DR3 astrometry) as a fallback for Gaia eDR3')
+        # EPOCH_PROP_POS to get positions as of year 2000
+        query = f"""
+            SELECT source_id, ra_error, dec_error,
+                   parallax, parallax_error, pmra, pmra_error, pmdec, pmdec_error,
+                   COORD1(EPOCH_PROP_POS(ra, dec, COALESCE(parallax, 0), COALESCE(pmra, 0),
+                          COALESCE(pmdec, 0), COALESCE(radial_velocity, 0), ref_epoch, 2000)) AS ra_j2000,
+                   COORD2(EPOCH_PROP_POS(ra, dec, COALESCE(parallax, 0), COALESCE(pmra, 0),
+                          COALESCE(pmdec, 0), COALESCE(radial_velocity, 0), ref_epoch, 2000)) AS dec_j2000,
+                   phot_g_mean_mag, phot_g_mean_flux, phot_g_mean_flux_error,
+                   phot_bp_mean_mag, phot_bp_mean_flux, phot_bp_mean_flux_error,
+                   phot_rp_mean_mag, phot_rp_mean_flux, phot_rp_mean_flux_error,
+                   ruwe
+            FROM gaiadr3.gaia_source
+            WHERE {' AND '.join(conditions)}
+        """
+        raw = _tap_async_query(_GAIA_TAP_URL, query, timeout=timeout, verbose=verbose)
+    except Exception as e:
+        log('ESA Gaia archive fallback failed:', str(e)[:200])
+        return None
+
+    if not len(raw):
+        return None
+
+    cat = Table()
+    cat['RAJ2000'] = raw['ra_j2000']
+    cat['DEJ2000'] = raw['dec_j2000']
+    cat['e_RAJ2000'] = raw['ra_error']
+    cat['e_DEJ2000'] = raw['dec_error']
+    cat['pmRA'] = raw['pmra']
+    cat['e_pmRA'] = raw['pmra_error']
+    cat['pmDE'] = raw['pmdec']
+    cat['e_pmDE'] = raw['pmdec_error']
+    cat['Plx'] = raw['parallax']
+    cat['e_Plx'] = raw['parallax_error']
+    cat['Gmag'] = raw['phot_g_mean_mag']
+    cat['BPmag'] = raw['phot_bp_mean_mag']
+    cat['RPmag'] = raw['phot_rp_mean_mag']
+    cat['RUWE'] = raw['ruwe']
+
+    # Gaia does not publish a magnitude error directly; derive it from the flux error.
+    mag_err_factor = 2.5 / np.log(10)
+    for mag_err_col, flux_col, flux_err_col in [
+        ('e_Gmag', 'phot_g_mean_flux', 'phot_g_mean_flux_error'),
+        ('e_BPmag', 'phot_bp_mean_flux', 'phot_bp_mean_flux_error'),
+        ('e_RPmag', 'phot_rp_mean_flux', 'phot_rp_mean_flux_error'),
+    ]:
+        cat[mag_err_col] = mag_err_factor * np.asarray(raw[flux_err_col], dtype=float) / np.asarray(raw[flux_col], dtype=float)
+
+    cat.meta['source'] = 'ESA Gaia archive DR3 astrometry (fallback for eDR3)'
+    return cat
+
+
+def _fallback_gaiadr3syn(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False):
+    """Fallback for Gaia DR3 synthetic photometry via the ESA Gaia archive TAP
+    service, joining the main source table with ``synthetic_photometry_gspc``.
+
+    Unlike ``I/350/gaiaedr3``, VizieR's ``I/360/syntphot`` does not propagate
+    positions to J2000 (its ``_RAJ2000``/``_DEJ2000`` are identical to
+    ``RA_ICRS``/``DE_ICRS``).
+    """
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
+
+    # VizieR band name -> ESA synthetic_photometry_gspc column prefix
+    bands = {
+        'U': 'u_jkc', 'B': 'b_jkc', 'V': 'v_jkc', 'R': 'r_jkc', 'I': 'i_jkc',
+        'u': 'u_sdss', 'g': 'g_sdss', 'r': 'r_sdss', 'i': 'i_sdss', 'z': 'z_sdss',
+        'y': 'y_ps1',
+    }
+
+    conditions = [
+        f"1=CONTAINS(POINT('ICRS', g.ra, g.dec), CIRCLE('ICRS', {ra0}, {dec0}, {sr0}))"
+    ]
+    for col, expr in (filters or {}).items():
+        band = bands.get(col[:-3]) if col.endswith('mag') else None
+        m = _FILTER_RE.match(str(expr)) if band else None
+        if band and m:
+            conditions.append(f"s.{band}_mag {m.group(1) or '='} {m.group(2)}")
+
+    try:
+        log('Trying ESA Gaia archive (DR3 synthetic photometry) as a fallback')
+        select_cols = ', '.join(
+            f's.{col}_mag, s.{col}_flux, s.{col}_flux_error' for col in bands.values()
+        )
+        query = f"""
+            SELECT g.source_id, g.ra, g.dec, {select_cols}
+            FROM gaiadr3.gaia_source AS g
+            JOIN gaiadr3.synthetic_photometry_gspc AS s ON g.source_id = s.source_id
+            WHERE {' AND '.join(conditions)}
+        """
+        raw = _tap_async_query(_GAIA_TAP_URL, query, timeout=timeout, verbose=verbose)
+    except Exception as e:
+        log('ESA Gaia synthetic photometry fallback failed:', str(e)[:200])
+        return None
+
+    if not len(raw):
+        return None
+
+    cat = Table()
+    cat['RAJ2000'] = raw['ra']
+    cat['DEJ2000'] = raw['dec']
+
+    for short, col in bands.items():
+        cat[short + 'mag'] = raw[col + '_mag']
+        cat['F' + short] = raw[col + '_flux']
+        cat['e_F' + short] = raw[col + '_flux_error']
+
+    cat.meta['source'] = 'ESA Gaia archive DR3 synthetic photometry (fallback)'
+    return cat
+
+
+def _fallback_skymapper(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False):
+    """Fallback for SkyMapper DR4 via its public IVOA TAP service."""
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
+
+    sm_columns = {
+        'uPSF': 'u_psf', 'vPSF': 'v_psf', 'gPSF': 'g_psf', 'rPSF': 'r_psf',
+        'iPSF': 'i_psf', 'zPSF': 'z_psf',
+    }
+    conditions = [
+        f"1=CONTAINS(POINT('ICRS', raj2000, dej2000), CIRCLE('ICRS', {ra0}, {dec0}, {sr0}))"
+    ]
+    for col, expr in (filters or {}).items():
+        sm_col = sm_columns.get(col)
+        m = _FILTER_RE.match(str(expr)) if sm_col else None
+        if sm_col and m:
+            conditions.append(f"{sm_col} {m.group(1) or '='} {m.group(2)}")
+
+    try:
+        log('Trying SkyMapper TAP service as a fallback')
+        query = f"""
+            SELECT TOP {_SKYMAPPER_ROW_LIMIT}
+                   raj2000, dej2000, e_raj2000, e_dej2000, flags, class_star,
+                   u_psf, e_u_psf, v_psf, e_v_psf,
+                   g_psf, e_g_psf, r_psf, e_r_psf, i_psf, e_i_psf, z_psf, e_z_psf
+            FROM dr4.master
+            WHERE {' AND '.join(conditions)}
+        """
+        r = requests.get(
+            'https://api.skymapper.nci.org.au/public/tap/sync',
+            params={'REQUEST': 'doQuery', 'LANG': 'ADQL', 'FORMAT': 'csv', 'QUERY': query},
+            timeout=timeout,
+        )
+        r.raise_for_status()
+        if not r.text.strip():
+            return None
+        raw = Table.read(io.BytesIO(r.content), format='ascii.csv')
+    except Exception as e:
+        log('SkyMapper TAP fallback failed:', str(e)[:200])
+        return None
+
+    if not len(raw):
+        return None
+
+    if len(raw) >= _SKYMAPPER_ROW_LIMIT:
+        log(f"Warning: SkyMapper TAP fallback hit the {_SKYMAPPER_ROW_LIMIT}-row limit, results may be incomplete")
+
+    cat = Table()
+    cat['RAJ2000'] = raw['raj2000']
+    cat['DEJ2000'] = raw['dej2000']
+    cat['e_RAJ2000'] = raw['e_raj2000']
+    cat['e_DEJ2000'] = raw['e_dej2000']
+    # Detection/classification flags, mapped to VizieR II/379 names (confirmed
+    # against real cached VizieR data).
+    cat['flags'] = _coerce_numeric(raw['flags'])
+    cat['ClassStar'] = _coerce_numeric(raw['class_star'])
+
+    for band in ['u', 'v', 'g', 'r', 'i', 'z']:
+        cat[band + 'PSF'] = _coerce_numeric(raw[band + '_psf'])
+        cat['e_' + band + 'PSF'] = _coerce_numeric(raw['e_' + band + '_psf'])
+
+    cat.meta['source'] = 'SkyMapper TAP service (fallback)'
+    return cat
+
+
+_IRSA_TAP_URL = 'https://irsa.ipac.caltech.edu/TAP'
+
+
+def _fallback_2mass(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False):
+    """Fallback for the 2MASS Point Source Catalogue via IRSA."""
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
+    try:
+        log('Trying IRSA 2MASS Point Source Catalogue as a fallback')
+        query = f"""
+            SELECT ra, dec, designation, j_m, j_msigcom, h_m, h_msigcom, k_m, k_msigcom,
+                   ph_qual, rd_flg, bl_flg, cc_flg, gal_contam, mp_flg
+            FROM fp_psc
+            WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', {ra0}, {dec0}, {sr0}))=1
+        """
+        raw = _tap_async_query(_IRSA_TAP_URL, query, timeout=timeout, verbose=verbose)
+    except Exception as e:
+        log('IRSA 2MASS fallback failed:', str(e)[:200])
+        return None
+
+    if not len(raw):
+        return None
+
+    cat = Table()
+    cat['RAJ2000'] = raw['ra']
+    cat['DEJ2000'] = raw['dec']
+    cat['2MASS'] = raw['designation']
+    cat['Jmag'] = raw['j_m']
+    cat['e_Jmag'] = raw['j_msigcom']
+    cat['Hmag'] = raw['h_m']
+    cat['e_Hmag'] = raw['h_msigcom']
+    cat['Kmag'] = raw['k_m']
+    cat['e_Kmag'] = raw['k_msigcom']
+    # Quality/contamination flags, mapped to VizieR II/246/out names (confirmed
+    # live against the real catalogue).
+    cat['Qflg'] = raw['ph_qual']
+    cat['Rflg'] = raw['rd_flg']
+    cat['Bflg'] = raw['bl_flg']
+    cat['Cflg'] = raw['cc_flg']
+    cat['Xflg'] = raw['gal_contam']
+    cat['Aflg'] = raw['mp_flg']
+
+    cat.meta['source'] = 'IRSA 2MASS Point Source Catalogue (fallback)'
+    return cat
+
+
+def _fallback_vhs(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False):
+    """Fallback for the VISTA Hemisphere Survey via the VISTA Science Archive.
+
+    Uses DR4, the latest release exposed by astroquery's VSA client (instead of DR5).
+    """
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
+    try:
+        from astroquery.vsa import Vsa
+
+        log('Trying VISTA Science Archive (VHS DR4) as a fallback')
+        coord = SkyCoord(ra0, dec0, unit='deg')
+        Vsa.TIMEOUT = max(timeout) if isinstance(timeout, (tuple, list)) else timeout
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            raw = Vsa.query_region(
+                coord, radius=sr0 * u.deg, database='VHSDR4', programme_id='VHS'
+            )
+    except Exception as e:
+        log('VSA VHS fallback failed:', str(e)[:200])
+        return None
+
+    if not len(raw):
+        return None
+
+    cat = Table()
+    cat['RAJ2000'] = raw['ra']
+    cat['DEJ2000'] = raw['dec']
+
+    for short, col in [('Jap3', 'jAperMag3'), ('Hap3', 'hAperMag3'), ('Ksap3', 'ksAperMag3')]:
+        mag = np.asarray(raw[col], dtype=float)
+        magerr = np.asarray(raw[col + 'Err'], dtype=float)
+        # VSA encodes missing values with a large negative sentinel
+        cat[short] = np.ma.masked_less(mag, -1e5)
+        cat['e_' + short] = np.ma.masked_less(magerr, -1e5)
+
+    cat['Mstat'] = raw['mergedClassStat']
+    cat['Mclass'] = raw['mergedClass']
+    cat['pStar'] = raw['pStar']
+    cat['pGal'] = raw['pGalaxy']
+    cat['pNoise'] = raw['pNoise']
+    for band, raw_band in [('Y', 'y'), ('J', 'j'), ('H', 'h'), ('Ks', 'ks')]:
+        cat[band + 'errbits'] = raw[raw_band + 'ErrBits']
+        cat[band + 'perrbits'] = raw[raw_band + 'ppErrBits']
+
+    cat.meta['name'] = 'VISTA Hemisphere Survey DR4'
+    cat.meta['source'] = 'VISTA Science Archive VHS DR4 (fallback)'
+    return cat
+
+
+# Non-VizieR fallback sources, tried when every VizieR server fails or returns
+# nothing for a catalogue. Each returns a Table shaped like the corresponding 
+# VizieR catalogue (or None on failure).
+catalog_fallbacks = {
+    'ps1': _fallback_ps1,
+    'gaiaedr3': _fallback_gaiaedr3,
+    'gaiadr3syn': _fallback_gaiadr3syn,
+    'skymapper': _fallback_skymapper,
+    '2mass': _fallback_2mass,
+    'vhs': _fallback_vhs,
+}
+
+
 def get_cat_vizier(
     ra0,
     dec0,
@@ -790,8 +1295,16 @@ def get_cat_vizier(
 
     If the query fails on the default VizieR server with a network error, or the
     server reports it as failed (e.g. lacking the catalogue data), it is retried
-    on the servers listed in ``vizier_mirrors``. An empty result is not a failure:
-    it is only re-queried once on the same server, bypassing the cache.
+    on the servers listed in ``vizier_mirrors``. A clean empty result is not a
+    failure and is not retried elsewhere: it is only re-queried once on the same
+    server, bypassing the cache.
+
+    If VizieR never managed to answer at all, and ``catalog`` is one of ``ps1``,
+    ``gaiaedr3``, ``gaiadr3syn``, ``skymapper``, ``2mass`` or ``vhs``, the
+    catalogue is instead fetched from a dedicated non-VizieR mirror (MAST, the
+    ESA Gaia archive, the SkyMapper TAP service, IRSA, or the VISTA Science
+    Archive, respectively) and reshaped into the VizieR format. A confirmed
+    empty result is trusted as is and never triggers this fallback.
 
     Parameters
     ----------
@@ -855,6 +1368,8 @@ def get_cat_vizier(
 
     coord = SkyCoord(ra0, dec0, unit='deg')
 
+    cats = None
+
     for server in [None] + list(vizier_mirrors):
         vizier = Vizier(
             row_limit=limit, columns=columns, column_filters=filters, timeout=timeout
@@ -865,25 +1380,46 @@ def get_cat_vizier(
 
         try:
             cats = _query_vizier_region(vizier, coord, sr0 * u.deg, vizier_id, cache=True)
-
-            if not cats or not len(cats) == 1:
-                # Possibly a stale cached answer - re-query the same server
-                cats = _query_vizier_region(vizier, coord, sr0 * u.deg, vizier_id, cache=False)
             break
         except (requests.exceptions.RequestException, TableParseError, VizierQueryError) as e:
             # Network-level failure, an unparseable response, or an error reported by the server - try the next server
             log('VizieR query failed on', vizier.VIZIER_SERVER, ':', str(e)[:200])
     else:
         log('All VizieR servers failed, cannot get catalogue', catalog)
-        return None
 
-    if not cats or not len(cats) == 1:
-        log('Error requesting catalogue', catalog)
-        return None
+    if cats and len(cats) == 1:
+        cat = cats[0]
+        cat.meta['name'] = name
+    else:
+        log('Error requesting catalogue', catalog, 'from VizieR')
+        if cats is not None:
+            return None
+        
+        cat = None
+        fallback = catalog_fallbacks.get(catalog)
+        if fallback is not None:
+            log(f"Warning: VizieR has no catalogue '{catalog}' available right now, trying a non-VizieR fallback source")
+            try:
+                cat = fallback(ra0, dec0, sr0, filters=filters, timeout=timeout, verbose=verbose)
+            except Exception as e:
+                log('Fallback source for', catalog, 'raised an unexpected error:', str(e)[:200])
+                cat = None
 
-    cat = cats[0]
+        if cat is None or not len(cat):
+            log('Cannot get catalogue', catalog, 'from any source')
+            return None
+
+        cat = _apply_filters(cat, filters, verbose=verbose)
+        if limit and limit > 0 and len(cat) > limit:
+            cat = cat[:limit]
+
+        if not len(cat):
+            log('Fallback catalogue', catalog, 'is empty after applying filters')
+            return None
+
+        cat.meta.setdefault('name', name)
+
     cat.meta['vizier_id'] = vizier_id
-    cat.meta['name'] = name
 
     log('Got', len(cat), 'entries with', len(cat.colnames), 'columns')
 
