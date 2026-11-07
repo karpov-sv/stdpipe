@@ -154,13 +154,13 @@ def _augment_ps1(cat, verbose=False):
     try:
         log("Augmenting the catalogue with Johnson-Cousins photometry using PS1 mags")
 
-        # Alternative PS1 transfromation from https://arxiv.org/pdf/1706.06147.pdf, Stetson, seems better with Landolt than official one
+        # Alternative PS1 transfromation from https://scixplorer.org/abs/2018BlgAJ..28....3K, Stetson, seems better with Landolt than official one
         # cat['B'] = cat['gmag'] + 0.199 + 0.540*(cat['gmag'] - cat['rmag']) + 0.016*(cat['gmag'] - cat['rmag'])**2
         # cat['V'] = cat['gmag'] - 0.020 - 0.498*(cat['gmag'] - cat['rmag']) - 0.008*(cat['gmag'] - cat['rmag'])**2
         # cat['R'] = cat['rmag'] - 0.163 - 0.086*(cat['gmag'] - cat['rmag']) - 0.061*(cat['gmag'] - cat['rmag'])**2
         # cat['I'] = cat['imag'] - 0.387 - 0.123*(cat['gmag'] - cat['rmag']) - 0.034*(cat['gmag'] - cat['rmag'])**2
 
-        # My own fit on Landolt+Stetson standards from https://arxiv.org/pdf/2205.06186.pdf
+        # My own fit on Landolt+Stetson standards from https://scixplorer.org/abs/2022A%26A...664A.109P
         pB1, pB2 = (
             [
                 0.10339527794499666,
@@ -252,7 +252,7 @@ def _augment_ps1(cat, verbose=False):
         cat['good'] &= (cat['rmag'] - cat['imag'] > -0.5) & (cat['rmag'] - cat['imag'] < 2.0)
         cat['good'] &= (cat['imag'] - cat['zmag'] > -0.5) & (cat['imag'] - cat['zmag'] < 1.0)
 
-        # to SDSS, zero points and color terms from https://arxiv.org/pdf/1203.0297.pdf
+        # to SDSS, zero points and color terms from https://scixplorer.org/abs/2012ApJ...750...99T
         cat['g_SDSS'] = (
             cat['gmag']
             + 0.013
@@ -564,7 +564,7 @@ def _augment_gaiadr3syn(cat, verbose=False):
         log("Converting the catalogue Sloan magnitudes to Pan-STARRS ones")
 
         # umag, gmag, rmag, imag and zmag are Sloan ugriz magnitudes! Let's get PS1 ones instead
-        # Fits are based on clean Landolt sample from https://arxiv.org/pdf/2205.06186
+        # Fits are based on clean Landolt sample from https://scixplorer.org/abs/2022A%26A...664A.109P
         pg = [-0.030414391501015867, -0.09960002492299584, -0.002910024005294562]
         pr = [-0.009566553708653305, 0.014924591443344211, -0.003928147919030857]
         pi = [-0.010802807724098494, 0.01124900218746879, 0.01274293783734852]
@@ -633,7 +633,7 @@ def _augment_vhs(cat, verbose=False):
                     f"their magnitudes are left uncorrected for the {a}-{b} colour term")
             return np.nan_to_num(term, nan=0.0)
 
-        # VISTA to 2MASS equations from https://ui.adsabs.harvard.edu/abs/2013A%26A...552A.101S
+        # VISTA to 2MASS equations from https://scixplorer.org/abs/2013A%26A...552A.101S
         cat['Jmag'] += color_term('Jap3', 'Hap3', 0.070)
         cat['Hmag'] += color_term('Hap3', 'Ksap3', -0.035)
         cat['Ksmag'] += color_term('Jap3', 'Ksap3', -0.011)

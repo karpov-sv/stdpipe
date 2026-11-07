@@ -251,7 +251,7 @@ You can refine object positions before photometry using iterative centroiding. T
 Optimal extraction
 ^^^^^^^^^^^^^^^^^^
 
-For point sources, optimal extraction (`Naylor 1998 <https://ui.adsabs.harvard.edu/abs/1998MNRAS.296..339N>`_) provides ~10% improvement in signal-to-noise ratio by using PSF-weighted photometry instead of simple aperture sums:
+For point sources, optimal extraction (`Naylor 1998 <https://scixplorer.org/abs/1998MNRAS.296..339N>`_) provides ~10% improvement in signal-to-noise ratio by using PSF-weighted photometry instead of simple aperture sums:
 
 .. code-block:: python
 

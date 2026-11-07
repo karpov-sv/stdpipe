@@ -7,11 +7,11 @@ For the latter, we have a convenience routine :func:`stdpipe.catalogs.get_cat_vi
 
 For some of them we have a special support - we automatically augment them with magnitudes in photometric bands not originally present there. To do so, we use the following sources of photometric transformations:
 
--  for Pan-STARRS to Johnson-Cousins magnitudes, we use conversion coefficients from https://arxiv.org/pdf/1706.06147.pdf
+-  for Pan-STARRS to Johnson-Cousins magnitudes, we use conversion coefficients from https://scixplorer.org/abs/2018BlgAJ..28....3K
 
 -  for Gaia DR2, we use some self-made conversion coefficients derived by cross-matching with Stetson standards, along with linearity correction described at https://www.cosmos.esa.int/web/gaia/dr2-known-issues#PhotometrySystematicEffectsAndResponseCurves
 
--  for VHS (VISTA) to 2MASS-system :math:`J`, :math:`H`, :math:`K_s` magnitudes, we use the transformation equations from https://ui.adsabs.harvard.edu/abs/2013A%26A...552A.101S
+-  for VHS (VISTA) to 2MASS-system :math:`J`, :math:`H`, :math:`K_s` magnitudes, we use the transformation equations from https://scixplorer.org/abs/2013A%26A...552A.101S
 
 The following example shows how to get a reference catalogue for a given image
 
