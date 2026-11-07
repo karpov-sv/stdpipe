@@ -2,10 +2,11 @@
 Module containing the routines for handling various online catalogues.
 """
 
-import io, os, posixpath, re, shutil, tempfile, warnings
+import io, os, posixpath, re, shutil, tempfile, time, warnings
 import numpy as np
 
 from astropy.table import Table, MaskedColumn, vstack
+from astropy.io.votable import parse as parse_votable
 import requests
 
 from astroquery.vizier import Vizier
@@ -13,9 +14,6 @@ from astroquery.exceptions import TableParseError
 from astroquery.xmatch import XMatch
 from astroquery.imcce import Skybot
 from astroquery.ipac.ned import Ned
-from astroquery.gaia import Gaia
-from astroquery.ipac.irsa import Irsa
-from astroquery.vsa import Vsa
 from astropy.coordinates import SkyCoord
 from astropy import units as u
 from astropy.time import Time
@@ -761,6 +759,11 @@ def _query_vizier_region(vizier, coord, radius, catalog, cache=True):
 
 _FILTER_RE = re.compile(r'^\s*(<=|>=|==|!=|<|>)?\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*$')
 
+# Fixed-size page/row caps for fallbacks without cursor-based pagination; a hit
+# result silently truncates coverage, so it is checked for and logged.
+_MAST_PAGE_SIZE = 50000
+_SKYMAPPER_ROW_LIMIT = 100000
+
 
 def _coerce_numeric(column):
     """Cast a column to float, masking entries that are missing or cannot be
@@ -798,6 +801,7 @@ def _apply_filters(cat, filters, verbose=False):
 
     for col, expr in (filters or {}).items():
         if col not in cat.colnames:
+            log(f"Warning: filter column {col!r} is not in the fallback catalogue, cannot apply {col}{expr!r}")
             continue
 
         m = _FILTER_RE.match(str(expr))
@@ -807,11 +811,90 @@ def _apply_filters(cat, filters, verbose=False):
 
         op = ops[m.group(1) or '==']
         value = float(m.group(2))
-        column = np.ma.filled(np.ma.asarray(cat[col], dtype=float), np.nan)
+        try:
+            column = np.ma.filled(np.ma.asarray(cat[col], dtype=float), np.nan)
+        except (TypeError, ValueError):
+            log(f"Warning: column {col!r} is not numeric, cannot apply filter {col}{expr!r}")
+            continue
 
         cat = cat[op(column, value)]
 
     return cat
+
+
+def _tap_async_query(base_url, query, timeout=(10, 60), verbose=False):
+    """IVOA TAP async (UWS) client: submit a query, poll until it
+    completes, and fetch the result.
+
+    Note: unfortunately astroquery and pyvo don't implement a reliable timeout.
+
+    ``timeout`` may be a single value or a ``(connect, read)`` tuple. The 
+    longest timeout sets the overall deadline.
+    If the query starts towards the end of the timeout, up to 5s extra may be
+    spent in attempt to cancel it.
+    """
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
+
+    connect_cap = timeout[0] if isinstance(timeout, (tuple, list)) else timeout
+    total = max(timeout) if isinstance(timeout, (tuple, list)) else timeout
+    deadline = time.monotonic() + total
+
+    def remaining():
+        return deadline - time.monotonic()
+
+    def request_timeout():
+        left = max(remaining(), 0.001)
+        return (min(connect_cap, left), left)
+
+    session = requests.Session()
+    job_url = None
+    try:
+        r = session.post(
+            f'{base_url}/async',
+            data={'REQUEST': 'doQuery', 'LANG': 'ADQL', 'QUERY': query, 'PHASE': 'RUN'},
+            timeout=request_timeout(),
+            allow_redirects=False,
+        )
+        r.raise_for_status()
+        job_url = r.headers['Location']
+
+        phase = None
+        while True:
+            if remaining() <= 0:
+                raise TimeoutError(f'TAP job did not complete within {total}s')
+            r = session.get(f'{job_url}/phase', timeout=request_timeout())
+            r.raise_for_status()
+            phase = r.text.strip()
+            if phase in ('COMPLETED', 'ERROR', 'ABORTED'):
+                break
+            left = remaining()
+            if left <= 0:
+                raise TimeoutError(f'TAP job did not complete within {total}s')
+            time.sleep(min(1.0, left))  # only sleeps for however much of the budget remains
+
+        if phase != 'COMPLETED':
+            try:
+                detail = session.get(f'{job_url}/error', timeout=request_timeout()).text[:300]
+            except Exception:
+                detail = '(could not fetch error details)'
+            log(f"Warning: TAP job at {base_url} ended in phase {phase}: {detail}")
+            raise RuntimeError(f'TAP job ended in phase {phase}')
+
+        r = session.get(f'{job_url}/results/result', timeout=request_timeout())
+        r.raise_for_status()
+        return parse_votable(io.BytesIO(r.content)).get_first_table().to_table(use_names_over_ids=True)
+
+    except TimeoutError:
+        log(f"Warning: TAP query at {base_url} did not complete within {total}s, giving up")
+        if job_url is not None:
+            try:
+                session.post(f'{job_url}/phase', data={'PHASE': 'ABORT'}, timeout=5)
+                log(f"Warning: aborted TAP job {job_url}")
+            except Exception as abort_exc:
+                log(f"Warning: failed to abort TAP job {job_url}: {str(abort_exc)[:200]}")
+        raise
+    finally:
+        session.close()
 
 
 def _fallback_ps1(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False):
@@ -829,7 +912,7 @@ def _fallback_ps1(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False)
         'ra': ra0, 'dec': dec0, 'radius': sr0,
         # VizieR cuts low detections by default
         'nDetections.gte': 3,
-        'pagesize': 50000,
+        'pagesize': _MAST_PAGE_SIZE,
     }
     for col, expr in (filters or {}).items():
         mast_col = mast_columns.get(col)
@@ -859,6 +942,9 @@ def _fallback_ps1(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False)
     if not len(raw):
         return None
 
+    if len(raw) >= params['pagesize']:
+        log(f"Warning: MAST PanSTARRS DR1 fallback hit the {params['pagesize']}-row page limit, results may be incomplete")
+
     cat = Table()
     cat['RAJ2000'] = raw['raMean']
     cat['DEJ2000'] = raw['decMean']
@@ -876,6 +962,9 @@ def _fallback_ps1(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False)
     return cat
 
 
+_GAIA_TAP_URL = 'https://gea.esac.esa.int/tap-server/tap'
+
+
 def _fallback_gaiaedr3(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False):
     """Fallback for Gaia eDR3 via the ESA Gaia archive TAP service (DR3 astrometry,
     including early)."""
@@ -891,14 +980,22 @@ def _fallback_gaiaedr3(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=F
 
     try:
         log('Trying ESA Gaia archive (DR3 astrometry) as a fallback for Gaia eDR3')
+        # EPOCH_PROP_POS to get positions as of year 2000
         query = f"""
-            SELECT source_id, ra, dec, ra_error, dec_error,
-                   phot_g_mean_mag, phot_bp_mean_mag, phot_rp_mean_mag, ruwe
+            SELECT source_id, ra_error, dec_error,
+                   parallax, parallax_error, pmra, pmra_error, pmdec, pmdec_error,
+                   COORD1(EPOCH_PROP_POS(ra, dec, COALESCE(parallax, 0), COALESCE(pmra, 0),
+                          COALESCE(pmdec, 0), COALESCE(radial_velocity, 0), ref_epoch, 2000)) AS ra_j2000,
+                   COORD2(EPOCH_PROP_POS(ra, dec, COALESCE(parallax, 0), COALESCE(pmra, 0),
+                          COALESCE(pmdec, 0), COALESCE(radial_velocity, 0), ref_epoch, 2000)) AS dec_j2000,
+                   phot_g_mean_mag, phot_g_mean_flux, phot_g_mean_flux_error,
+                   phot_bp_mean_mag, phot_bp_mean_flux, phot_bp_mean_flux_error,
+                   phot_rp_mean_mag, phot_rp_mean_flux, phot_rp_mean_flux_error,
+                   ruwe
             FROM gaiadr3.gaia_source
             WHERE {' AND '.join(conditions)}
         """
-        job = Gaia.launch_job_async(query, verbose=False)
-        raw = job.get_results()
+        raw = _tap_async_query(_GAIA_TAP_URL, query, timeout=timeout, verbose=verbose)
     except Exception as e:
         log('ESA Gaia archive fallback failed:', str(e)[:200])
         return None
@@ -907,14 +1004,29 @@ def _fallback_gaiaedr3(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=F
         return None
 
     cat = Table()
-    cat['RAJ2000'] = raw['ra']
-    cat['DEJ2000'] = raw['dec']
+    cat['RAJ2000'] = raw['ra_j2000']
+    cat['DEJ2000'] = raw['dec_j2000']
     cat['e_RAJ2000'] = raw['ra_error']
     cat['e_DEJ2000'] = raw['dec_error']
+    cat['pmRA'] = raw['pmra']
+    cat['e_pmRA'] = raw['pmra_error']
+    cat['pmDE'] = raw['pmdec']
+    cat['e_pmDE'] = raw['pmdec_error']
+    cat['Plx'] = raw['parallax']
+    cat['e_Plx'] = raw['parallax_error']
     cat['Gmag'] = raw['phot_g_mean_mag']
     cat['BPmag'] = raw['phot_bp_mean_mag']
     cat['RPmag'] = raw['phot_rp_mean_mag']
     cat['RUWE'] = raw['ruwe']
+
+    # Gaia does not publish a magnitude error directly; derive it from the flux error.
+    mag_err_factor = 2.5 / np.log(10)
+    for mag_err_col, flux_col, flux_err_col in [
+        ('e_Gmag', 'phot_g_mean_flux', 'phot_g_mean_flux_error'),
+        ('e_BPmag', 'phot_bp_mean_flux', 'phot_bp_mean_flux_error'),
+        ('e_RPmag', 'phot_rp_mean_flux', 'phot_rp_mean_flux_error'),
+    ]:
+        cat[mag_err_col] = mag_err_factor * np.asarray(raw[flux_err_col], dtype=float) / np.asarray(raw[flux_col], dtype=float)
 
     cat.meta['source'] = 'ESA Gaia archive DR3 astrometry (fallback for eDR3)'
     return cat
@@ -922,7 +1034,12 @@ def _fallback_gaiaedr3(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=F
 
 def _fallback_gaiadr3syn(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False):
     """Fallback for Gaia DR3 synthetic photometry via the ESA Gaia archive TAP
-    service, joining the main source table with ``synthetic_photometry_gspc``."""
+    service, joining the main source table with ``synthetic_photometry_gspc``.
+
+    Unlike ``I/350/gaiaedr3``, VizieR's ``I/360/syntphot`` does not propagate
+    positions to J2000 (its ``_RAJ2000``/``_DEJ2000`` are identical to
+    ``RA_ICRS``/``DE_ICRS``).
+    """
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     # VizieR band name -> ESA synthetic_photometry_gspc column prefix
@@ -952,8 +1069,7 @@ def _fallback_gaiadr3syn(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose
             JOIN gaiadr3.synthetic_photometry_gspc AS s ON g.source_id = s.source_id
             WHERE {' AND '.join(conditions)}
         """
-        job = Gaia.launch_job_async(query, verbose=False)
-        raw = job.get_results()
+        raw = _tap_async_query(_GAIA_TAP_URL, query, timeout=timeout, verbose=verbose)
     except Exception as e:
         log('ESA Gaia synthetic photometry fallback failed:', str(e)[:200])
         return None
@@ -979,7 +1095,8 @@ def _fallback_skymapper(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
 
     sm_columns = {
-        'gPSF': 'g_psf', 'rPSF': 'r_psf', 'iPSF': 'i_psf', 'zPSF': 'z_psf',
+        'uPSF': 'u_psf', 'vPSF': 'v_psf', 'gPSF': 'g_psf', 'rPSF': 'r_psf',
+        'iPSF': 'i_psf', 'zPSF': 'z_psf',
     }
     conditions = [
         f"1=CONTAINS(POINT('ICRS', raj2000, dej2000), CIRCLE('ICRS', {ra0}, {dec0}, {sr0}))"
@@ -993,8 +1110,9 @@ def _fallback_skymapper(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=
     try:
         log('Trying SkyMapper TAP service as a fallback')
         query = f"""
-            SELECT TOP 100000
-                   raj2000, dej2000, e_raj2000, e_dej2000,
+            SELECT TOP {_SKYMAPPER_ROW_LIMIT}
+                   raj2000, dej2000, e_raj2000, e_dej2000, flags, class_star,
+                   u_psf, e_u_psf, v_psf, e_v_psf,
                    g_psf, e_g_psf, r_psf, e_r_psf, i_psf, e_i_psf, z_psf, e_z_psf
             FROM dr4.master
             WHERE {' AND '.join(conditions)}
@@ -1015,13 +1133,20 @@ def _fallback_skymapper(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=
     if not len(raw):
         return None
 
+    if len(raw) >= _SKYMAPPER_ROW_LIMIT:
+        log(f"Warning: SkyMapper TAP fallback hit the {_SKYMAPPER_ROW_LIMIT}-row limit, results may be incomplete")
+
     cat = Table()
     cat['RAJ2000'] = raw['raj2000']
     cat['DEJ2000'] = raw['dej2000']
     cat['e_RAJ2000'] = raw['e_raj2000']
     cat['e_DEJ2000'] = raw['e_dej2000']
+    # Detection/classification flags, mapped to VizieR II/379 names (confirmed
+    # against real cached VizieR data).
+    cat['flags'] = _coerce_numeric(raw['flags'])
+    cat['ClassStar'] = _coerce_numeric(raw['class_star'])
 
-    for band in ['g', 'r', 'i', 'z']:
+    for band in ['u', 'v', 'g', 'r', 'i', 'z']:
         cat[band + 'PSF'] = _coerce_numeric(raw[band + '_psf'])
         cat['e_' + band + 'PSF'] = _coerce_numeric(raw['e_' + band + '_psf'])
 
@@ -1029,13 +1154,21 @@ def _fallback_skymapper(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=
     return cat
 
 
+_IRSA_TAP_URL = 'https://irsa.ipac.caltech.edu/TAP'
+
+
 def _fallback_2mass(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False):
     """Fallback for the 2MASS Point Source Catalogue via IRSA."""
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
     try:
         log('Trying IRSA 2MASS Point Source Catalogue as a fallback')
-        coord = SkyCoord(ra0, dec0, unit='deg')
-        raw = Irsa.query_region(coord, catalog='fp_psc', spatial='Cone', radius=sr0 * u.deg)
+        query = f"""
+            SELECT ra, dec, designation, j_m, j_msigcom, h_m, h_msigcom, k_m, k_msigcom,
+                   ph_qual, rd_flg, bl_flg, cc_flg, gal_contam, mp_flg
+            FROM fp_psc
+            WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', {ra0}, {dec0}, {sr0}))=1
+        """
+        raw = _tap_async_query(_IRSA_TAP_URL, query, timeout=timeout, verbose=verbose)
     except Exception as e:
         log('IRSA 2MASS fallback failed:', str(e)[:200])
         return None
@@ -1046,12 +1179,21 @@ def _fallback_2mass(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=Fals
     cat = Table()
     cat['RAJ2000'] = raw['ra']
     cat['DEJ2000'] = raw['dec']
+    cat['2MASS'] = raw['designation']
     cat['Jmag'] = raw['j_m']
     cat['e_Jmag'] = raw['j_msigcom']
     cat['Hmag'] = raw['h_m']
     cat['e_Hmag'] = raw['h_msigcom']
     cat['Kmag'] = raw['k_m']
     cat['e_Kmag'] = raw['k_msigcom']
+    # Quality/contamination flags, mapped to VizieR II/246/out names (confirmed
+    # live against the real catalogue).
+    cat['Qflg'] = raw['ph_qual']
+    cat['Rflg'] = raw['rd_flg']
+    cat['Bflg'] = raw['bl_flg']
+    cat['Cflg'] = raw['cc_flg']
+    cat['Xflg'] = raw['gal_contam']
+    cat['Aflg'] = raw['mp_flg']
 
     cat.meta['source'] = 'IRSA 2MASS Point Source Catalogue (fallback)'
     return cat
@@ -1064,8 +1206,11 @@ def _fallback_vhs(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False)
     """
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
     try:
+        from astroquery.vsa import Vsa
+
         log('Trying VISTA Science Archive (VHS DR4) as a fallback')
         coord = SkyCoord(ra0, dec0, unit='deg')
+        Vsa.TIMEOUT = max(timeout) if isinstance(timeout, (tuple, list)) else timeout
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
             raw = Vsa.query_region(
@@ -1089,6 +1234,16 @@ def _fallback_vhs(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False)
         cat[short] = np.ma.masked_less(mag, -1e5)
         cat['e_' + short] = np.ma.masked_less(magerr, -1e5)
 
+    cat['Mstat'] = raw['mergedClassStat']
+    cat['Mclass'] = raw['mergedClass']
+    cat['pStar'] = raw['pStar']
+    cat['pGal'] = raw['pGalaxy']
+    cat['pNoise'] = raw['pNoise']
+    for band, raw_band in [('Y', 'y'), ('J', 'j'), ('H', 'h'), ('Ks', 'ks')]:
+        cat[band + 'errbits'] = raw[raw_band + 'ErrBits']
+        cat[band + 'perrbits'] = raw[raw_band + 'ppErrBits']
+
+    cat.meta['name'] = 'VISTA Hemisphere Survey DR4'
     cat.meta['source'] = 'VISTA Science Archive VHS DR4 (fallback)'
     return cat
 
@@ -1234,6 +1389,7 @@ def get_cat_vizier(
 
     if cats and len(cats) == 1:
         cat = cats[0]
+        cat.meta['name'] = name
     else:
         log('Error requesting catalogue', catalog, 'from VizieR')
         if cats is not None:
@@ -1261,8 +1417,9 @@ def get_cat_vizier(
             log('Fallback catalogue', catalog, 'is empty after applying filters')
             return None
 
+        cat.meta.setdefault('name', name)
+
     cat.meta['vizier_id'] = vizier_id
-    cat.meta['name'] = name
 
     log('Got', len(cat), 'entries with', len(cat.colnames), 'columns')
 

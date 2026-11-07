@@ -690,6 +690,27 @@ class TestApplyFilters:
         assert len(result) == 2
 
     @pytest.mark.unit
+    def test_missing_column_logs_a_warning(self):
+        cat = Table()
+        cat['rmag'] = [10.0, 20.0]
+        messages = []
+
+        catalogs._apply_filters(cat, {'gmag': '<15'}, verbose=messages.append)
+
+        assert any('gmag' in str(m) for m in messages)
+
+    @pytest.mark.unit
+    def test_non_numeric_column_is_ignored_not_raised(self):
+        cat = Table()
+        cat['Qflg'] = ['AAA', 'BBB']
+        messages = []
+
+        result = catalogs._apply_filters(cat, {'Qflg': '<15'}, verbose=messages.append)
+
+        assert len(result) == 2
+        assert any('Qflg' in str(m) for m in messages)
+
+    @pytest.mark.unit
     def test_unparseable_expression_is_ignored(self):
         cat = Table()
         cat['rmag'] = [10.0, 20.0]
@@ -705,6 +726,110 @@ class TestApplyFilters:
 
         assert len(catalogs._apply_filters(cat, {})) == 2
         assert len(catalogs._apply_filters(cat, None)) == 2
+
+
+_FAKE_VOTABLE = '''<?xml version="1.0"?>
+<VOTABLE version="1.3" xmlns="http://www.ivoa.net/xml/VOTable/v1.3">
+<RESOURCE type="results">
+<TABLE>
+<FIELD name="ra" datatype="double" ID="col_0"/>
+<FIELD name="dec" datatype="double" ID="col_1"/>
+<DATA><TABLEDATA>
+<TR><TD>10.0</TD><TD>20.0</TD></TR>
+</TABLEDATA></DATA>
+</TABLE>
+</RESOURCE>
+</VOTABLE>'''
+
+
+class _FakeTapResponse:
+    def __init__(self, status_code=200, headers=None, text='', content=None):
+        self.status_code = status_code
+        self.headers = headers or {}
+        self.text = text
+        self.content = content if content is not None else text.encode()
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.exceptions.HTTPError(f'{self.status_code} error')
+
+
+class _FakeTapSession:
+    """Scripts the IVOA UWS exchange (submit -> poll -> fetch) that
+    _tap_async_query drives, without any network access."""
+
+    def __init__(self, phases, error_text='', votable=_FAKE_VOTABLE):
+        self.phases = list(phases)
+        self.error_text = error_text
+        self.votable = votable
+        self.aborted = False
+        self.post_calls = []
+        self.get_calls = []
+
+    def post(self, url, data=None, timeout=None, allow_redirects=True):
+        self.post_calls.append((url, data, timeout))
+        if url.endswith('/async'):
+            return _FakeTapResponse(status_code=303, headers={'Location': 'http://example.test/async/job1'})
+        if (data or {}).get('PHASE') == 'ABORT':
+            self.aborted = True
+            return _FakeTapResponse(status_code=200, text='ABORTED')
+        raise AssertionError(f'unexpected POST {url}')
+
+    def get(self, url, timeout=None):
+        self.get_calls.append((url, timeout))
+        if url.endswith('/phase'):
+            phase = self.phases.pop(0) if self.phases else 'EXECUTING'
+            return _FakeTapResponse(status_code=200, text=phase)
+        if url.endswith('/error'):
+            return _FakeTapResponse(status_code=200, text=self.error_text)
+        if url.endswith('/results/result'):
+            return _FakeTapResponse(status_code=200, content=self.votable.encode())
+        raise AssertionError(f'unexpected GET {url}')
+
+    def close(self):
+        pass
+
+
+class TestTapAsyncQuery:
+    """Protocol-level tests for the hand-rolled IVOA UWS async client that
+    replaced GaiaClass/pyvo's async job wait, neither of which track an
+    overall deadline across polls (verified by reading their source)."""
+
+    @pytest.mark.unit
+    def test_happy_path_returns_parsed_table(self, monkeypatch):
+        session = _FakeTapSession(phases=['COMPLETED'])
+        monkeypatch.setattr(catalogs.requests, 'Session', lambda: session)
+
+        result = catalogs._tap_async_query('http://example.test', 'SELECT 1', timeout=(5, 10))
+
+        assert result.colnames == ['ra', 'dec']
+        assert result['ra'][0] == 10.0
+
+    @pytest.mark.unit
+    def test_error_phase_raises_and_logs(self, monkeypatch):
+        session = _FakeTapSession(phases=['ERROR'], error_text='bad query: syntax error')
+        monkeypatch.setattr(catalogs.requests, 'Session', lambda: session)
+        messages = []
+
+        with pytest.raises(RuntimeError, match='ERROR'):
+            catalogs._tap_async_query('http://example.test', 'SELECT bad', timeout=(5, 10), verbose=messages.append)
+
+        assert any('bad query' in str(m) for m in messages)
+
+    @pytest.mark.unit
+    def test_timeout_raises_and_aborts_with_warning(self, monkeypatch):
+        # the job never reaches a terminal phase, so this must give up once
+        # the deadline passes rather than polling forever
+        session = _FakeTapSession(phases=[])
+        monkeypatch.setattr(catalogs.requests, 'Session', lambda: session)
+        messages = []
+
+        with pytest.raises(TimeoutError):
+            catalogs._tap_async_query('http://example.test', 'SELECT 1', timeout=(0.1, 0.3), verbose=messages.append)
+
+        assert session.aborted
+        assert any('timeout' in str(m).lower() or 'did not complete' in str(m).lower() for m in messages)
+        assert any('abort' in str(m).lower() for m in messages)
 
 
 def _one_row_cat(ra, dec):
@@ -956,23 +1081,38 @@ class TestFallbackSources:
         assert cat['gmag'][0] == 15.0
         assert bool(cat['gmag'].mask[1])
 
-    @pytest.mark.unit
-    def test_fallback_gaiaedr3_maps_columns(self, monkeypatch):
+    @staticmethod
+    def _gaia_source_row(ra_j2000=10.0, dec_j2000=20.0):
+        """A minimal gaiadr3.gaia_source-shaped row for the eDR3 fallback tests
+        (ra_j2000/dec_j2000 stand in for the server-side EPOCH_PROP_POS result)."""
         raw = Table()
-        raw['ra'] = [10.0]
-        raw['dec'] = [20.0]
+        raw['source_id'] = [1]
+        raw['ra_j2000'] = [ra_j2000]
+        raw['dec_j2000'] = [dec_j2000]
         raw['ra_error'] = [0.1]
         raw['dec_error'] = [0.1]
+        raw['parallax'] = [5.0]
+        raw['parallax_error'] = [0.1]
+        raw['pmra'] = [12.3]
+        raw['pmra_error'] = [0.05]
+        raw['pmdec'] = [-4.5]
+        raw['pmdec_error'] = [0.05]
         raw['phot_g_mean_mag'] = [15.0]
+        raw['phot_g_mean_flux'] = [1.0e5]
+        raw['phot_g_mean_flux_error'] = [100.0]
         raw['phot_bp_mean_mag'] = [15.5]
+        raw['phot_bp_mean_flux'] = [6.0e4]
+        raw['phot_bp_mean_flux_error'] = [80.0]
         raw['phot_rp_mean_mag'] = [14.5]
+        raw['phot_rp_mean_flux'] = [1.4e5]
+        raw['phot_rp_mean_flux_error'] = [120.0]
         raw['ruwe'] = [1.0]
+        return raw
 
-        class FakeJob:
-            def get_results(self):
-                return raw
-
-        monkeypatch.setattr(catalogs.Gaia, 'launch_job_async', lambda *a, **kw: FakeJob())
+    @pytest.mark.unit
+    def test_fallback_gaiaedr3_maps_columns(self, monkeypatch):
+        raw = self._gaia_source_row()
+        monkeypatch.setattr(catalogs, '_tap_async_query', lambda *a, **kw: raw)
 
         cat = catalogs._fallback_gaiaedr3(10.0, 20.0, 0.1)
 
@@ -980,29 +1120,45 @@ class TestFallbackSources:
         assert cat['BPmag'][0] == 15.5
         assert cat['RPmag'][0] == 14.5
         assert cat['RUWE'][0] == 1.0
+        assert cat['Plx'][0] == 5.0
+        assert cat['pmRA'][0] == 12.3
+        assert cat['pmDE'][0] == -4.5
+        assert cat['e_Gmag'][0] == pytest.approx(2.5 / np.log(10) * 100.0 / 1.0e5)
+
+    @pytest.mark.unit
+    def test_fallback_gaiaedr3_requests_epoch_propagation_in_adql(self, monkeypatch):
+        """gaia_source reports ra/dec at ref_epoch (2016.0 for DR3); VizieR's
+        RAJ2000/DEJ2000 are propagated back to J2000 using the proper motion.
+        The archive's own EPOCH_PROP_POS function does this server-side -
+        validated against real VizieR data to ~1e-7" (see source docstring)."""
+        raw = self._gaia_source_row(ra_j2000=10.0001, dec_j2000=19.9998)
+        captured = {}
+
+        def fake_tap(base_url, query, timeout=(10, 60), verbose=False):
+            captured['query'] = query
+            return raw
+
+        monkeypatch.setattr(catalogs, '_tap_async_query', fake_tap)
+
+        cat = catalogs._fallback_gaiaedr3(10.0, 20.0, 0.1)
+
+        assert 'EPOCH_PROP_POS(' in captured['query']
+        assert 'COORD1(' in captured['query'] and 'COORD2(' in captured['query']
+        assert 'ref_epoch' in captured['query']
+        # the fallback must report whatever the server propagated, not the raw position
+        assert cat['RAJ2000'][0] == 10.0001
+        assert cat['DEJ2000'][0] == 19.9998
 
     @pytest.mark.unit
     def test_fallback_gaiaedr3_pushes_filter_to_adql(self, monkeypatch):
-        raw = Table()
-        raw['ra'] = [10.0]
-        raw['dec'] = [20.0]
-        raw['ra_error'] = [0.1]
-        raw['dec_error'] = [0.1]
-        raw['phot_g_mean_mag'] = [15.0]
-        raw['phot_bp_mean_mag'] = [15.5]
-        raw['phot_rp_mean_mag'] = [14.5]
-        raw['ruwe'] = [1.0]
+        raw = self._gaia_source_row()
         captured = {}
 
-        class FakeJob:
-            def get_results(self):
-                return raw
-
-        def fake_launch(query, verbose=False):
+        def fake_tap(base_url, query, timeout=(10, 60), verbose=False):
             captured['query'] = query
-            return FakeJob()
+            return raw
 
-        monkeypatch.setattr(catalogs.Gaia, 'launch_job_async', fake_launch)
+        monkeypatch.setattr(catalogs, '_tap_async_query', fake_tap)
 
         cat = catalogs._fallback_gaiaedr3(10.0, 20.0, 0.1, filters={'Gmag': '<19.0'})
 
@@ -1021,11 +1177,7 @@ class TestFallbackSources:
             raw[col + '_flux'] = [100.0]
             raw[col + '_flux_error'] = [1.0]
 
-        class FakeJob:
-            def get_results(self):
-                return raw
-
-        monkeypatch.setattr(catalogs.Gaia, 'launch_job_async', lambda *a, **kw: FakeJob())
+        monkeypatch.setattr(catalogs, '_tap_async_query', lambda *a, **kw: raw)
 
         cat = catalogs._fallback_gaiadr3syn(10.0, 20.0, 0.1)
 
@@ -1035,6 +1187,10 @@ class TestFallbackSources:
         assert cat['gmag'][0] == 15.0
         assert cat['Fg'][0] == 100.0
         assert cat['Fy'][0] == 100.0
+        # Unlike gaiaedr3, VizieR does not propagate I/360/syntphot positions
+        # to J2000, so ra/dec are used as-is here.
+        assert cat['RAJ2000'][0] == 10.0
+        assert cat['DEJ2000'][0] == 20.0
 
     @pytest.mark.unit
     def test_fallback_gaiadr3syn_pushes_filter_to_adql(self, monkeypatch):
@@ -1049,15 +1205,11 @@ class TestFallbackSources:
             raw[col + '_flux_error'] = [1.0]
         captured = {}
 
-        class FakeJob:
-            def get_results(self):
-                return raw
-
-        def fake_launch(query, verbose=False):
+        def fake_tap(base_url, query, timeout=(10, 60), verbose=False):
             captured['query'] = query
-            return FakeJob()
+            return raw
 
-        monkeypatch.setattr(catalogs.Gaia, 'launch_job_async', fake_launch)
+        monkeypatch.setattr(catalogs, '_tap_async_query', fake_tap)
 
         cat = catalogs._fallback_gaiadr3syn(10.0, 20.0, 0.1, filters={'rmag': '<20.0'})
 
@@ -1067,24 +1219,30 @@ class TestFallbackSources:
     @pytest.mark.unit
     def test_fallback_skymapper_maps_columns(self, monkeypatch):
         csv = (
-            'raj2000,dej2000,e_raj2000,e_dej2000,'
+            'raj2000,dej2000,e_raj2000,e_dej2000,flags,class_star,'
+            'u_psf,e_u_psf,v_psf,e_v_psf,'
             'g_psf,e_g_psf,r_psf,e_r_psf,i_psf,e_i_psf,z_psf,e_z_psf\n'
-            '10.0,-20.0,0.001,0.001,15.0,0.01,14.5,0.01,14.0,0.01,13.8,0.01\n'
+            '10.0,-20.0,0.001,0.001,3,0.95,16.5,0.02,16.0,0.02,15.0,0.01,14.5,0.01,14.0,0.01,13.8,0.01\n'
         )
         monkeypatch.setattr(catalogs.requests, 'get', lambda *a, **kw: _FakeResponse(csv))
 
         cat = catalogs._fallback_skymapper(10.0, -20.0, 0.1)
 
         assert cat['RAJ2000'][0] == 10.0 and cat['DEJ2000'][0] == -20.0
+        assert cat['uPSF'][0] == 16.5
+        assert cat['e_vPSF'][0] == 0.02
         assert cat['gPSF'][0] == 15.0
         assert cat['e_rPSF'][0] == 0.01
+        assert cat['flags'][0] == 3
+        assert cat['ClassStar'][0] == 0.95
 
     @pytest.mark.unit
     def test_fallback_skymapper_pushes_filter_to_adql(self, monkeypatch):
         csv = (
-            'raj2000,dej2000,e_raj2000,e_dej2000,'
+            'raj2000,dej2000,e_raj2000,e_dej2000,flags,class_star,'
+            'u_psf,e_u_psf,v_psf,e_v_psf,'
             'g_psf,e_g_psf,r_psf,e_r_psf,i_psf,e_i_psf,z_psf,e_z_psf\n'
-            '10.0,-20.0,0.001,0.001,15.0,0.01,14.5,0.01,14.0,0.01,13.8,0.01\n'
+            '10.0,-20.0,0.001,0.001,3,0.95,16.5,0.02,16.0,0.02,15.0,0.01,14.5,0.01,14.0,0.01,13.8,0.01\n'
         )
         captured = {}
 
@@ -1102,27 +1260,60 @@ class TestFallbackSources:
         assert 'r_psf < 18.0' in captured['query']
 
     @pytest.mark.unit
+    def test_fallback_skymapper_warns_when_row_cap_hit(self, monkeypatch):
+        header = (
+            'raj2000,dej2000,e_raj2000,e_dej2000,flags,class_star,'
+            'u_psf,e_u_psf,v_psf,e_v_psf,'
+            'g_psf,e_g_psf,r_psf,e_r_psf,i_psf,e_i_psf,z_psf,e_z_psf\n'
+        )
+        row = '10.0,-20.0,0.001,0.001,3,0.95,16.5,0.02,16.0,0.02,15.0,0.01,14.5,0.01,14.0,0.01,13.8,0.01\n'
+        monkeypatch.setattr(catalogs, '_SKYMAPPER_ROW_LIMIT', 2)
+        csv = header + row * 2
+        monkeypatch.setattr(catalogs.requests, 'get', lambda *a, **kw: _FakeResponse(csv))
+        messages = []
+
+        cat = catalogs._fallback_skymapper(10.0, -20.0, 0.1, verbose=messages.append)
+
+        assert len(cat) == 2
+        assert any('limit' in str(m).lower() for m in messages)
+
+    @pytest.mark.unit
     def test_fallback_2mass_maps_columns(self, monkeypatch):
         raw = Table()
         raw['ra'] = [10.0]
         raw['dec'] = [20.0]
+        raw['designation'] = ['00400119+2000440']
         raw['j_m'] = [14.0]
         raw['j_msigcom'] = [0.02]
         raw['h_m'] = [13.5]
         raw['h_msigcom'] = [0.02]
         raw['k_m'] = [13.0]
         raw['k_msigcom'] = [0.02]
+        raw['ph_qual'] = ['AAA']
+        raw['rd_flg'] = ['222']
+        raw['bl_flg'] = ['111']
+        raw['cc_flg'] = ['000']
+        raw['gal_contam'] = [0]
+        raw['mp_flg'] = [0]
 
-        monkeypatch.setattr(catalogs.Irsa, 'query_region', lambda *a, **kw: raw)
+        monkeypatch.setattr(catalogs, '_tap_async_query', lambda *a, **kw: raw)
 
         cat = catalogs._fallback_2mass(10.0, 20.0, 0.1)
 
         assert cat['Jmag'][0] == 14.0
         assert cat['Hmag'][0] == 13.5
         assert cat['Kmag'][0] == 13.0
+        assert cat['2MASS'][0] == '00400119+2000440'
+        assert cat['Qflg'][0] == 'AAA'
+        assert cat['Rflg'][0] == '222'
+        assert cat['Bflg'][0] == '111'
+        assert cat['Cflg'][0] == '000'
+        assert cat['Xflg'][0] == 0
+        assert cat['Aflg'][0] == 0
 
     @pytest.mark.unit
     def test_fallback_vhs_maps_columns_and_masks_sentinel(self, monkeypatch):
+        import astroquery.vsa as vsa_module
         raw = Table()
         raw['ra'] = [10.0, 10.1]
         raw['dec'] = [-20.0, -20.1]
@@ -1132,14 +1323,37 @@ class TestFallbackSources:
         raw['hAperMag3Err'] = [0.02, 0.02]
         raw['ksAperMag3'] = [16.0, 16.1]
         raw['ksAperMag3Err'] = [0.02, 0.02]
+        raw['mergedClassStat'] = [-120.0, 85.0]
+        raw['mergedClass'] = [-1, 1]
+        raw['pStar'] = [0.99, 0.05]
+        raw['pGalaxy'] = [0.01, 0.9]
+        raw['pNoise'] = [0.0, 0.0]
+        raw['yErrBits'] = [0, 0]
+        raw['yppErrBits'] = [0, 0]
+        raw['jErrBits'] = [0, 0]
+        raw['jppErrBits'] = [0, 0]
+        raw['hErrBits'] = [0, 0]
+        raw['hppErrBits'] = [0, 0]
+        raw['ksErrBits'] = [0, 0]
+        raw['ksppErrBits'] = [0, 0]
 
-        monkeypatch.setattr(catalogs.Vsa, 'query_region', lambda *a, **kw: raw)
+        monkeypatch.setattr(vsa_module.Vsa, 'query_region', lambda *a, **kw: raw)
 
         cat = catalogs._fallback_vhs(10.0, -20.0, 0.1)
 
         assert cat['Jap3'][0] == 17.0
         assert bool(cat['Jap3'].mask[1])  # VSA sentinel masked out
         assert cat['Ksap3'][0] == 16.0
+        # VizieR's exact short names for these (confirmed from its own query form)
+        assert cat['Mclass'][0] == -1
+        assert cat['Mstat'][0] == -120.0
+        assert cat['pStar'][0] == 0.99
+        assert cat['pGal'][0] == 0.01
+        assert cat['Jerrbits'][0] == 0
+        assert cat['Jperrbits'][0] == 0
+        assert 'pSaturated' not in cat.colnames  # not exposed by VizieR II/367
+        # Must not claim the VizieR-registered DR5 name for DR4 fallback data.
+        assert cat.meta['name'] == 'VISTA Hemisphere Survey DR4'
 
 
 if __name__ == '__main__':
