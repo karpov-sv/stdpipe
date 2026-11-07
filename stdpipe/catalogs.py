@@ -21,7 +21,7 @@ from astropy.time import Time
 from . import astrometry
 
 catalogs = {
-    'ps1': {'vizier': 'II/349/ps1', 'name': 'PanSTARRS DR1'},
+    'ps1': {'vizier': 'II/389/ps1_dr2', 'name': 'Pan-STARRS DR2'},
     'gaiadr2': {'vizier': 'I/345/gaia2', 'name': 'Gaia DR2', 'extra': ['E(BR/RP)']},
     'gaiadr3': {'vizier': 'I/355/gaiadr3', 'name': 'Gaia DR3'},
     'gaiadr3syn': {
