@@ -880,10 +880,10 @@ def clear_wcs(
                 is_delete = True
             if key in scamp_keywords:
                 is_delete = True
-            if re.match('^(A|B|AP|BP)_\d+_\d+$', key):
+            if re.match(r'^(A|B|AP|BP)_\d+_\d+$', key):
                 # SIP
                 is_delete = True
-            if re.match('^PV_?\d+_\d+$', key):
+            if re.match(r'^PV_?\d+_\d+$', key):
                 # PV
                 is_delete = True
             if key[0] == '_' and remove_underscored:
