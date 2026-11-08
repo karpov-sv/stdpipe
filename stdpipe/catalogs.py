@@ -758,6 +758,8 @@ def _query_vizier_region(vizier, coord, radius, catalog, cache=True):
 
 
 _FILTER_RE = re.compile(r'^\s*(<=|>=|==|!=|<|>)?\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*$')
+# VizieR filter operators -> ADQL
+_ADQL_OPS = {'==': '=', '!=': '<>'}
 
 # Fixed-size page/row caps for fallbacks without cursor-based pagination; a hit
 # result silently truncates coverage, so it is checked for and logged.
@@ -976,7 +978,8 @@ def _fallback_gaiaedr3(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=F
         gaia_col = gaia_columns.get(col)
         m = _FILTER_RE.match(str(expr)) if gaia_col else None
         if gaia_col and m:
-            conditions.append(f"{gaia_col} {m.group(1) or '='} {m.group(2)}")
+            op = m.group(1) or '='
+            conditions.append(f"{gaia_col} {_ADQL_OPS.get(op, op)} {m.group(2)}")
 
     try:
         log('Trying ESA Gaia archive (DR3 astrometry) as a fallback for Gaia eDR3')
@@ -1056,7 +1059,8 @@ def _fallback_gaiadr3syn(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose
         band = bands.get(col[:-3]) if col.endswith('mag') else None
         m = _FILTER_RE.match(str(expr)) if band else None
         if band and m:
-            conditions.append(f"s.{band}_mag {m.group(1) or '='} {m.group(2)}")
+            op = m.group(1) or '='
+            conditions.append(f"s.{band}_mag {_ADQL_OPS.get(op, op)} {m.group(2)}")
 
     try:
         log('Trying ESA Gaia archive (DR3 synthetic photometry) as a fallback')
@@ -1105,7 +1109,8 @@ def _fallback_skymapper(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=
         sm_col = sm_columns.get(col)
         m = _FILTER_RE.match(str(expr)) if sm_col else None
         if sm_col and m:
-            conditions.append(f"{sm_col} {m.group(1) or '='} {m.group(2)}")
+            op = m.group(1) or '='
+            conditions.append(f"{sm_col} {_ADQL_OPS.get(op, op)} {m.group(2)}")
 
     try:
         log('Trying SkyMapper TAP service as a fallback')
@@ -1206,14 +1211,16 @@ def _fallback_vhs(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False)
     """
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
     try:
-        from astroquery.vsa import Vsa
+        from astroquery.vsa import VsaClass
 
         log('Trying VISTA Science Archive (VHS DR4) as a fallback')
         coord = SkyCoord(ra0, dec0, unit='deg')
-        Vsa.TIMEOUT = max(timeout) if isinstance(timeout, (tuple, list)) else timeout
+        # A local instance to be able to set timeout
+        vsa = VsaClass()
+        vsa.TIMEOUT = max(timeout) if isinstance(timeout, (tuple, list)) else timeout
         with warnings.catch_warnings():
             warnings.simplefilter('ignore')
-            raw = Vsa.query_region(
+            raw = vsa.query_region(
                 coord, radius=sr0 * u.deg, database='VHSDR4', programme_id='VHS'
             )
     except Exception as e:

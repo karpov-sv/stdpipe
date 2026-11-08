@@ -1166,6 +1166,26 @@ class TestFallbackSources:
         assert 'phot_g_mean_mag < 19.0' in captured['query']
 
     @pytest.mark.unit
+    @pytest.mark.parametrize('expr,expected_op', [('==15.0', '='), ('!=15.0', '<>')])
+    def test_fallback_gaiaedr3_maps_equality_operators_to_valid_adql(self, monkeypatch, expr, expected_op):
+        """'==' and '!=' are VizieR filter syntax, not valid ADQL - pushing them
+        down unchanged breaks the query server-side (ADQL uses '=' and '<>')."""
+        raw = self._gaia_source_row()
+        captured = {}
+
+        def fake_tap(base_url, query, timeout=(10, 60), verbose=False):
+            captured['query'] = query
+            return raw
+
+        monkeypatch.setattr(catalogs, '_tap_async_query', fake_tap)
+
+        cat = catalogs._fallback_gaiaedr3(10.0, 20.0, 0.1, filters={'Gmag': expr})
+
+        assert cat is not None
+        assert f'phot_g_mean_mag {expected_op} 15.0' in captured['query']
+        assert '==' not in captured['query'] and '!=' not in captured['query']
+
+    @pytest.mark.unit
     def test_fallback_gaiadr3syn_maps_columns(self, monkeypatch):
         raw = Table()
         raw['source_id'] = [1]
@@ -1260,6 +1280,31 @@ class TestFallbackSources:
         assert 'r_psf < 18.0' in captured['query']
 
     @pytest.mark.unit
+    @pytest.mark.parametrize('expr,expected_op', [('==18.0', '='), ('!=18.0', '<>')])
+    def test_fallback_skymapper_maps_equality_operators_to_valid_adql(self, monkeypatch, expr, expected_op):
+        """'==' and '!=' are VizieR filter syntax, not valid ADQL - pushing them
+        down unchanged breaks the query server-side (ADQL uses '=' and '<>')."""
+        csv = (
+            'raj2000,dej2000,e_raj2000,e_dej2000,flags,class_star,'
+            'u_psf,e_u_psf,v_psf,e_v_psf,'
+            'g_psf,e_g_psf,r_psf,e_r_psf,i_psf,e_i_psf,z_psf,e_z_psf\n'
+            '10.0,-20.0,0.001,0.001,3,0.95,16.5,0.02,16.0,0.02,15.0,0.01,14.5,0.01,14.0,0.01,13.8,0.01\n'
+        )
+        captured = {}
+
+        def fake_get(url, params=None, timeout=None):
+            captured['query'] = params['QUERY']
+            return _FakeResponse(csv)
+
+        monkeypatch.setattr(catalogs.requests, 'get', fake_get)
+
+        cat = catalogs._fallback_skymapper(10.0, -20.0, 0.1, filters={'rPSF': expr})
+
+        assert cat is not None
+        assert f'r_psf {expected_op} 18.0' in captured['query']
+        assert '==' not in captured['query'] and '!=' not in captured['query']
+
+    @pytest.mark.unit
     def test_fallback_skymapper_warns_when_row_cap_hit(self, monkeypatch):
         header = (
             'raj2000,dej2000,e_raj2000,e_dej2000,flags,class_star,'
@@ -1337,7 +1382,7 @@ class TestFallbackSources:
         raw['ksErrBits'] = [0, 0]
         raw['ksppErrBits'] = [0, 0]
 
-        monkeypatch.setattr(vsa_module.Vsa, 'query_region', lambda *a, **kw: raw)
+        monkeypatch.setattr(vsa_module.VsaClass, 'query_region', lambda *a, **kw: raw)
 
         cat = catalogs._fallback_vhs(10.0, -20.0, 0.1)
 
@@ -1354,6 +1399,36 @@ class TestFallbackSources:
         assert 'pSaturated' not in cat.colnames  # not exposed by VizieR II/367
         # Must not claim the VizieR-registered DR5 name for DR4 fallback data.
         assert cat.meta['name'] == 'VISTA Hemisphere Survey DR4'
+
+    @pytest.mark.unit
+    def test_fallback_vhs_does_not_mutate_the_shared_vsa_singleton(self, monkeypatch):
+        """Vsa is a process-wide shared astroquery singleton; setting TIMEOUT on
+        it directly would leak into any other code using the same singleton."""
+        import astroquery.vsa as vsa_module
+        raw = Table()
+        raw['ra'] = [10.0]
+        raw['dec'] = [-20.0]
+        raw['jAperMag3'] = [17.0]
+        raw['jAperMag3Err'] = [0.02]
+        raw['hAperMag3'] = [16.5]
+        raw['hAperMag3Err'] = [0.02]
+        raw['ksAperMag3'] = [16.0]
+        raw['ksAperMag3Err'] = [0.02]
+        raw['mergedClassStat'] = [-120.0]
+        raw['mergedClass'] = [-1]
+        raw['pStar'] = [0.99]
+        raw['pGalaxy'] = [0.01]
+        raw['pNoise'] = [0.0]
+        for band in ['y', 'j', 'h', 'ks']:
+            raw[band + 'ErrBits'] = [0]
+            raw[band + 'ppErrBits'] = [0]
+
+        monkeypatch.setattr(vsa_module.VsaClass, 'query_region', lambda *a, **kw: raw)
+        original_timeout = vsa_module.Vsa.TIMEOUT
+
+        catalogs._fallback_vhs(10.0, -20.0, 0.1, timeout=(1.0, 999.0))
+
+        assert vsa_module.Vsa.TIMEOUT == original_timeout
 
 
 if __name__ == '__main__':
