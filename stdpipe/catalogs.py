@@ -10,7 +10,8 @@ from astropy.io.votable import parse as parse_votable
 import requests
 
 from astroquery.vizier import Vizier
-from astroquery.exceptions import TableParseError
+from astroquery.mast import CatalogsClass
+from astroquery.exceptions import TableParseError, TimeoutError as AstroqueryTimeoutError
 from astroquery.xmatch import XMatch
 from astroquery.imcce import Skybot
 from astroquery.ipac.ned import Ned
@@ -1497,6 +1498,135 @@ def get_cat_vizier(
         # Augment catalogue with additional bandpasses
         augment_cat_bands(cat, catalog=catalog if catalog in catalogs else None, verbose=verbose)
 
+    return cat
+
+
+def get_cat_panstarrs(
+    ra0,
+    dec0,
+    sr0,
+    limit=-1,
+    filters=None,
+    extra=None,
+    get_distance=False,
+    augment_bands=True,
+    page_size=50000,
+    verbose=False,
+    **kwargs,
+):
+    """Download Pan-STARRS DR2 mean PSF photometry directly from MAST.
+
+    This is an independent alternative to ``get_cat_vizier(..., catalog="ps1")``.
+    The returned positions and grizy PSF magnitudes use the same column names.
+    No photometric quality or star/galaxy cuts are applied automatically.
+
+    Parameters
+    ----------
+    ra0, dec0 : float
+        ICRS field center in degrees.
+    sr0 : float
+        Cone radius in degrees, greater than zero and at most 1 (the MAST limit).
+    limit : int, optional
+        Maximum number of rows to retrieve; -1 retrieves all pages.
+    filters : dict, optional
+        Astroquery MAST column filters, e.g. ``{"rMeanPSFMag": [("lt", 18)],
+        "nDetections": [("gte", 2)]}``. These are not VizieR filter expressions.
+    extra : list of str, optional
+        Additional native MAST columns to return, e.g. ``["rMeanKronMag"]``.
+        Their names are retained unchanged.
+    get_distance : bool, optional
+        Add ``_r``, the angular distance from the query center in degrees.
+    augment_bands : bool, optional
+        Apply the same PS1 band transformations as :func:`get_cat_vizier`.
+    page_size : int, optional
+        Maximum rows per request. All pages are retrieved unless limited by limit.
+    verbose : bool or callable, optional
+        Logging control.
+
+    Returns
+    -------
+    astropy.table.Table or None
+        Catalogue with ``RAJ2000``, ``DEJ2000`` (degrees), ``e_RAJ2000``,
+        ``e_DEJ2000`` (arcseconds), ``gmag`` through ``ymag`` and corresponding
+        ``e_gmag`` etc. (magnitudes). Missing measurements in these standard
+        columns, including MAST's -999 sentinel, are masked. Rows without valid
+        positions are discarded.
+        A successful empty query returns an empty table; a request or response
+        parsing failure returns None, never a partial catalogue.
+
+    Notes
+    -----
+    Uses :meth:`astroquery.mast.CatalogsClass.query_region`, independently of
+    VizieR. Request handling and timeouts follow Astroquery's MAST configuration.
+    """
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
+    if not np.all(np.isfinite([ra0, dec0, sr0])) or not 0 < sr0 <= 1:
+        raise ValueError("Coordinates must be finite and radius must be in (0, 1] degrees")
+    if not isinstance(limit, (int, np.integer)) or limit < -1:
+        raise ValueError("limit must be -1 or a non-negative integer")
+    if not isinstance(page_size, (int, np.integer)) or page_size < 1:
+        raise ValueError("page_size must be a positive integer")
+    coord = SkyCoord(ra0, dec0, unit="deg")
+    url = "https://catalogs.mast.stsci.edu/api/v0.1/panstarrs/dr2/mean.json"
+    mapping = {
+        "raMean": ("RAJ2000", u.deg),
+        "decMean": ("DEJ2000", u.deg),
+        "raMeanErr": ("e_RAJ2000", u.arcsec),
+        "decMeanErr": ("e_DEJ2000", u.arcsec),
+    }
+    for band in "grizy":
+        mapping[f"{band}MeanPSFMag"] = (f"{band}mag", u.mag)
+        mapping[f"{band}MeanPSFMagErr"] = (f"e_{band}mag", u.mag)
+    columns = list(dict.fromkeys(["objID", *mapping, *(extra or [])]))
+    criteria = dict(filters or {})
+    reserved = {"coordinates", "ra", "dec", "radius", "sr", "page", "pagesize", "columns",
+                "sort_by", "catalog", "version", "data_release", "table"}
+    if any(key.lower() in reserved for key in criteria):
+        raise ValueError("filters must contain MAST column filters, not query controls")
+    # A fixed page size and unique sort key keep page offsets stable.
+    pagesize = min(page_size, limit) if limit > 0 else page_size
+    mast = CatalogsClass()
+    pages = []
+    count = 0
+    page_number = 1
+    while limit != 0:
+        log("Requesting Pan-STARRS DR2 from MAST, page", page_number)
+        try:
+            page = mast.query_region(
+                coord, radius=sr0*u.deg, catalog="Panstarrs", data_release="dr2",
+                table="mean", columns=columns, sort_by="objID",
+                pagesize=pagesize, page=page_number, **criteria)
+            if not len(page):
+                break
+            if not set(columns).issubset(page.colnames):
+                raise ValueError("MAST response is missing requested columns")
+        except (requests.exceptions.RequestException, TableParseError,
+                AstroqueryTimeoutError, ConnectionError, ValueError) as exc:
+            log("Pan-STARRS query failed:", str(exc))
+            return None
+        pages.append(page)
+        count += len(page)
+        if len(page) < pagesize or (limit > 0 and count >= limit):
+            break
+        page_number += 1
+    cat = (vstack(pages, metadata_conflicts="silent") if pages else
+           Table(names=columns, dtype=[np.int64 if name == "objID" else float for name in columns]))
+    if limit >= 0:
+        cat = cat[:limit]
+    for source, (target, unit) in mapping.items():
+        values = np.asarray(np.ma.filled(cat[source].astype(float), np.nan))
+        cat.replace_column(source, MaskedColumn(
+            values, name=source, mask=~np.isfinite(values) | (values == -999), unit=unit))
+        cat.rename_column(source, target)
+    cat = cat[~(np.ma.getmaskarray(cat["RAJ2000"]) | np.ma.getmaskarray(cat["DEJ2000"]))]
+    cat.meta.update(name="Pan-STARRS DR2", source="MAST", release="dr2",
+                    table="mean", url=url)
+    if get_distance:
+        cat["_r"] = astrometry.spherical_distance(ra0, dec0, cat["RAJ2000"], cat["DEJ2000"])
+        cat["_r"].unit = u.deg
+    if augment_bands:
+        augment_cat_bands(cat, catalog="ps1", verbose=verbose)
+    log("Got", len(cat), "entries from MAST")
     return cat
 
 
