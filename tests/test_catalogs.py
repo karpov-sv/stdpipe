@@ -526,7 +526,7 @@ class TestVizierMirrors:
         cat, calls = self._query(monkeypatch, {DEFAULT_SERVER: 'empty', MIRROR: 'ok'})
 
         assert cat is None
-        assert calls == [(DEFAULT_SERVER, True)]
+        assert calls == [(DEFAULT_SERVER, True),(DEFAULT_SERVER, False)]
 
     @pytest.mark.unit
     def test_network_error_falls_back_to_mirror(self, monkeypatch):
@@ -954,7 +954,7 @@ class TestFallbackDispatch:
         cat = catalogs.get_cat_vizier(10.0, 20.0, 0.1, 'ps1', augment_bands=False)
 
         assert cat is None
-        assert fake.calls == [(DEFAULT_SERVER, True)]
+        assert fake.calls == [(DEFAULT_SERVER, True),(DEFAULT_SERVER, False)]
 
 
 class _FakeResponse:

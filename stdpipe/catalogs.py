@@ -1380,6 +1380,9 @@ def get_cat_vizier(
 
         try:
             cats = _query_vizier_region(vizier, coord, sr0 * u.deg, vizier_id, cache=True)
+            if not cats or not len(cats) == 1:
+                # Possibly a stale cached answer - re-query the same server
+                cats = _query_vizier_region(vizier, coord, sr0 * u.deg, vizier_id, cache=False)
             break
         except (requests.exceptions.RequestException, TableParseError, VizierQueryError) as e:
             # Network-level failure, an unparseable response, or an error reported by the server - try the next server
