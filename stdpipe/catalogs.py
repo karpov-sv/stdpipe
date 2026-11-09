@@ -757,9 +757,40 @@ def _query_vizier_region(vizier, coord, radius, catalog, cache=True):
     return cats
 
 
-_FILTER_RE = re.compile(r'^\s*(<=|>=|==|!=|<|>)?\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*$')
+_FILTER_NUM = r'-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?'
+_FILTER_RE = re.compile(r'^\s*(<=|>=|==|!=|<|>)?\s*(' + _FILTER_NUM + r')\s*$')
+_FILTER_RANGE_RE = re.compile(r'^\s*(' + _FILTER_NUM + r')\s*\.\.\s*(' + _FILTER_NUM + r')\s*$')
+
+
+def _parse_filter(expr):
+    """Parse a simple VizieR numeric filter expression into a list of
+    ``(op, value)`` conditions, all of which must hold.
+
+    Supports single comparisons (``'<20'``, ``'>=15'``, ``'==3'``, bare ``'3'``)
+    and inclusive ranges (``'15..20'``). Returns None if ``expr`` is not one
+    of these forms. ``value`` is kept as the original string.
+    """
+    expr = str(expr)
+
+    m = _FILTER_RANGE_RE.match(expr)
+    if m:
+        return [('>=', m.group(1)), ('<=', m.group(2))]
+
+    m = _FILTER_RE.match(expr)
+    if m:
+        return [(m.group(1) or '==', m.group(2))]
+
+    return None
+
+
 # VizieR filter operators -> ADQL
 _ADQL_OPS = {'==': '=', '!=': '<>'}
+
+
+def _adql_conditions(column, expr):
+    """ADQL ``WHERE`` terms for a simple VizieR filter on ``column``, or an
+    empty list if ``expr`` cannot be translated."""
+    return [f"{column} {_ADQL_OPS.get(op, op)} {value}" for op, value in _parse_filter(expr) or []]
 
 # Fixed-size page/row caps for fallbacks without cursor-based pagination; a hit
 # result silently truncates coverage, so it is checked for and logged.
@@ -789,7 +820,8 @@ def _coerce_numeric(column):
 
 
 def _apply_filters(cat, filters, verbose=False):
-    """Apply simple VizieR-style numeric column filters (e.g. ``'<20'``) client-side.
+    """Apply simple VizieR-style numeric column filters (e.g. ``'<20'`` or
+    ``'15..20'``) client-side.
 
     Note: VizieR applies ``filters`` server-side via ``column_filters``
     """
@@ -806,20 +838,22 @@ def _apply_filters(cat, filters, verbose=False):
             log(f"Warning: filter column {col!r} is not in the fallback catalogue, cannot apply {col}{expr!r}")
             continue
 
-        m = _FILTER_RE.match(str(expr))
-        if not m:
+        conditions = _parse_filter(expr)
+        if not conditions:
             log(f"Warning: cannot apply filter {col}{expr!r} to fallback catalogue, skipping")
             continue
 
-        op = ops[m.group(1) or '==']
-        value = float(m.group(2))
         try:
             column = np.ma.filled(np.ma.asarray(cat[col], dtype=float), np.nan)
         except (TypeError, ValueError):
             log(f"Warning: column {col!r} is not numeric, cannot apply filter {col}{expr!r}")
             continue
 
-        cat = cat[op(column, value)]
+        idx = np.ones(len(cat), dtype=bool)
+        for op, value in conditions:
+            idx &= ops[op](column, float(value))
+
+        cat = cat[idx]
 
     return cat
 
@@ -918,13 +952,11 @@ def _fallback_ps1(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False)
     }
     for col, expr in (filters or {}).items():
         mast_col = mast_columns.get(col)
-        m = _FILTER_RE.match(str(expr)) if mast_col else None
-        if mast_col and m:
-            op = m.group(1) or '=='
-            params[f'{mast_col}.{mast_ops[op]}'] = m.group(2)
+        for op, value in (_parse_filter(expr) or []) if mast_col else []:
+            params[f'{mast_col}.{mast_ops[op]}'] = value
             if op in ('<', '<='):
                 # MAST encodes a missing value as -999
-                params[f'{mast_col}.gt'] = '0'
+                params.setdefault(f'{mast_col}.gt', '0')
 
     try:
         log('Trying MAST PanSTARRS DR1 mean-object API as a fallback')
@@ -976,10 +1008,8 @@ def _fallback_gaiaedr3(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=F
     conditions = [f"1=CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', {ra0}, {dec0}, {sr0}))"]
     for col, expr in (filters or {}).items():
         gaia_col = gaia_columns.get(col)
-        m = _FILTER_RE.match(str(expr)) if gaia_col else None
-        if gaia_col and m:
-            op = m.group(1) or '='
-            conditions.append(f"{gaia_col} {_ADQL_OPS.get(op, op)} {m.group(2)}")
+        if gaia_col:
+            conditions += _adql_conditions(gaia_col, expr)
 
     try:
         log('Trying ESA Gaia archive (DR3 astrometry) as a fallback for Gaia eDR3')
@@ -1057,10 +1087,8 @@ def _fallback_gaiadr3syn(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose
     ]
     for col, expr in (filters or {}).items():
         band = bands.get(col[:-3]) if col.endswith('mag') else None
-        m = _FILTER_RE.match(str(expr)) if band else None
-        if band and m:
-            op = m.group(1) or '='
-            conditions.append(f"s.{band}_mag {_ADQL_OPS.get(op, op)} {m.group(2)}")
+        if band:
+            conditions += _adql_conditions(f"s.{band}_mag", expr)
 
     try:
         log('Trying ESA Gaia archive (DR3 synthetic photometry) as a fallback')
@@ -1107,10 +1135,8 @@ def _fallback_skymapper(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=
     ]
     for col, expr in (filters or {}).items():
         sm_col = sm_columns.get(col)
-        m = _FILTER_RE.match(str(expr)) if sm_col else None
-        if sm_col and m:
-            op = m.group(1) or '='
-            conditions.append(f"{sm_col} {_ADQL_OPS.get(op, op)} {m.group(2)}")
+        if sm_col:
+            conditions += _adql_conditions(sm_col, expr)
 
     try:
         log('Trying SkyMapper TAP service as a fallback')
@@ -1421,7 +1447,10 @@ def get_cat_vizier(
 
         cat = _apply_filters(cat, filters, verbose=verbose)
         if limit and limit > 0 and len(cat) > limit:
-            cat = cat[:limit]
+            # Keep the sources closest to the field center, not an arbitrary
+            # subset in whatever order the fallback server returned them
+            dist = astrometry.spherical_distance(ra0, dec0, cat['RAJ2000'], cat['DEJ2000'])
+            cat = cat[np.argsort(np.ma.filled(np.ma.asarray(dist, dtype=float), np.inf))[:limit]]
 
         if not len(cat):
             log('Fallback catalogue', catalog, 'is empty after applying filters')

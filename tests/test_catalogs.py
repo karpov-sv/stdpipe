@@ -660,6 +660,27 @@ class TestCoerceNumeric:
         assert result[2] == 3.0
 
 
+class TestParseFilter:
+    """Test parsing of simple VizieR filter expressions for the fallback sources."""
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize('expr,expected', [
+        ('<20', [('<', '20')]),
+        ('>=15.5', [('>=', '15.5')]),
+        ('3', [('==', '3')]),
+        ('!=-1e3', [('!=', '-1e3')]),
+        ('15..20', [('>=', '15'), ('<=', '20')]),
+        ('-2.5..-1', [('>=', '-2.5'), ('<=', '-1')]),
+    ])
+    def test_supported_forms(self, expr, expected):
+        assert catalogs._parse_filter(expr) == expected
+
+    @pytest.mark.unit
+    @pytest.mark.parametrize('expr', ['not a filter', '<20 & >10', '15..', '..20', 'A*'])
+    def test_unsupported_forms(self, expr):
+        assert catalogs._parse_filter(expr) is None
+
+
 class TestApplyFilters:
     """Test the client-side filter re-implementation used for fallback catalogues."""
 
@@ -671,6 +692,8 @@ class TestApplyFilters:
         ('>=15', [15.0, 20.0]),
         ('==15', [15.0]),
         ('!=15', [10.0, 12.0, 20.0]),
+        ('12..15', [12.0, 15.0]),
+        (' 11.5 .. 20 ', [12.0, 15.0, 20.0]),
     ])
     def test_operators(self, expr, expected):
         cat = Table()
@@ -883,6 +906,20 @@ class TestFallbackDispatch:
         assert cat['rmag'][0] < 18
 
     @pytest.mark.unit
+    def test_fallback_limit_keeps_sources_nearest_to_center(self, monkeypatch):
+        """The fallback servers return rows in arbitrary order, so truncating to
+        ``limit`` must keep the sources closest to the field center."""
+        def fake_fallback(ra0, dec0, sr0, filters=None, timeout=None, verbose=False):
+            cat = Table()
+            cat['RAJ2000'] = [10.09, 10.0, 10.05, 10.02]
+            cat['DEJ2000'] = [20.0, 20.0, 20.0, 20.0]
+            return cat
+
+        cat = self._query(monkeypatch, fake_fallback, limit=2)
+
+        assert list(cat['RAJ2000']) == [10.0, 10.02]
+
+    @pytest.mark.unit
     def test_returns_none_when_fallback_returns_none(self, monkeypatch):
         cat = self._query(monkeypatch, lambda *a, **kw: None)
 
@@ -1039,6 +1076,30 @@ class TestFallbackSources:
         assert captured.get('rMeanPSFMag.gt') == '0'  # excludes MAST's -999 sentinel
 
     @pytest.mark.unit
+    def test_fallback_ps1_pushes_range_filter_to_mast_params(self, monkeypatch):
+        captured = {}
+
+        def fake_get(url, params=None, timeout=None):
+            captured.update(params)
+            csv = (
+                'raMean,decMean,raMeanErr,decMeanErr,'
+                'gMeanPSFMag,gMeanPSFMagErr,rMeanPSFMag,rMeanPSFMagErr,'
+                'iMeanPSFMag,iMeanPSFMagErr,zMeanPSFMag,zMeanPSFMagErr,'
+                'yMeanPSFMag,yMeanPSFMagErr\n'
+                '10.0,20.0,0.001,0.001,15.0,0.01,16.5,0.01,14.0,0.01,13.8,0.01,13.7,0.01\n'
+            )
+            return _FakeResponse(csv)
+
+        monkeypatch.setattr(catalogs.requests, 'get', fake_get)
+
+        cat = catalogs._fallback_ps1(10.0, 20.0, 0.1, filters={'rmag': '15..20'})
+
+        assert cat is not None
+        assert captured.get('rMeanPSFMag.gte') == '15'
+        assert captured.get('rMeanPSFMag.lte') == '20'
+        assert captured.get('rMeanPSFMag.gt') == '0'
+
+    @pytest.mark.unit
     def test_fallback_ps1_ignores_filter_on_unmapped_column(self, monkeypatch):
         captured = {}
 
@@ -1164,6 +1225,23 @@ class TestFallbackSources:
 
         assert cat is not None
         assert 'phot_g_mean_mag < 19.0' in captured['query']
+
+    @pytest.mark.unit
+    def test_fallback_gaiaedr3_pushes_range_filter_to_adql(self, monkeypatch):
+        raw = self._gaia_source_row()
+        captured = {}
+
+        def fake_tap(base_url, query, timeout=(10, 60), verbose=False):
+            captured['query'] = query
+            return raw
+
+        monkeypatch.setattr(catalogs, '_tap_async_query', fake_tap)
+
+        cat = catalogs._fallback_gaiaedr3(10.0, 20.0, 0.1, filters={'Gmag': '12..19'})
+
+        assert cat is not None
+        assert 'phot_g_mean_mag >= 12' in captured['query']
+        assert 'phot_g_mean_mag <= 19' in captured['query']
 
     @pytest.mark.unit
     @pytest.mark.parametrize('expr,expected_op', [('==15.0', '='), ('!=15.0', '<>')])
