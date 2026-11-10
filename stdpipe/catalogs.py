@@ -11,7 +11,7 @@ import requests
 
 from astroquery.vizier import Vizier
 from astroquery.mast import CatalogsClass
-from astroquery.exceptions import TableParseError, TimeoutError as AstroqueryTimeoutError
+from astroquery.exceptions import TableParseError, RemoteServiceError, TimeoutError as AstroqueryTimeoutError
 from astroquery.xmatch import XMatch
 from astroquery.imcce import Skybot
 from astroquery.ipac.ned import Ned
@@ -1512,13 +1512,15 @@ def get_cat_panstarrs(
     augment_bands=True,
     page_size=50000,
     verbose=False,
-    **kwargs,
 ):
     """Download Pan-STARRS DR2 mean PSF photometry directly from MAST.
 
     This is an independent alternative to ``get_cat_vizier(..., catalog="ps1")``.
     The returned positions and grizy PSF magnitudes use the same column names.
     No photometric quality or star/galaxy cuts are applied automatically.
+    DR2 mean-object photometry does not necessarily extend deeper than DR1 mean
+    photometry. Unlike the VizieR fallback, this function does not first try CDS
+    servers or require three detections per object.
 
     Parameters
     ----------
@@ -1527,10 +1529,12 @@ def get_cat_panstarrs(
     sr0 : float
         Cone radius in degrees, greater than zero and at most 1 (the MAST limit).
     limit : int, optional
-        Maximum number of rows to retrieve; -1 retrieves all pages.
+        Maximum number of rows to retrieve; -1 retrieves all pages. The limit
+        applies before rows with invalid coordinates are discarded.
     filters : dict, optional
         Astroquery MAST column filters, e.g. ``{"rMeanPSFMag": [("lt", 18)],
         "nDetections": [("gte", 2)]}``. These are not VizieR filter expressions.
+        No detection-count threshold or other quality cut is applied by default.
     extra : list of str, optional
         Additional native MAST columns to return, e.g. ``["rMeanKronMag"]``.
         Their names are retained unchanged.
@@ -1540,6 +1544,7 @@ def get_cat_panstarrs(
         Apply the same PS1 band transformations as :func:`get_cat_vizier`.
     page_size : int, optional
         Maximum rows per request. All pages are retrieved unless limited by limit.
+        Paging uses the unique ``objID`` as its sort key.
     verbose : bool or callable, optional
         Logging control.
 
@@ -1551,7 +1556,8 @@ def get_cat_panstarrs(
         ``e_gmag`` etc. (magnitudes). Missing measurements in these standard
         columns, including MAST's -999 sentinel, are masked. Rows without valid
         positions are discarded.
-        A successful empty query returns an empty table; a request or response
+        A successful empty query returns an empty table, unlike the ``None``
+        returned for an empty ``get_cat_vizier`` result. A request or response
         parsing failure returns None, never a partial catalogue.
 
     Notes
@@ -1601,7 +1607,7 @@ def get_cat_panstarrs(
             if not set(columns).issubset(page.colnames):
                 raise ValueError("MAST response is missing requested columns")
         except (requests.exceptions.RequestException, TableParseError,
-                AstroqueryTimeoutError, ConnectionError, ValueError) as exc:
+                AstroqueryTimeoutError, RemoteServiceError, ConnectionError, ValueError) as exc:
             log("Pan-STARRS query failed:", str(exc))
             return None
         pages.append(page)
