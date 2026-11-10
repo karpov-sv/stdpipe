@@ -24,6 +24,7 @@ catalogs = {
     'ps1': {'vizier': 'II/389/ps1_dr2', 'name': 'Pan-STARRS DR2'},
     'gaiadr2': {'vizier': 'I/345/gaia2', 'name': 'Gaia DR2', 'extra': ['E(BR/RP)']},
     'gaiadr3': {'vizier': 'I/355/gaiadr3', 'name': 'Gaia DR3'},
+    'gaiaedr3': {'vizier': 'I/350/gaiaedr3', 'name': 'Gaia EDR3'},
     'gaiadr3syn': {
         'vizier': 'I/360/syntphot',
         'name': 'Gaia DR3 synthetic photometry',
