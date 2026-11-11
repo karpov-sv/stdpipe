@@ -82,8 +82,6 @@ catalogs = {
         ]
     },
 }
-catalogs["panstarrs"] = catalogs["ps1"]
-catalogs["refcat2"] = catalogs["atlas"]
 
 
 def _detect_catalog_type(cat):
