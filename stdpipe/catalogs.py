@@ -705,7 +705,8 @@ def augment_cat_bands(cat, catalog=None, verbose=False):
 # VizieR servers tried, in order, when the default one (astroquery.vizier.conf.server) fails.
 # Mirrors may lack data for some catalogues and then report QUERY_STATUS="ERROR" (e.g. CfA has
 # no Gaia DR3 synthetic photometry, IDIA lacks PS1, Gaia DR2/EDR3, ATLAS-RefCat2, SkyMapper, VHS),
-# so the next one is tried in that case
+# or answer cleanly with no rows (e.g. CfA for I/355/gaiadr3), so the next one is tried in
+# both cases. Only an empty answer from the default server is trusted as an empty field
 vizier_mirrors = ['vizier.cfa.harvard.edu', 'vizier.idia.ac.za']
 
 
@@ -793,9 +794,11 @@ def _adql_conditions(column, expr):
     empty list if ``expr`` cannot be translated."""
     return [f"{column} {_ADQL_OPS.get(op, op)} {value}" for op, value in _parse_filter(expr) or []]
 
-# Fixed-size page/row caps for fallbacks without cursor-based pagination; a hit
-# result silently truncates coverage, so it is checked for and logged.
+# Page size and maximal number of pages for the paginated MAST fallback, and
+# the row cap for the SkyMapper one. Hitting a cap truncates coverage, so it is
+# checked for and logged.
 _MAST_PAGE_SIZE = 50000
+_MAST_MAX_PAGES = 20
 _SKYMAPPER_ROW_LIMIT = 100000
 
 
@@ -959,26 +962,37 @@ def _fallback_ps1(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False)
                 # MAST encodes a missing value as -999
                 params.setdefault(f'{mast_col}.gt', '0')
 
+    # Sorting by the unique objID keeps page offsets stable between requests
+    params['sort_by'] = 'objID'
+
+    pages = []
     try:
         log('Trying MAST PanSTARRS DR1 mean-object API as a fallback')
-        r = requests.get(
-            'https://catalogs.mast.stsci.edu/api/v0.1/panstarrs/dr1/mean.csv',
-            params=params,
-            timeout=timeout,
-        )
-        r.raise_for_status()
-        if not r.text.strip():
-            return None
-        raw = Table.read(io.BytesIO(r.content), format='ascii.csv')
+        for page in range(1, _MAST_MAX_PAGES + 1):
+            r = requests.get(
+                'https://catalogs.mast.stsci.edu/api/v0.1/panstarrs/dr1/mean.csv',
+                params=dict(params, page=page),
+                timeout=timeout,
+            )
+            r.raise_for_status()
+            if not r.text.strip():
+                break
+            raw = Table.read(io.BytesIO(r.content), format='ascii.csv')
+            if len(raw):
+                pages.append(raw)
+            if len(raw) < params['pagesize']:
+                break
+        else:
+            log(f"Warning: MAST PanSTARRS DR1 fallback hit the {_MAST_MAX_PAGES}-page limit, results may be incomplete")
     except Exception as e:
+        # Never return a partial catalogue if a later page fails
         log('MAST PanSTARRS fallback failed:', str(e)[:200])
         return None
 
-    if not len(raw):
+    if not pages:
         return None
 
-    if len(raw) >= params['pagesize']:
-        log(f"Warning: MAST PanSTARRS DR1 fallback hit the {params['pagesize']}-row page limit, results may be incomplete")
+    raw = vstack(pages, metadata_conflicts='silent') if len(pages) > 1 else pages[0]
 
     cat = Table()
     cat['RAJ2000'] = raw['raMean']
@@ -1333,12 +1347,14 @@ def get_cat_vizier(
     failure and is not retried elsewhere: it is only re-queried once on the same
     server, bypassing the cache.
 
-    If VizieR never managed to answer at all, and ``catalog`` is one of ``ps1``,
-    ``gaiaedr3``, ``gaiadr3syn``, ``skymapper``, ``2mass`` or ``vhs``, the
-    catalogue is instead fetched from a dedicated non-VizieR mirror (MAST, the
-    ESA Gaia archive, the SkyMapper TAP service, IRSA, or the VISTA Science
-    Archive, respectively) and reshaped into the VizieR format. A confirmed
-    empty result is trusted as is and never triggers this fallback.
+    If the default VizieR server fails and none of the mirrors returns any data,
+    and ``catalog`` is one of ``ps1``, ``gaiaedr3``, ``gaiadr3syn``, ``skymapper``,
+    ``2mass`` or ``vhs``, the catalogue is instead fetched from a dedicated
+    non-VizieR mirror (MAST, the ESA Gaia archive, the SkyMapper TAP service,
+    IRSA, or the VISTA Science Archive, respectively) and reshaped into the
+    VizieR format. An empty result confirmed by the default server is trusted
+    as is and never triggers this fallback; an empty answer from a mirror is
+    not, as mirrors may hold incomplete copies of a catalogue.
 
     Parameters
     ----------
@@ -1417,6 +1433,12 @@ def get_cat_vizier(
             if not cats or not len(cats) == 1:
                 # Possibly a stale cached answer - re-query the same server
                 cats = _query_vizier_region(vizier, coord, sr0 * u.deg, vizier_id, cache=False)
+            if not cats and server is not None:
+                # An empty answer from a mirror is not trusted: mirrors may hold
+                # incomplete or broken copies of a catalogue and still answer cleanly
+                log('VizieR mirror', server, 'returned no data for', vizier_id)
+                cats = None
+                continue
             break
         except (requests.exceptions.RequestException, TableParseError, VizierQueryError) as e:
             # Network-level failure, an unparseable response, or an error reported by the server - try the next server

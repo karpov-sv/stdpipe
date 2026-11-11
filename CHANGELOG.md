@@ -71,6 +71,13 @@ releases up to 0.4.0 are only available in the
   was flagged (e.g. all deblended in a crowded field): the FWHM estimate was
   NaN, and so were the apertures and fluxes. It now falls back to flagged
   objects, and without any FWHM estimate proceeds with pixel apertures.
+- `get_cat_vizier()` no longer trusts an empty answer from a VizieR mirror
+  when the default server is down: mirrors may hold incomplete or broken
+  copies of a catalogue (e.g. CfA for Gaia DR3), so the next mirror and then
+  the non-VizieR fallback are tried. An empty answer from the default server
+  is still trusted.
+- The MAST Pan-STARRS fallback now fetches all result pages instead of only
+  the first 50000 rows.
 
 ## 0.5.0 - 2026-10-31
 

@@ -993,6 +993,38 @@ class TestFallbackDispatch:
         assert cat is None
         assert fake.calls == [(DEFAULT_SERVER, True),(DEFAULT_SERVER, False)]
 
+    @pytest.mark.unit
+    def test_empty_mirror_answer_tries_next_mirror(self, monkeypatch):
+        """With the default server down, a clean empty answer from a mirror (e.g. a
+        broken copy of the catalogue) is not trusted - the next mirror is tried."""
+        error = requests.exceptions.ConnectionError('Connection reset by peer')
+        second = 'vizier.idia.ac.za'
+        fake = _fake_vizier({DEFAULT_SERVER: error, MIRROR: 'empty', second: 'ok'})
+        monkeypatch.setattr(catalogs, 'Vizier', fake)
+        monkeypatch.setattr(catalogs, 'vizier_mirrors', [MIRROR, second])
+        monkeypatch.setattr(catalogs, 'catalog_fallbacks', {'ps1': lambda *a, **kw: _one_row_cat(1.0, 2.0)})
+
+        cat = catalogs.get_cat_vizier(10.0, 20.0, 0.1, 'ps1', augment_bands=False)
+
+        assert cat is not None and cat['RAJ2000'][0] == 10.0  # real data from the second mirror
+        assert fake.calls == [
+            (DEFAULT_SERVER, True), (MIRROR, True), (MIRROR, False), (second, True)
+        ]
+
+    @pytest.mark.unit
+    def test_empty_mirror_answers_reach_fallback(self, monkeypatch):
+        """With the default server down and every mirror answering empty, the
+        non-VizieR fallback is used."""
+        error = requests.exceptions.ConnectionError('Connection reset by peer')
+        fake = _fake_vizier({DEFAULT_SERVER: error, MIRROR: 'empty'})
+        monkeypatch.setattr(catalogs, 'Vizier', fake)
+        monkeypatch.setattr(catalogs, 'vizier_mirrors', [MIRROR])
+        monkeypatch.setattr(catalogs, 'catalog_fallbacks', {'ps1': lambda *a, **kw: _one_row_cat(1.0, 2.0)})
+
+        cat = catalogs.get_cat_vizier(10.0, 20.0, 0.1, 'ps1', augment_bands=False)
+
+        assert cat is not None and cat['RAJ2000'][0] == 1.0  # fallback stub
+
 
 class _FakeResponse:
     """Stand-in for requests.Response, used by the PS1 and SkyMapper fallbacks."""
@@ -1047,6 +1079,65 @@ class TestFallbackSources:
         catalogs._fallback_ps1(10.0, 20.0, 0.1)
 
         assert captured.get('nDetections.gte') == 3
+
+    @staticmethod
+    def _ps1_pages_get(pages, calls, fail_page=None):
+        """Fake requests.get serving MAST CSV pages, `pages` mapping page number to row RAs."""
+        header = (
+            'raMean,decMean,raMeanErr,decMeanErr,'
+            'gMeanPSFMag,gMeanPSFMagErr,rMeanPSFMag,rMeanPSFMagErr,'
+            'iMeanPSFMag,iMeanPSFMagErr,zMeanPSFMag,zMeanPSFMagErr,'
+            'yMeanPSFMag,yMeanPSFMagErr\n'
+        )
+
+        def fake_get(url, params=None, timeout=None):
+            calls.append(dict(params))
+            if params['page'] == fail_page:
+                raise requests.exceptions.ConnectionError('Connection reset by peer')
+            rows = pages.get(params['page'], [])
+            if not rows:
+                return _FakeResponse('')
+            return _FakeResponse(header + ''.join(
+                f'{ra},20.0,0.001,0.001,15,0.01,15,0.01,15,0.01,15,0.01,15,0.01\n' for ra in rows))
+
+        return fake_get
+
+    @pytest.mark.unit
+    def test_fallback_ps1_paginates(self, monkeypatch):
+        """All pages are fetched in stable objID order until a short page is returned."""
+        calls = []
+        monkeypatch.setattr(catalogs, '_MAST_PAGE_SIZE', 2)
+        monkeypatch.setattr(catalogs.requests, 'get',
+                            self._ps1_pages_get({1: [10.0, 10.1], 2: [10.2, 10.3], 3: [10.4]}, calls))
+
+        cat = catalogs._fallback_ps1(10.0, 20.0, 0.1)
+
+        assert list(cat['RAJ2000']) == [10.0, 10.1, 10.2, 10.3, 10.4]
+        assert [c['page'] for c in calls] == [1, 2, 3]
+        assert all(c['pagesize'] == 2 and c['sort_by'] == 'objID' for c in calls)
+
+    @pytest.mark.unit
+    def test_fallback_ps1_failed_later_page_returns_none(self, monkeypatch):
+        """A failure on a later page must not yield a silently partial catalogue."""
+        calls = []
+        monkeypatch.setattr(catalogs, '_MAST_PAGE_SIZE', 2)
+        monkeypatch.setattr(catalogs.requests, 'get',
+                            self._ps1_pages_get({1: [10.0, 10.1]}, calls, fail_page=2))
+
+        assert catalogs._fallback_ps1(10.0, 20.0, 0.1) is None
+
+    @pytest.mark.unit
+    def test_fallback_ps1_stops_at_page_cap(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(catalogs, '_MAST_PAGE_SIZE', 1)
+        monkeypatch.setattr(catalogs, '_MAST_MAX_PAGES', 3)
+        monkeypatch.setattr(catalogs.requests, 'get',
+                            self._ps1_pages_get({p: [10.0 + p / 10] for p in range(1, 10)}, calls))
+
+        cat = catalogs._fallback_ps1(10.0, 20.0, 0.1)
+
+        assert len(cat) == 3
+        assert len(calls) == 3
 
     @pytest.mark.unit
     def test_fallback_ps1_pushes_filter_to_mast_params(self, monkeypatch):
