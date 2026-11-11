@@ -77,7 +77,9 @@ releases up to 0.4.0 are only available in the
   the non-VizieR fallback are tried. An empty answer from the default server
   is still trusted.
 - The MAST Pan-STARRS fallback now fetches all result pages instead of only
-  the first 50000 rows.
+  the first 50000 rows. A fallback result that hits a service row cap (MAST
+  pages, SkyMapper rows) is now marked with `meta['truncated'] = True`, not
+  only reported in verbose mode.
 
 ## 0.5.0 - 2026-10-31
 

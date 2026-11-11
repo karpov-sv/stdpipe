@@ -1025,6 +1025,23 @@ class TestFallbackDispatch:
 
         assert cat is not None and cat['RAJ2000'][0] == 1.0  # fallback stub
 
+    @pytest.mark.unit
+    def test_truncated_flag_survives_filters_and_limit(self, monkeypatch):
+        """The fallback's meta['truncated'] marker reaches the caller even after
+        get_cat_vizier applies filters and trims to the limit."""
+        def fake_fallback(ra0, dec0, sr0, filters=None, timeout=None, verbose=False):
+            cat = Table()
+            cat['RAJ2000'] = [10.0, 10.1, 10.2]
+            cat['DEJ2000'] = [20.0, 20.1, 20.2]
+            cat['rmag'] = [14.0, 16.0, 19.0]
+            cat.meta['truncated'] = True
+            return cat
+
+        cat = self._query(monkeypatch, fake_fallback, filters={'rmag': '<18'}, limit=1)
+
+        assert len(cat) == 1
+        assert cat.meta['truncated'] is True
+
 
 class _FakeResponse:
     """Stand-in for requests.Response, used by the PS1 and SkyMapper fallbacks."""
@@ -1115,6 +1132,7 @@ class TestFallbackSources:
         assert list(cat['RAJ2000']) == [10.0, 10.1, 10.2, 10.3, 10.4]
         assert [c['page'] for c in calls] == [1, 2, 3]
         assert all(c['pagesize'] == 2 and c['sort_by'] == 'objID' for c in calls)
+        assert 'truncated' not in cat.meta
 
     @pytest.mark.unit
     def test_fallback_ps1_failed_later_page_returns_none(self, monkeypatch):
@@ -1138,6 +1156,7 @@ class TestFallbackSources:
 
         assert len(cat) == 3
         assert len(calls) == 3
+        assert cat.meta['truncated'] is True
 
     @pytest.mark.unit
     def test_fallback_ps1_pushes_filter_to_mast_params(self, monkeypatch):
@@ -1490,6 +1509,7 @@ class TestFallbackSources:
 
         assert len(cat) == 2
         assert any('limit' in str(m).lower() for m in messages)
+        assert cat.meta['truncated'] is True
 
     @pytest.mark.unit
     def test_fallback_2mass_maps_columns(self, monkeypatch):

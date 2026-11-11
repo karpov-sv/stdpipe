@@ -796,7 +796,7 @@ def _adql_conditions(column, expr):
 
 # Page size and maximal number of pages for the paginated MAST fallback, and
 # the row cap for the SkyMapper one. Hitting a cap truncates coverage, so it is
-# checked for and logged.
+# logged and flagged as ``meta['truncated'] = True`` in the returned catalogue.
 _MAST_PAGE_SIZE = 50000
 _MAST_MAX_PAGES = 20
 _SKYMAPPER_ROW_LIMIT = 100000
@@ -966,6 +966,7 @@ def _fallback_ps1(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False)
     params['sort_by'] = 'objID'
 
     pages = []
+    truncated = False
     try:
         log('Trying MAST PanSTARRS DR1 mean-object API as a fallback')
         for page in range(1, _MAST_MAX_PAGES + 1):
@@ -983,6 +984,7 @@ def _fallback_ps1(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False)
             if len(raw) < params['pagesize']:
                 break
         else:
+            truncated = True
             log(f"Warning: MAST PanSTARRS DR1 fallback hit the {_MAST_MAX_PAGES}-page limit, results may be incomplete")
     except Exception as e:
         # Never return a partial catalogue if a later page fails
@@ -1008,6 +1010,8 @@ def _fallback_ps1(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=False)
         cat['e_' + band + 'mag'] = np.ma.masked_equal(magerr, -999.0)
 
     cat.meta['source'] = 'MAST PanSTARRS DR1 mean-object API (fallback)'
+    if truncated:
+        cat.meta['truncated'] = True
     return cat
 
 
@@ -1179,7 +1183,8 @@ def _fallback_skymapper(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=
     if not len(raw):
         return None
 
-    if len(raw) >= _SKYMAPPER_ROW_LIMIT:
+    truncated = len(raw) >= _SKYMAPPER_ROW_LIMIT
+    if truncated:
         log(f"Warning: SkyMapper TAP fallback hit the {_SKYMAPPER_ROW_LIMIT}-row limit, results may be incomplete")
 
     cat = Table()
@@ -1197,6 +1202,8 @@ def _fallback_skymapper(ra0, dec0, sr0, filters=None, timeout=(10, 60), verbose=
         cat['e_' + band + 'PSF'] = _coerce_numeric(raw['e_' + band + '_psf'])
 
     cat.meta['source'] = 'SkyMapper TAP service (fallback)'
+    if truncated:
+        cat.meta['truncated'] = True
     return cat
 
 
@@ -1354,7 +1361,9 @@ def get_cat_vizier(
     IRSA, or the VISTA Science Archive, respectively) and reshaped into the
     VizieR format. An empty result confirmed by the default server is trusted
     as is and never triggers this fallback; an empty answer from a mirror is
-    not, as mirrors may hold incomplete copies of a catalogue.
+    not, as mirrors may hold incomplete copies of a catalogue. A fallback result
+    is marked with ``meta['source']``, and with ``meta['truncated'] = True`` if
+    the fallback service row cap was reached and the catalogue may be incomplete.
 
     Parameters
     ----------
