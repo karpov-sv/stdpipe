@@ -35,11 +35,11 @@ Now update it to the latest version (you should also do it if you already have M
 
    conda update --all
 
-Optionally, you may create the separate Conda environment that will contain *STDPipe*, and switch to it. Here, as an example, we will select Python 3.10 as default Python interpreter for it:
+Optionally, you may create the separate Conda environment that will contain *STDPipe*, and switch to it. Here, as an example, we will select Python 3.11 as default Python interpreter for it:
 
 .. prompt:: bash
 
-   conda create -n stdpipe python=3.10
+   conda create -n stdpipe python=3.11
 
    conda activate stdpipe
 

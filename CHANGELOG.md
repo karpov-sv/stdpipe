@@ -32,6 +32,8 @@ releases up to 0.4.0 are only available in the
 
 ### Changed
 
+- Python 3.11 or newer is now required (`requires-python` raised from 3.8),
+  matching the actual floor already set by the `photutils>=2.2` dependency.
 - `get_objects_sep()` defaults to `r0=0` (no detection smoothing, as in
   `get_objects_sextractor()`) instead of `r0=0.5`. `r0=None` smooths with a
   kernel of sigma `0.8 * FWHM / 2.355` when `fwhm` is numeric or callable
