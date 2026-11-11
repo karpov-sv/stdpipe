@@ -11,6 +11,7 @@ from astropy.coordinates import SkyCoord
 sesame_mirrors = [
     'https://cds.unistra.fr/cgi-bin/nph-sesame',
     'https://vizier.cfa.harvard.edu/viz-bin/nph-sesame',
+    'https://vizier.idia.ac.za/viz-bin/nph-sesame',
 ]
 
 
