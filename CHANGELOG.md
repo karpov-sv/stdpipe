@@ -10,7 +10,8 @@ releases up to 0.4.0 are only available in the
 
 - `photometry_background.estimate_noise_excess()` measures the ratio of the
   actual noise of aperture (or PSF-weighted, `optimal=True`) sums to the one
-  predicted by a noise map, from apertures at random unmasked positions. It
+  predicted by a noise map the same way as `measure_objects()` does, from
+  apertures at random unmasked positions. It
   quantifies the noise correlation of resampled, stacked and difference
   images, which makes aperture errors and limits too optimistic, and is meant
   to scale the noise maps passed to `measure_objects()`. With `measure=`, the

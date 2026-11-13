@@ -1110,13 +1110,21 @@ def estimate_noise_excess(
 
     Measures the weighted sums of the background-subtracted image in apertures
     placed at random positions free of masked pixels, normalizes each by the
-    noise predicted for it from the per-pixel noise map,
-    ``sqrt(sum(w**2 * err**2))``, and returns the robust standard deviation of
-    these normalized sums. It is 1 when the noise map describes the image
-    noise correctly, and larger if the pixel noise is correlated (resampled or
-    stacked images, difference images, convolved templates), if the
-    background has structure on the aperture scale that the background model
-    does not follow, or if the noise map underestimates the noise in general.
+    noise predicted for it from the per-pixel noise map the same way as
+    :func:`stdpipe.photometry_measure.measure_objects` does, and returns the
+    robust standard deviation of these normalized sums - i.e. the factor the
+    flux errors of the photometry should be multiplied by. It is larger than 1
+    if the pixel noise is correlated (resampled or stacked images, difference
+    images, convolved templates), if the background has structure on the
+    aperture scale that the background model does not follow, or if the noise
+    map underestimates the noise in general.
+
+    For aperture sums, the noise is predicted as ``sqrt(sum(w * err**2))``
+    with ``w`` the fraction of the pixel inside the aperture, as photutils and
+    SEP do. It overestimates the noise of pixels on the aperture edge, so for
+    uncorrelated noise the excess is slightly below 1 (~0.97 for a radius of 5
+    pixels, ~0.94 for 3 pixels). For ``optimal=True`` the noise of the
+    weighted sum, ``sqrt(sum(w**2 * err**2))``, is used.
 
     These sums use the global background only. If the photometry does more -
     e.g. subtracts a local background from an annulus, which both adds the
@@ -1310,7 +1318,10 @@ def estimate_noise_excess(
         yi, xi = y[:, None] + dy, x[:, None] + dx
 
         flux = np.sum(w * resid[yi, xi], axis=1)
-        fluxerr = np.sqrt(np.sum(w**2 * var[yi, xi], axis=1))
+        # Noise predicted the same way as the photometry routines do: with the
+        # weights for optimal extraction, and with the overlap fractions (not
+        # their squares) for aperture sums, as photutils and SEP do
+        fluxerr = np.sqrt(np.sum((w**2 if optimal else w) * var[yi, xi], axis=1))
         z = flux / fluxerr
 
         excess = mad_std(z)

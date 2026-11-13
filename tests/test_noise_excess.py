@@ -5,7 +5,7 @@ import pytest
 from scipy import ndimage
 from astropy.table import Table
 
-from stdpipe.photometry_background import estimate_noise_excess
+from stdpipe.photometry_background import estimate_noise_excess, _noise_excess_kernel
 from stdpipe import photometry_measure
 
 pytestmark = pytest.mark.unit
@@ -36,21 +36,30 @@ def _gaussian_psf_dict(sigma, size=31):
     }
 
 
+def _overlap_factor(radius):
+    """Excess for white noise: photutils and SEP predict aperture variance as
+    sum(w * err**2), while the actual one is sum(w**2 * err**2)."""
+    w = _noise_excess_kernel(radius)[2]
+    return np.sqrt(np.sum(w**2) / np.sum(w))
+
+
 def test_white_noise(white):
     excess = estimate_noise_excess(white, 1.0, bg=0, aper=[1, 3, 8])
     assert excess.shape == (3,)
-    assert np.allclose(excess, 1.0, atol=0.06)
+    expected = [_overlap_factor(_) for _ in [1, 3, 8]]
+    assert expected[0] < expected[1] < expected[2] < 1
+    assert np.allclose(excess, expected, atol=0.05)
 
 
 def test_correlated_noise_grows_with_aperture(shifted):
     img, rms = shifted
     excess, stats = estimate_noise_excess(img, rms, bg=0, aper=[0.5, 2, 8], get_stats=True)
     # A sub-pixel aperture covers one pixel - its noise is the per-pixel one
-    assert excess[0] == pytest.approx(1.0, abs=0.06)
+    assert excess[0] == pytest.approx(_overlap_factor(0.5), abs=0.05)
     assert np.all(np.diff(excess) > 0)
     # Only ~1000 disjoint r=8 apertures fit into the image
     assert stats[2]['excess_err'] > 0.03
-    assert excess[-1] == pytest.approx(2.0, abs=3 * stats[2]['excess_err'])
+    assert excess[-1] == pytest.approx(2.0 * _overlap_factor(8), abs=3 * stats[2]['excess_err'])
 
 
 def test_optimal_weights(white, shifted):
@@ -81,7 +90,7 @@ def test_spatially_varying_err(white):
     err = np.ones_like(white)
     err[:, 256:] = 5.0
     excess = estimate_noise_excess(white * err, err, bg=0, aper=3)
-    assert excess == pytest.approx(1.0, abs=0.06)
+    assert excess == pytest.approx(_overlap_factor(3), abs=0.05)
 
 
 def test_mask_excludes_sources_and_auto_background(white):
@@ -96,7 +105,7 @@ def test_mask_excludes_sources_and_auto_background(white):
         mask |= r2 < 8**2
 
     excess, stats = estimate_noise_excess(image, mask=mask, aper=3, get_stats=True)
-    assert excess == pytest.approx(1.0, abs=0.06)
+    assert excess == pytest.approx(_overlap_factor(3), abs=0.05)
     assert stats['nsamples'] == 5000
     assert abs(stats['median']) < 0.1
     assert 0 < stats['excess_err'] < 0.05
@@ -112,7 +121,7 @@ def test_non_finite_pixels_rejected(white):
     err[300:400, 300:400] = np.nan
     excess = estimate_noise_excess(image, err, bg=0, aper=3)
     assert np.isfinite(excess)
-    assert excess == pytest.approx(1.0, abs=0.06)
+    assert excess == pytest.approx(_overlap_factor(3), abs=0.05)
 
 
 def test_too_few_apertures(white):
@@ -155,7 +164,7 @@ def test_corrected_photometry_errors(optimal):
             obj, image, bg_err=bg_err, sn=0, group_sources=False, **kw
         )
         pull = np.std((res['flux'] - flux) / res['fluxerr'])
-        assert (abs(pull - 1) < 0.12) == ok, pull
+        assert (abs(pull - 1) < 0.08) == ok, pull
 
 
 def test_measured_matches_kernel_and_sees_annulus(white):
@@ -171,7 +180,7 @@ def test_measured_matches_kernel_and_sees_annulus(white):
         )
 
     plain = excess()
-    assert plain == pytest.approx(1.0, abs=0.06)
+    assert plain == pytest.approx(estimate_noise_excess(image, 10.0, bg=0, aper=4.0), abs=0.04)
     # Noise of the local background: area ratio for the mean, much more for the mode
     mean = excess(bkgann=(12, 20), bg_estimator='mean')
     mode = excess(bkgann=(12, 20), bg_estimator='mode')

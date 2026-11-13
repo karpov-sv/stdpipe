@@ -324,7 +324,7 @@ These errors assume that the noise of different pixels is independent. It is not
    obj = photometry.measure_objects(obj, image, mask=mask, bg=bg, bg_err=excess*bg_rms,
                 fwhm=fwhm, aper=1.0, gain=gain, verbose=True)
 
-The excess is close to 1 for images with uncorrelated noise, so it is safe to always apply. As it only needs the mask and not the list of objects, it may be measured once and applied to all subsequent measurements on the same image, e.g. forced photometry of specific targets.
+The excess is close to 1 for images with uncorrelated noise, so it is safe to always apply. For aperture photometry it is then even slightly below 1 (~0.97 for 5 pixels radius, ~0.94 for 3 pixels), as photutils and SEP slightly overestimate the noise of the pixels on the aperture edge, and the excess, being the ratio to the noise they predict, corrects for that too. As it only needs the mask and not the list of objects, it may be measured once and applied to all subsequent measurements on the same image, e.g. forced photometry of specific targets.
 
 The sums above use the global background only. If the photometry subtracts a local background from an annulus (``bkgann``), its actual noise differs: the noise of the local background estimate is added (by ~2% for the mean in a 5-7 FWHM annulus, but by ~13% for the default ``'mode'`` estimator, and much more for narrow annuli), while the background structure on scales larger than the annulus is removed. Neither is accounted for in ``fluxerr``. In this case (and also for PSF fitting or other non-trivial measurements) pass the photometry routine itself as ``measure`` - it is then run on a grid of empty positions, and the excess is the robust scatter of its ``flux/fluxerr``:
 
