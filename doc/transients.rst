@@ -28,6 +28,18 @@ Transients may be detected either on initial *science* image as described in :re
 
    print(len(sobj), 'transient candidates found in difference image')
 
+The difference image noise is correlated, as the template (or the image) is convolved with the matching kernel, so the errors computed from :code:`ediff` assuming independent pixels are too optimistic. You may measure the excess with :func:`stdpipe.photometry_background.estimate_noise_excess` (see :ref:`Noise model and correlated noise`) and scale the noise model with it. Passing it as :code:`bg_err` too makes :code:`bg_fluxerr` (and thus the local detection limit) follow the difference image noise model as well:
+
+.. code-block:: python
+
+   from stdpipe import photometry_background
+
+   excess = photometry_background.estimate_noise_excess(diff, ediff, mask=mask|tmask, bg=0,
+                fwhm=fwhm, aper=1.0, verbose=True)
+
+   sobj = photometry.measure_objects(sobj, diff, mask=mask|tmask, fwhm=fwhm, aper=1.0,
+                sn=3, verbose=True, bg=0, err=excess*ediff, bg_err=excess*ediff)
+
 The transient candidates detected by such a routine will require some filtering in order to reject the subtraction artefacts, probably filter out known variable stars and maybe catalogued stars, also filter out known minor planets, etc. We have a convenience high-level routine :func:`stdpipe.pipeline.filter_transient_candidates` that uses a number of lower-level ones (:func:`stdpipe.catalogs.xmatch_objects`, :func:`stdpipe.catalogs.xmatch_skybot`, :func:`stdpipe.catalogs.xmatch_ned`). High-level routine is able to either filter out the "bad" objects from the list of candidates, or just mark the ones that should be rejected for various reasons (if :code:`remove=False`).
 
 .. code-block:: python

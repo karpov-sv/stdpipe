@@ -996,3 +996,353 @@ def get_background(image, mask=None, method='sep', size=128, get_rms=False, **kw
         return back, backrms
     else:
         return back
+
+
+def _noise_excess_kernel(radius, profile=None):
+    """Weights of a sum in a circular aperture of given radius (exact pixel
+    overlap), optionally multiplied by a centered profile stamp. Returns
+    pixel offsets ``(dy, dx)`` of the non-zero weights, the weights, and the
+    half-size of the kernel."""
+    from photutils.aperture import CircularAperture
+
+    half = int(np.ceil(radius))
+    size = 2 * half + 1
+    weights = CircularAperture((half, half), r=radius).to_mask(method='exact').to_image((size, size))
+
+    if profile is not None:
+        # Crop or zero-pad the stamp to the kernel size, keeping its center pixel
+        ph, pw = profile.shape
+        stamp = np.zeros((size, size))
+        cy, cx = ph // 2, pw // 2
+        y0, y1 = max(cy - half, 0), min(cy + half + 1, ph)
+        x0, x1 = max(cx - half, 0), min(cx + half + 1, pw)
+        stamp[y0 - (cy - half) : y1 - (cy - half), x0 - (cx - half) : x1 - (cx - half)] = profile[
+            y0:y1, x0:x1
+        ]
+        weights = weights * stamp
+
+    dy, dx = np.nonzero(weights)
+    return dy - half, dx - half, weights[dy, dx], half
+
+
+def _noise_excess_measured(shape, bad, measure, aper, fwhm, spacing, nsamples, seed, get_stats, log):
+    """Noise excess measured with the photometry routine *measure* on a grid of empty positions."""
+    from astropy.table import Table
+
+    if np.ndim(aper) != 0:
+        raise ValueError('Only scalar aper is supported with measure')
+
+    fwhm_s = float(fwhm) if fwhm is not None else None
+    radius_pix = float(aper) * fwhm_s if fwhm_s is not None else float(aper)
+    dy, dx, _, half = _noise_excess_kernel(radius_pix)
+
+    if spacing is None:
+        spacing = 3 * max(radius_pix, fwhm_s or 0.0) + 1
+
+    # Regular grid with random offset, so that the positions are farther from each other
+    # than the grouping radius, with sub-pixel jitter to sample all pixel phases
+    rng = np.random.default_rng(seed)
+    ny, nx = shape
+    gx = np.arange(half + 1 + rng.uniform(0, spacing), nx - half - 2, spacing)
+    gy = np.arange(half + 1 + rng.uniform(0, spacing), ny - half - 2, spacing)
+    x, y = [_.ravel() for _ in np.meshgrid(gx, gy)]
+    x = x + rng.uniform(-0.5, 0.5, x.size)
+    y = y + rng.uniform(-0.5, 0.5, y.size)
+
+    # Aperture around the nearest pixel must not touch masked pixels
+    if x.size:
+        xi, yi = np.round(x).astype(int), np.round(y).astype(int)
+        good = ~np.any(bad[yi[:, None] + dy, xi[:, None] + dx], axis=1)
+        x, y = x[good], y[good]
+    idx = rng.permutation(x.size)[:nsamples]
+    x, y = x[idx], y[idx]
+
+    z = np.zeros(0)
+    if x.size >= 50:
+        res = measure(Table({'x': x, 'y': y}))
+        flux = np.asarray(res['flux'], dtype=float)
+        fluxerr = np.asarray(res['fluxerr'], dtype=float)
+        good = np.isfinite(flux) & np.isfinite(fluxerr) & (fluxerr > 0)
+        z = flux[good] / fluxerr[good]
+
+    if z.size < 50:
+        log(
+            'Only %d unmasked positions of radius %.1f px properly measured, cannot estimate noise excess'
+            % (z.size, radius_pix)
+        )
+        excess, stats = np.nan, {'nsamples': int(z.size), 'excess_err': np.nan, 'median': np.nan}
+    else:
+        excess = mad_std(z)
+        stats = {
+            'nsamples': int(z.size),
+            'excess_err': 1.17 * excess / np.sqrt(z.size),
+            'median': np.median(z),
+        }
+        log(
+            'Noise excess measured by photometry with radius %.1f px: %.3f +/- %.3f over %d positions, median %.2f'
+            % (radius_pix, excess, stats['excess_err'], z.size, stats['median'])
+        )
+
+    if get_stats:
+        return excess, stats
+    else:
+        return excess
+
+
+def estimate_noise_excess(
+    image,
+    err=None,
+    mask=None,
+    bg=None,
+    aper=3,
+    fwhm=None,
+    psf=None,
+    optimal=False,
+    measure=None,
+    spacing=None,
+    nsamples=5000,
+    bg_size=128,
+    seed=0,
+    get_stats=False,
+    verbose=False,
+):
+    """Excess of the actual noise of flux measurements over the one predicted by a noise map.
+
+    Measures the weighted sums of the background-subtracted image in apertures
+    placed at random positions free of masked pixels, normalizes each by the
+    noise predicted for it from the per-pixel noise map,
+    ``sqrt(sum(w**2 * err**2))``, and returns the robust standard deviation of
+    these normalized sums. It is 1 when the noise map describes the image
+    noise correctly, and larger if the pixel noise is correlated (resampled or
+    stacked images, difference images, convolved templates), if the
+    background has structure on the aperture scale that the background model
+    does not follow, or if the noise map underestimates the noise in general.
+
+    These sums use the global background only. If the photometry does more -
+    e.g. subtracts a local background from an annulus, which both adds the
+    noise of its estimate (large for the ``'mode'`` estimator) and removes the
+    background structure on larger scales, fits the PSF, or groups the
+    sources - pass the photometry routine itself as *measure*. It is then run
+    on a grid of empty positions, and the excess is the robust standard
+    deviation of its ``flux / fluxerr``, which accounts for everything it does
+    by construction.
+
+    The excess depends on the aperture: correlation over a few pixels does
+    not change the noise of single pixels, but does increase the noise of
+    their sums. It should therefore be measured with the same aperture (and
+    weighting) as the photometry it is applied to, and the noise maps passed
+    to :func:`stdpipe.photometry_measure.measure_objects` (``err``,
+    ``bg_err``) multiplied by it.
+
+    The positions where the aperture touches a masked pixel are rejected, so
+    *mask* should cover all the objects in the image - e.g. the dilated
+    segmentation map of the detection, or the mask of the difference image
+    (plus the residuals of bright stars) for difference imaging. The robust
+    estimator tolerates a small fraction of contaminated apertures from faint
+    undetected sources.
+
+    Parameters
+    ----------
+    image : ndarray
+        Input image.
+    err : ndarray, float or None
+        Per-pixel noise map (or a single value) predicted for the image, in
+        image units. If None, the RMS map of the background estimated with
+        :func:`get_background` is used.
+    mask : ndarray of bool or None
+        Mask of pixels to exclude (True = masked). Non-finite pixels of the
+        image and of *err*, and pixels with non-positive *err*, are always
+        excluded.
+    bg : ndarray, float or None
+        Background to subtract. If None, it is estimated with
+        :func:`get_background` (SEP method, grid size *bg_size*).
+    aper : float or sequence of float
+        Aperture radius, in pixels, or in units of FWHM if *fwhm* is set (as
+        in :func:`stdpipe.photometry_measure.measure_objects`). For a
+        sequence, the excess is computed for every radius.
+    fwhm : float or callable or None
+        FWHM in pixels. Sets the unit of *aper*, and the width of the Gaussian
+        weights for ``optimal=True`` when *psf* is not given. A callable (e.g.
+        :class:`stdpipe.photometry.FWHMMap`) is reduced to its scalar value.
+    psf : dict or None
+        PSF model (PSFEx or :func:`stdpipe.psf.create_psf_model` structure),
+        evaluated at the image center, for the weights of ``optimal=True``.
+    optimal : bool
+        If True, the sums are weighted with the PSF (or a Gaussian with
+        *fwhm*) inside the aperture, as in optimal extraction and, for
+        constant noise, PSF fitting. Otherwise plain aperture sums are used.
+    measure : callable or None
+        Photometry routine to measure the noise with, called once as
+        ``measure(obj)`` with a table of ``x``, ``y`` empty positions, and
+        returning a table with ``flux`` and ``fluxerr`` columns for them, e.g.
+        ``lambda obj: measure_objects(obj, image, aper=1.0, fwhm=fwhm,
+        bkgann=[5, 7], bg_err=rms, sn=0)``. It should use the noise maps the
+        excess is to be applied to, and no centroiding. If set, *err*, *bg*,
+        *psf*, *optimal* and *bg_size* are not used, *aper* (scalar) and
+        *fwhm* only define the aperture that must not touch masked pixels.
+    spacing : float or None
+        Spacing of the grid of positions for *measure*, in pixels. It should
+        be larger than the grouping radius of the photometry, so that the
+        positions are measured independently. Default is
+        ``3 * max(aperture radius, fwhm) + 1``.
+    nsamples : int
+        Number of apertures to measure. The relative uncertainty of the
+        result is about ``1.2 / sqrt(N)`` (the efficiency of the median
+        absolute deviation), i.e. ~1.6% for the default, where ``N`` is
+        *nsamples* or, if smaller, the number of disjoint apertures fitting
+        into the unmasked area.
+    bg_size : int
+        Background grid size, used if *bg* or *err* is None.
+    seed : int or None
+        Seed of the random generator placing the apertures.
+    get_stats : bool
+        If True, also return a dictionary with diagnostics: the number of
+        apertures used (``nsamples``), the uncertainty of the excess
+        (``excess_err``), and the median of the normalized sums
+        (``median``, ~0 unless the background is biased).
+    verbose : bool or callable
+        Whether to show verbose messages. May be boolean or a print-like
+        function.
+
+    Returns
+    -------
+    excess : float or ndarray
+        Ratio of the measured to the predicted noise of the sums, an array
+        for a sequence of *aper*. NaN if fewer than 50 apertures fit into the
+        unmasked area (or are properly measured by *measure*).
+    stats : dict or list of dict
+        Diagnostics, only returned if ``get_stats=True``.
+
+    Examples
+    --------
+    Correct the noise of a resampled image before photometry:
+
+    >>> excess = estimate_noise_excess(image, rms, mask=segm > 0, aper=1.0, fwhm=fwhm)
+    >>> obj = measure_objects(obj, image, aper=1.0, fwhm=fwhm, bg_err=excess * rms, gain=gain)
+
+    The same, with local background annulus, measured with the photometry itself:
+
+    >>> kw = dict(aper=1.0, fwhm=fwhm, bkgann=[5, 7], sn=0)
+    >>> excess = estimate_noise_excess(image, mask=segm > 0, aper=1.0, fwhm=fwhm,
+    ...              measure=lambda o: measure_objects(o, image, bg_err=rms, **kw))
+    >>> obj = measure_objects(obj, image, bg_err=excess * rms, gain=gain, **kw)
+    """
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
+
+    image = np.asarray(image, dtype=np.double)
+    bad = ~np.isfinite(image)
+    if mask is not None:
+        bad |= np.asarray(mask, dtype=bool)
+
+    if measure is not None:
+        return _noise_excess_measured(
+            image.shape, bad, measure, aper, fwhm, spacing, nsamples, seed, get_stats, log
+        )
+
+    if bg is None or err is None:
+        image0 = np.where(bad, 0.0, image)
+        bg_est, rms_est = get_background(image0, mask=bad, method='sep', size=bg_size, get_rms=True)
+    if bg is None:
+        bg = bg_est
+    if err is None:
+        err = rms_est
+
+    resid = image - bg
+    resid = np.broadcast_to(resid, image.shape)
+    var = np.broadcast_to(np.asarray(err, dtype=np.double) ** 2, image.shape)
+    bad = bad | ~np.isfinite(resid) | ~np.isfinite(var) | ~(var > 0)
+
+    fwhm_s = float(fwhm) if fwhm is not None else None
+
+    profile = None
+    if optimal:
+        if psf is not None:
+            from . import psf as _psf
+
+            profile = _psf.get_psf_stamp(
+                psf, x=image.shape[1] / 2, y=image.shape[0] / 2, dx=0, dy=0, normalize=True
+            )
+        elif fwhm_s is not None:
+            sigma = fwhm_s / 2.35482
+            half = int(np.ceil(5 * sigma))
+            yy, xx = np.mgrid[-half : half + 1, -half : half + 1]
+            profile = np.exp(-(xx**2 + yy**2) / (2 * sigma**2))
+        else:
+            raise ValueError('optimal=True requires psf or fwhm')
+
+    scalar = np.ndim(aper) == 0
+    apers = np.atleast_1d(np.asarray(aper, dtype=np.double))
+
+    rng = np.random.default_rng(seed)
+    ny, nx = image.shape
+
+    excesses, stats = [], []
+    for radius in apers:
+        radius_pix = radius * fwhm_s if fwhm_s is not None else radius
+        dy, dx, w, half = _noise_excess_kernel(radius_pix, profile)
+
+        # Random aperture centers not touching masked pixels or the edges,
+        # drawn in batches until enough are accepted
+        ys, xs = [], []
+        naccepted, ntried = 0, 0
+        if ny > 2 * half and nx > 2 * half:
+            while naccepted < nsamples and ntried < 50 * nsamples:
+                batch = max(2 * (nsamples - naccepted), 100)
+                y = rng.integers(half, ny - half, batch)
+                x = rng.integers(half, nx - half, batch)
+                good = ~np.any(bad[y[:, None] + dy, x[:, None] + dx], axis=1)
+                ys.append(y[good])
+                xs.append(x[good])
+                naccepted += np.sum(good)
+                ntried += batch
+
+        if naccepted < 50:
+            log(
+                'Only %d unmasked apertures of radius %.1f px found, cannot estimate noise excess'
+                % (naccepted, radius_pix)
+            )
+            excesses.append(np.nan)
+            stats.append({'nsamples': int(naccepted), 'excess_err': np.nan, 'median': np.nan})
+            continue
+
+        y = np.concatenate(ys)[:nsamples]
+        x = np.concatenate(xs)[:nsamples]
+        yi, xi = y[:, None] + dy, x[:, None] + dx
+
+        flux = np.sum(w * resid[yi, xi], axis=1)
+        fluxerr = np.sqrt(np.sum(w**2 * var[yi, xi], axis=1))
+        z = flux / fluxerr
+
+        excess = mad_std(z)
+        # Overlapping apertures are not independent: the effective number of
+        # samples is at most the number of disjoint apertures in the
+        # unmasked area
+        nindep = naccepted / ntried * (ny - 2 * half) * (nx - 2 * half) / len(w)
+        excess_err = 1.17 * excess / np.sqrt(min(len(z), nindep))
+        median = np.median(z)
+
+        log(
+            'Noise excess for %s radius %.1f px: %.3f +/- %.3f over %d apertures (%.0f%% accepted), median %.2f'
+            % (
+                'optimal' if optimal else 'aperture',
+                radius_pix,
+                excess,
+                excess_err,
+                len(z),
+                100 * naccepted / ntried,
+                median,
+            )
+        )
+
+        excesses.append(excess)
+        stats.append({'nsamples': int(len(z)), 'excess_err': excess_err, 'median': median})
+
+    if scalar:
+        excesses, stats = excesses[0], stats[0]
+    else:
+        excesses = np.array(excesses)
+
+    if get_stats:
+        return excesses, stats
+    else:
+        return excesses

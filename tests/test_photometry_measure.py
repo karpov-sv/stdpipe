@@ -2579,6 +2579,85 @@ class TestSEPNoiseMapSemantics:
         assert res['fluxerr'][0] == pytest.approx(ref['fluxerr'][0], rel=0.05)
 
 
+def _measure_backend(name):
+    if name == 'sep':
+        if not photometry_measure._HAS_SEP_OPTIMAL:
+            pytest.skip("Requires SEP 1.4+")
+        return photometry_measure.measure_objects_sep
+    return photometry_measure.measure_objects
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize('backend', ['photutils', 'sep'])
+class TestBgErr:
+    """bg_err feeds bg_fluxerr and is the base of the automatic noise map."""
+
+    flux = 1e5
+    noise = 5.0
+    aper = 4.5
+
+    @pytest.fixture
+    def star(self):
+        sigma = 2.0
+        rng = np.random.default_rng(2)
+        image = rng.normal(100.0, self.noise, (128, 128))
+        image += _create_pixel_integrated_gaussian(
+            128, 64, 64, self.flux / (2 * np.pi * sigma**2), sigma
+        )
+        return image, Table({'x': [64.0], 'y': [64.0]})
+
+    def test_bg_fluxerr_from_scalar_bg_err(self, star, backend):
+        image, obj = star
+        measure = _measure_backend(backend)
+        # bg and err given: previously bg_fluxerr was 0 here
+        res = measure(
+            obj, image, aper=self.aper, bg=np.full_like(image, 100.0),
+            err=np.full_like(image, self.noise), bg_err=3.0 * self.noise,
+            sn=0, verbose=False,
+        )
+        expected = 3.0 * self.noise * np.sqrt(np.pi * self.aper**2)
+        assert res['bg_fluxerr'][0] == pytest.approx(expected, rel=0.02)
+        # err is used as is, bg_err does not affect fluxerr
+        ref = measure(
+            obj, image, aper=self.aper, bg=np.full_like(image, 100.0),
+            err=np.full_like(image, self.noise), sn=0, verbose=False,
+        )
+        assert res['fluxerr'][0] == pytest.approx(ref['fluxerr'][0], rel=1e-6)
+
+    def test_bg_err_is_base_of_automatic_noise(self, star, backend):
+        image, obj = star
+        measure = _measure_backend(backend)
+        gain, f = 2.0, 2.0
+        res = measure(
+            obj, image, aper=self.aper, bg_err=np.full_like(image, f * self.noise),
+            gain=gain, sn=0, verbose=False,
+        )
+        npix = np.pi * self.aper**2
+        assert res['bg_fluxerr'][0] == pytest.approx(f * self.noise * np.sqrt(npix), rel=0.02)
+        expected = np.sqrt(f**2 * self.noise**2 * npix + self.flux / gain)
+        assert res['fluxerr'][0] == pytest.approx(expected, rel=0.05)
+
+    def test_non_finite_bg_err_pixels_ignored(self, star, backend):
+        image, obj = star
+        measure = _measure_backend(backend)
+        bg_err = np.full_like(image, self.noise)
+        bg_err[64, 64] = np.nan
+        res = measure(
+            obj, image, aper=self.aper, err=np.full_like(image, self.noise),
+            bg_err=bg_err, sn=0, verbose=False,
+        )
+        assert np.isfinite(res['bg_fluxerr'][0])
+        assert res['bg_fluxerr'][0] == pytest.approx(
+            self.noise * np.sqrt(np.pi * self.aper**2), rel=0.05
+        )
+
+    def test_bg_err_shape_mismatch(self, star, backend):
+        image, obj = star
+        measure = _measure_backend(backend)
+        with pytest.raises(ValueError, match='bg_err shape'):
+            measure(obj, image, bg_err=np.ones((10, 10)), verbose=False)
+
+
 @pytest.mark.unit
 class TestSEPPSFSampledModel:
     """SEP PSF fitting should follow the declared sampling convention of the model."""

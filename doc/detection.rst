@@ -290,6 +290,63 @@ In crowded fields where source PSFs overlap, grouped optimal extraction simultan
 This adds ``group_id`` and ``group_size`` columns to identify which sources were fitted together.
 
 
+Noise model and correlated noise
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Flux errors are computed from a per-pixel noise map, defined by three arguments of :func:`stdpipe.photometry.measure_objects` (and :func:`stdpipe.photometry_measure.measure_objects_sep`):
+
+- ``err`` - the *full* per-pixel noise (background and objects), used as is. If not given, it is built from the background noise below plus, if ``gain`` is set, the Poisson noise of the background-subtracted image. ``gain`` is ignored when ``err`` is given, so a noise map that already includes the noise of the objects (e.g. the difference image noise model) is not counted twice.
+- ``bg_err`` - the background noise only, without the noise of the objects. If not given, the RMS map of the global background model is used.
+- ``gain`` - only used to add the Poisson noise of the objects to the automatically built noise map.
+
+Besides ``fluxerr``, the measurements include ``bg_fluxerr`` - the background noise summed inside the aperture, i.e. the flux error of a faint object at that position. It is computed from ``bg_err`` and does not depend on the brightness of the object itself, so it is suitable for estimating the local detection limit, e.g. ``-2.5*log10(5*bg_fluxerr)`` plus the zero point for S/N=5.
+
+These errors assume that the noise of different pixels is independent. It is not the case for images that were resampled (re-projected, aligned, stacked), convolved, or for difference images - the noise of neighbouring pixels gets correlated, and while the per-pixel noise does not grow (and is even reduced by the interpolation), the noise of sums over many pixels does. The flux errors and detection limits then come out too optimistic, often by a factor of 1.5-2 or more. :func:`stdpipe.photometry_background.estimate_noise_excess` measures this excess directly, as the robust scatter of the sums in apertures placed at random empty positions of the image, divided by the noise predicted for them from the noise map. It accepts the same ``aper``, ``fwhm``, ``optimal`` and ``psf`` arguments as the photometry routine, as the excess depends on the aperture size and weighting, and requires a mask covering all objects in the image (e.g. a dilated segmentation map):
+
+.. code-block:: python
+
+   from stdpipe import photometry_background
+   from scipy.ndimage import binary_dilation
+
+   # Background and its noise, e.g. from the detection step
+   bg, bg_rms = photometry_background.get_background(image, mask=mask, get_rms=True)
+
+   # Mask objects and their wings
+   omask = mask | binary_dilation(segm > 0, iterations=int(fwhm))
+
+   # Measure the noise excess with the same aperture as for the photometry
+   excess = photometry_background.estimate_noise_excess(
+       image, bg_rms, mask=omask, bg=bg, aper=1.0, fwhm=fwhm, verbose=True
+   )
+
+   # Scale the background noise - fluxerr and bg_fluxerr both follow it,
+   # gain still adds the noise of the objects
+   obj = photometry.measure_objects(obj, image, mask=mask, bg=bg, bg_err=excess*bg_rms,
+                fwhm=fwhm, aper=1.0, gain=gain, verbose=True)
+
+The excess is close to 1 for images with uncorrelated noise, so it is safe to always apply. As it only needs the mask and not the list of objects, it may be measured once and applied to all subsequent measurements on the same image, e.g. forced photometry of specific targets.
+
+The sums above use the global background only. If the photometry subtracts a local background from an annulus (``bkgann``), its actual noise differs: the noise of the local background estimate is added (by ~2% for the mean in a 5-7 FWHM annulus, but by ~13% for the default ``'mode'`` estimator, and much more for narrow annuli), while the background structure on scales larger than the annulus is removed. Neither is accounted for in ``fluxerr``. In this case (and also for PSF fitting or other non-trivial measurements) pass the photometry routine itself as ``measure`` - it is then run on a grid of empty positions, and the excess is the robust scatter of its ``flux/fluxerr``:
+
+.. code-block:: python
+
+   # The same parameters for measuring the excess and for the photometry
+   kw = dict(mask=mask, bg=bg, fwhm=fwhm, aper=1.0, bkgann=[5, 7], bg_estimator='mode', sn=0)
+
+   excess = photometry_background.estimate_noise_excess(
+       image, mask=omask, aper=1.0, fwhm=fwhm,
+       measure=lambda o: photometry.measure_objects(o, image, bg_err=bg_rms, **kw),
+       verbose=True
+   )
+
+   obj = photometry.measure_objects(obj, image, bg_err=excess*bg_rms, gain=gain, **kw)
+
+The positions are placed on a grid with spacing larger than the grouping radius, so that grouped optimal extraction or PSF fitting treats them independently (see ``spacing`` argument), and should be measured without centroiding.
+
+.. autofunction:: stdpipe.photometry_background.estimate_noise_excess
+   :noindex:
+
+
 .. autofunction:: stdpipe.photometry.measure_objects
    :noindex:
 

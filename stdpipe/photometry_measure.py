@@ -165,6 +165,30 @@ def _prepare_image_and_mask(image, mask):
     return image1, mask0, mask
 
 
+def _prepare_bg_err(bg_err, shape):
+    """Background noise map as a float array of the image shape, or None.
+
+    Scalars are broadcast to the image shape.
+    """
+    if bg_err is None:
+        return None
+
+    bg_err = np.asarray(bg_err, dtype=np.double)
+    if bg_err.ndim == 0:
+        bg_err = np.full(shape, float(bg_err))
+    elif bg_err.shape != tuple(shape):
+        raise ValueError(
+            'bg_err shape %s does not match image shape %s' % (bg_err.shape, tuple(shape))
+        )
+
+    return bg_err
+
+
+def _bg_fluxerr_map(bg_err):
+    """Background variance map for summing in apertures: non-finite pixels contribute 0."""
+    return np.ascontiguousarray(np.where(np.isfinite(bg_err), bg_err**2, 0.0))
+
+
 def _compute_magnitudes_and_filter(obj, sn, keep_negative, log):
     """Compute magnitudes from flux and apply S/N and positivity filters.
 
@@ -810,6 +834,7 @@ def measure_objects(
     mask=None,
     bg=None,
     err=None,
+    bg_err=None,
     gain=None,
     bg_size=64,
     sn=None,
@@ -901,9 +926,17 @@ def measure_objects(
         one. Must have the same shape as input image.
     err : ndarray or None
         Full per-pixel noise map (background and source noise), in image
-        units, used as is. If None, it is built from the global background
-        RMS map plus, if ``gain`` is set, the Poisson noise of the
-        background-subtracted image.
+        units, used as is. If None, it is built from ``bg_err`` (or the global
+        background RMS map if ``bg_err`` is None) plus, if ``gain`` is set,
+        the Poisson noise of the background-subtracted image.
+    bg_err : ndarray, float or None
+        Per-pixel background noise map (without the noise of the objects),
+        in image units. If set, ``bg_fluxerr`` is computed from it instead of
+        the global background RMS map, and it is the base of the noise map
+        built when ``err`` is None. Use it to pass a noise model that the
+        image itself does not reveal, e.g. the RMS scaled for correlated
+        noise (see :func:`stdpipe.photometry_background.estimate_noise_excess`)
+        or the noise map of a difference image.
     gain : float or None
         Image gain in e-/ADU, used only to add the source Poisson noise to the
         automatically built noise map; ignored if ``err`` is provided.
@@ -930,7 +963,10 @@ def measure_objects(
     -------
     obj : astropy.table.Table
         Copy of original table with ``flux``, ``fluxerr``, ``mag`` and
-        ``magerr`` columns replaced with measured values.
+        ``magerr`` columns replaced with measured values, and ``bg_fluxerr``
+        (background noise inside the aperture, from ``bg_err`` or the global
+        background model, 0 if ``bg`` and ``err`` are provided without
+        ``bg_err``).
     bg_image : ndarray
         Background image (only returned if ``get_bg=True``).
     err_image : ndarray
@@ -957,8 +993,9 @@ def measure_objects(
     obj = obj.copy()
 
     image1, mask0, mask = _prepare_image_and_mask(image, mask)
+    bg_err = _prepare_bg_err(bg_err, image1.shape)
 
-    if bg is None or err is None or get_bg:
+    if bg is None or (err is None and bg_err is None) or get_bg:
         log('Estimating global background with %dx%d grid' % (bg_size, bg_size))
         bg_est = photutils.background.Background2D(
             image1, bg_size, mask=mask | mask0, exclude_percentile=90
@@ -985,14 +1022,15 @@ def measure_objects(
 
     if err is None:
         log(
-            'Using global background noise map: median %.1f rms %.2f + gain %.1f'
+            'Using %s background noise map: median %.1f rms %.2f + gain %.1f'
             % (
-                np.median(bg_est_rms),
-                np.std(bg_est_rms),
+                'user-provided' if bg_err is not None else 'global',
+                np.nanmedian(bg_err if bg_err is not None else bg_est_rms),
+                np.nanstd(bg_err if bg_err is not None else bg_est_rms),
                 gain if gain else np.inf,
             )
         )
-        err = bg_est_rms
+        err = bg_err if bg_err is not None else bg_est_rms
         if gain:
             err = calc_total_error(image1, err, gain)
     else:
@@ -1217,8 +1255,12 @@ def measure_objects(
         res_area = photutils.aperture.aperture_photometry(image_ones, apertures, mask=mask0)
         obj['npix_aper'][valid_idx] = res_area['aperture_sum']
 
-        # Position-dependent background flux error from global background model, if available
-        if bg_est is not None:
+        # Position-dependent background flux error from user-provided background
+        # noise map, or from global background model, if available
+        if bg_err is not None:
+            res = photutils.aperture.aperture_photometry(_bg_fluxerr_map(bg_err), apertures)
+            obj['bg_fluxerr'][valid_idx] = np.sqrt(res['aperture_sum'])
+        elif bg_est is not None:
             res = photutils.aperture.aperture_photometry(bg_est_rms**2, apertures)
             obj['bg_fluxerr'][valid_idx] = np.sqrt(res['aperture_sum'])
 
@@ -1501,6 +1543,7 @@ def measure_objects_sep(
     mask=None,
     bg=None,
     err=None,
+    bg_err=None,
     gain=None,
     bg_size=64,
     sn=None,
@@ -1581,9 +1624,17 @@ def measure_objects_sep(
         one.
     err : ndarray or None
         Full per-pixel noise map (background and source noise), in image
-        units, used as is. If None, it is built from the global background
-        RMS map plus, if ``gain`` is set, the Poisson noise of the
-        background-subtracted image.
+        units, used as is. If None, it is built from ``bg_err`` (or the global
+        background RMS map if ``bg_err`` is None) plus, if ``gain`` is set,
+        the Poisson noise of the background-subtracted image.
+    bg_err : ndarray, float or None
+        Per-pixel background noise map (without the noise of the objects),
+        in image units. If set, ``bg_fluxerr`` is computed from it instead of
+        the global background RMS map, and it is the base of the noise map
+        built when ``err`` is None. Use it to pass a noise model that the
+        image itself does not reveal, e.g. the RMS scaled for correlated
+        noise (see :func:`stdpipe.photometry_background.estimate_noise_excess`)
+        or the noise map of a difference image.
     gain : float or None
         Image gain in e-/ADU, used only to add the source Poisson noise to the
         automatically built noise map; ignored if ``err`` is provided.
@@ -1623,9 +1674,9 @@ def measure_objects_sep(
     -------
     obj : astropy.table.Table
         Copy of table with ``flux``, ``fluxerr``, ``mag`` and ``magerr``
-        columns from SEP measurements, and ``bg_fluxerr`` (noise of the
-        global background model inside the aperture, 0 if both ``bg`` and
-        ``err`` are provided). When ``psf`` is provided, also
+        columns from SEP measurements, and ``bg_fluxerr`` (background noise
+        inside the aperture, from ``bg_err`` or the global background model,
+        0 if ``bg`` and ``err`` are provided without ``bg_err``). When ``psf`` is provided, also
         includes ``chi2_psf``, ``niter_psf``, and ``flags_psf`` columns.
         Positions refined by centroiding or PSF fitting (with
         ``fit_positions=True``) replace ``x``, ``y``, and the input ones are
@@ -1671,8 +1722,9 @@ def measure_objects_sep(
 
     # SEP requires C-contiguous arrays
     image1 = np.ascontiguousarray(image1)
+    bg_err = _prepare_bg_err(bg_err, image1.shape)
 
-    if bg is None or err is None or get_bg:
+    if bg is None or (err is None and bg_err is None) or get_bg:
         log('Estimating global background with SEP')
         bg_est = sep.Background(image1, mask=mask | mask0, bw=bg_size, bh=bg_size)
         bg_est_bg = bg_est.back()
@@ -1700,14 +1752,15 @@ def measure_objects_sep(
     # passed to SEP (which would add that term again on top of err)
     if err is None:
         log(
-            'Using global background noise map: median %.1f rms %.2f + gain %.1f'
+            'Using %s background noise map: median %.1f rms %.2f + gain %.1f'
             % (
-                np.median(bg_est_rms),
-                np.std(bg_est_rms),
+                'user-provided' if bg_err is not None else 'global',
+                np.nanmedian(bg_err if bg_err is not None else bg_est_rms),
+                np.nanstd(bg_err if bg_err is not None else bg_est_rms),
                 gain if gain else np.inf,
             )
         )
-        err = bg_est_rms
+        err = bg_err if bg_err is not None else bg_est_rms
         if gain:
             err = calc_total_error(image1, err, gain)
     else:
@@ -1827,11 +1880,12 @@ def measure_objects_sep(
         else:
             aper_arr = aper_pix
 
-        # Position-dependent background flux error from global background
-        # model, if available - same definition as in measure_objects()
-        if bg_est is not None:
+        # Position-dependent background flux error from user-provided
+        # background noise map, or from global background model, if
+        # available - same definition as in measure_objects()
+        if bg_err is not None or bg_est is not None:
             res, _, _ = sep.sum_circle(
-                np.ascontiguousarray(bg_est_rms**2),
+                _bg_fluxerr_map(bg_err) if bg_err is not None else np.ascontiguousarray(bg_est_rms**2),
                 x_vals[valid_pos],
                 y_vals[valid_pos],
                 aper_arr,
