@@ -900,9 +900,13 @@ def measure_objects(
         If provided, use this background instead of automatically computed
         one. Must have the same shape as input image.
     err : ndarray or None
-        Image noise map to use instead of automatically computed one.
+        Full per-pixel noise map (background and source noise), in image
+        units, used as is. If None, it is built from the global background
+        RMS map plus, if ``gain`` is set, the Poisson noise of the
+        background-subtracted image.
     gain : float or None
-        Image gain in e-/ADU, used to build image noise model.
+        Image gain in e-/ADU, used only to add the source Poisson noise to the
+        automatically built noise map; ignored if ``err`` is provided.
     bg_size : int
         Background grid size in pixels.
     sn : float or None
@@ -1576,9 +1580,13 @@ def measure_objects_sep(
         If provided, use this background instead of automatically computed
         one.
     err : ndarray or None
-        Image noise map.
+        Full per-pixel noise map (background and source noise), in image
+        units, used as is. If None, it is built from the global background
+        RMS map plus, if ``gain`` is set, the Poisson noise of the
+        background-subtracted image.
     gain : float or None
-        Image gain in e-/ADU, used to build image noise model.
+        Image gain in e-/ADU, used only to add the source Poisson noise to the
+        automatically built noise map; ignored if ``err`` is provided.
     bg_size : int
         Background grid size in pixels.
     sn : float or None
@@ -1687,15 +1695,21 @@ def measure_objects_sep(
 
     image1[mask0] = 0
 
+    # err is the full per-pixel noise, as in measure_objects(): gain is only
+    # used to add the source Poisson term when building it here, and is never
+    # passed to SEP (which would add that term again on top of err)
     if err is None:
         log(
-            'Using global background noise map: median %.1f rms %.2f'
+            'Using global background noise map: median %.1f rms %.2f + gain %.1f'
             % (
                 np.median(bg_est_rms),
                 np.std(bg_est_rms),
+                gain if gain else np.inf,
             )
         )
         err = bg_est_rms
+        if gain:
+            err = calc_total_error(image1, err, gain)
     else:
         log('Using user-provided noise map: median %.1f rms %.2f' % (np.median(err), np.std(err)))
 
@@ -1851,7 +1865,6 @@ def measure_objects_sep(
             # Build keyword arguments for sep.psf_fit
             psf_kwargs = dict(
                 err=err,
-                gain=gain,
                 mask=(mask | mask0).astype(np.uint8),
                 grouped=group_sources,
                 group_factor=group_factor,
@@ -1945,7 +1958,6 @@ def measure_objects_sep(
             opt_kw = dict(
                 fwhm=fwhm_at_pos if fwhm_at_pos is not None else fwhm_s,
                 err=err,
-                gain=gain if gain else 1.0,
                 mask=mask | mask0,
                 grouped=group_sources,
                 group_radius_factor=group_radius_factor,
@@ -1990,7 +2002,6 @@ def measure_objects_sep(
                 y_vals[valid_pos],
                 aper_arr,
                 err=err,
-                gain=gain if gain else 1.0,
                 mask=mask | mask0,
                 bkgann=None,  # Handle separately for aperture photometry
                 clip_sigma=clip_sigma,

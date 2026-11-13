@@ -2523,6 +2523,63 @@ def _make_field(positions, total_fluxes, sigma=2.0, shape=(200, 200), noise=0.0,
 
 
 @pytest.mark.unit
+@pytest.mark.skipif(not photometry_measure._HAS_SEP_OPTIMAL, reason="Requires SEP 1.4+")
+class TestSEPNoiseMapSemantics:
+    """measure_objects_sep: err is the full noise, gain only builds it when err is None."""
+
+    flux = 1e5
+    noise = 5.0
+    aper = 4.5
+
+    @pytest.fixture
+    def star(self):
+        sigma = 2.0
+        rng = np.random.default_rng(1)
+        image = rng.normal(100.0, self.noise, (128, 128))
+        image += _create_pixel_integrated_gaussian(
+            128, 64, 64, self.flux / (2 * np.pi * sigma**2), sigma
+        )
+        return image, Table({'x': [64.0], 'y': [64.0]})
+
+    @pytest.mark.parametrize('mode', ['aperture', 'optimal', 'psf'])
+    def test_user_err_not_inflated_by_gain(self, star, mode):
+        image, obj = star
+        kw = dict(aper=self.aper, fwhm=2.0 * 2.355, bg=np.full_like(image, 100.0),
+                  err=np.full_like(image, self.noise), sn=0, verbose=False)
+        if mode == 'optimal':
+            kw['optimal'] = True
+        elif mode == 'psf':
+            if not _HAS_SEP_PSF:
+                pytest.skip("Requires SEP psf_fit()")
+            kw['psf'] = sep.PSF.from_gaussian(2.0 * 2.355)
+
+        r0 = photometry_measure.measure_objects_sep(obj, image, gain=None, **kw)
+        r1 = photometry_measure.measure_objects_sep(obj, image, gain=0.5, **kw)
+        assert r1['fluxerr'][0] == pytest.approx(r0['fluxerr'][0], rel=1e-6)
+
+    def test_no_gain_means_background_noise_only(self, star):
+        image, obj = star
+        res = photometry_measure.measure_objects_sep(
+            obj, image, aper=self.aper, gain=None, sn=0, verbose=False
+        )
+        expected = self.noise * np.sqrt(np.pi * self.aper**2)
+        assert res['fluxerr'][0] == pytest.approx(expected, rel=0.1)
+
+    def test_gain_adds_poisson_like_measure_objects(self, star):
+        image, obj = star
+        gain = 2.0
+        res = photometry_measure.measure_objects_sep(
+            obj, image, aper=self.aper, gain=gain, sn=0, verbose=False
+        )
+        ref = photometry_measure.measure_objects(
+            obj, image, aper=self.aper, gain=gain, sn=0, verbose=False
+        )
+        expected = np.sqrt(self.noise**2 * np.pi * self.aper**2 + self.flux / gain)
+        assert res['fluxerr'][0] == pytest.approx(expected, rel=0.1)
+        assert res['fluxerr'][0] == pytest.approx(ref['fluxerr'][0], rel=0.05)
+
+
+@pytest.mark.unit
 class TestSEPPSFSampledModel:
     """SEP PSF fitting should follow the declared sampling convention of the model."""
 

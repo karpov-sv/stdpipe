@@ -32,6 +32,12 @@ releases up to 0.4.0 are only available in the
 
 ### Changed
 
+- `measure_objects_sep()` now treats `err` as the full per-pixel noise, like
+  `measure_objects()`: `gain` only adds the source Poisson noise when the noise
+  map is built automatically (`err=None`) and is no longer passed to SEP. A
+  user-supplied `err` that already contains source noise (e.g. a difference
+  image noise map) is no longer counted twice, and `gain=None` no longer means
+  gain 1 for aperture and optimal extraction.
 - Python 3.11 or newer is now required (`requires-python` raised from 3.8),
   matching the actual floor already set by the `photutils>=2.2` dependency.
 - `get_objects_sep()` defaults to `r0=0` (no detection smoothing, as in
