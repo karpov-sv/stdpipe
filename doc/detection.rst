@@ -231,6 +231,8 @@ The detection routines use a globally estimated background model (built as a low
                 aper=1.0, bkgann=[5, 7], sn=5, verbose=True)
    print(len(obj), 'objects properly measured')
 
+The noise of the local background estimate is included in ``fluxerr`` (and in ``bg_fluxerr``). It is predicted from the noise map as the noise of the mean of the annulus pixels, scaled for the estimator - by ~1.25 for ``'median'`` and ~2.5 for ``'mode'`` (default), that are less efficient than the mean for Gaussian noise - and is stored in the ``bg_local_err`` column. For a 5-7 FWHM annulus it increases the flux errors of faint objects by ~2% for the mean and ~12% for the mode, and much more for narrower annuli. Grouped optimal extraction fits its own background for the groups of overlapping objects, so it is only added for the isolated ones.
+
 
 Centroiding
 ^^^^^^^^^^^
@@ -326,7 +328,7 @@ These errors assume that the noise of different pixels is independent. It is not
 
 The excess is close to 1 for images with uncorrelated noise, so it is safe to always apply. For aperture photometry it is then even slightly below 1 (~0.97 for 5 pixels radius, ~0.94 for 3 pixels), as photutils and SEP slightly overestimate the noise of the pixels on the aperture edge, and the excess, being the ratio to the noise they predict, corrects for that too. As it only needs the mask and not the list of objects, it may be measured once and applied to all subsequent measurements on the same image, e.g. forced photometry of specific targets.
 
-The sums above use the global background only. If the photometry subtracts a local background from an annulus (``bkgann``), its actual noise differs: the noise of the local background estimate is added (by ~2% for the mean in a 5-7 FWHM annulus, but by ~13% for the default ``'mode'`` estimator, and much more for narrow annuli), while the background structure on scales larger than the annulus is removed. Neither is accounted for in ``fluxerr``. In this case (and also for PSF fitting or other non-trivial measurements) pass the photometry routine itself as ``measure`` - it is then run on a grid of empty positions, and the excess is the robust scatter of its ``flux/fluxerr``:
+The sums above use the global background only. If the photometry subtracts a local background from an annulus (``bkgann``), its actual noise differs: the noise of the local background estimate is added (by ~2% for the mean in a 5-7 FWHM annulus, but by ~13% for the default ``'mode'`` estimator, and much more for narrow annuli), while the background structure on scales larger than the annulus is removed. Only the former is accounted for in ``fluxerr``, and only as predicted from the noise map. In this case (and also for PSF fitting or other non-trivial measurements) pass the photometry routine itself as ``measure`` - it is then run on a grid of empty positions, and the excess is the robust scatter of its ``flux/fluxerr``:
 
 .. code-block:: python
 

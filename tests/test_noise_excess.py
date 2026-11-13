@@ -168,22 +168,31 @@ def test_corrected_photometry_errors(optimal):
 
 
 def test_measured_matches_kernel_and_sees_annulus(white):
-    """Measured with the photometry itself, the excess agrees with the kernel one
-    for plain apertures, and includes the noise of the local background estimate."""
+    """Measured with the photometry itself, the excess agrees with the kernel one for
+    plain apertures, and accounts for the noise of the local background estimate if the
+    photometry does not."""
     image = 10 * white
     kw = dict(aper=4.0, bg=0.0, sn=0, verbose=False)
 
-    def excess(**extra):
-        return estimate_noise_excess(
-            image, aper=4.0,
-            measure=lambda o: photometry_measure.measure_objects(o, image, bg_err=10.0, **kw, **extra),
-        )
+    def excess(drop_bg_term=False, **extra):
+        def measure(o):
+            res = photometry_measure.measure_objects(o, image, bg_err=10.0, **kw, **extra)
+            if drop_bg_term:
+                # Photometry errors without the noise of the local background
+                res['fluxerr'] = np.sqrt(res['fluxerr']**2 - (res['npix_aper'] * res['bg_local_err'])**2)
+            return res
+        return estimate_noise_excess(image, aper=4.0, measure=measure)
 
     plain = excess()
     assert plain == pytest.approx(estimate_noise_excess(image, 10.0, bg=0, aper=4.0), abs=0.04)
-    # Noise of the local background: area ratio for the mean, much more for the mode
-    mean = excess(bkgann=(12, 20), bg_estimator='mean')
-    mode = excess(bkgann=(12, 20), bg_estimator='mode')
+
+    # measure_objects accounts for the noise of the local background itself
+    for est in ['mean', 'mode']:
+        assert excess(bkgann=(12, 20), bg_estimator=est) == pytest.approx(plain, abs=0.05)
+
+    # ..and if it did not, the excess would: area ratio for the mean, much more for the mode
+    mean = excess(True, bkgann=(12, 20), bg_estimator='mean')
+    mode = excess(True, bkgann=(12, 20), bg_estimator='mode')
     assert plain < mean < mode
     assert mean / plain == pytest.approx(np.sqrt(1 + 16 / (400 - 144)), abs=0.04)
     assert mode / plain > 1.04

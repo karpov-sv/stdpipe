@@ -2658,6 +2658,88 @@ class TestBgErr:
             measure(obj, image, bg_err=np.ones((10, 10)), verbose=False)
 
 
+@pytest.fixture(scope='module')
+def empty_sky_grid():
+    """White noise of unit RMS with a grid of isolated empty positions."""
+    rng = np.random.default_rng(3)
+    n = 1800
+    image = rng.normal(0, 1.0, (n, n))
+    g = np.arange(60, n - 60, 45.0)
+    x, y = [_.ravel() for _ in np.meshgrid(g, g)]
+    obj = Table({'x': x + rng.uniform(-0.5, 0.5, x.size), 'y': y + rng.uniform(-0.5, 0.5, x.size)})
+    return image, obj
+
+
+@pytest.mark.unit
+class TestLocalBackgroundNoise:
+    """fluxerr includes the noise of the local background estimated in the annulus."""
+
+    def test_estimator_noise_factors(self):
+        """Relative noise of the median and mode estimators of the mean of Gaussian noise."""
+        from astropy.stats import sigma_clipped_stats
+
+        rng = np.random.default_rng(0)
+        data = rng.normal(0, 1, (4000, 500))
+        mean, med = np.mean(data, axis=1), np.median(data, axis=1)
+        k = photometry_measure._LOCAL_BG_ESTIMATOR_NOISE
+        assert np.std(med) / np.std(mean) == pytest.approx(k['median'], rel=0.05)
+        assert np.std(3 * med - 2 * mean) / np.std(mean) == pytest.approx(k['mode'], rel=0.05)
+
+    def test_order_factor(self):
+        # Constant and plane fits on a symmetric annulus are as good as the mean
+        assert photometry_measure._local_bg_order_factor(8, 12, 0) == 1.0
+        assert photometry_measure._local_bg_order_factor(8, 12, 1) == pytest.approx(1.0, abs=0.02)
+        # Quadratic terms are degenerate with the constant over a thin annulus
+        assert photometry_measure._local_bg_order_factor(8, 12, 2) > 1.5
+
+    @pytest.mark.parametrize('backend', ['photutils', 'sep'])
+    @pytest.mark.parametrize('optimal', [False, True])
+    @pytest.mark.parametrize('bg_estimator', ['median', 'mode'])
+    def test_pulls(self, empty_sky_grid, backend, optimal, bg_estimator):
+        from astropy.stats import mad_std
+
+        image, obj = empty_sky_grid
+        measure = _measure_backend(backend)
+        kw = dict(aper=1.0, fwhm=4.0, optimal=optimal, bg=0.0, bg_err=1.0, sn=0, verbose=False)
+
+        ref = measure(obj, image, **kw)
+        res = measure(obj, image, bkgann=(2, 3), bg_estimator=bg_estimator, **kw)
+
+        # Noise of the narrow annulus estimate is significant, but now accounted for.
+        # Without it, the scatter of the pulls was up to 1.5 for the mode.
+        assert np.median(res['bg_local_err']) > 0
+        assert np.median(res['fluxerr'] / ref['fluxerr']) > 1.05
+        assert mad_std(res['flux'] / res['fluxerr']) == pytest.approx(1.0, abs=0.07)
+
+        # ..and in the background noise inside the aperture, the same for empty sky
+        assert np.allclose(res['bg_fluxerr'], res['fluxerr'], rtol=0.02) or optimal
+
+    def test_bkg_order(self, empty_sky_grid):
+        from astropy.stats import mad_std
+
+        image, obj = empty_sky_grid
+        for order in [1, 2]:
+            res = photometry_measure.measure_objects(
+                obj, image, aper=1.0, fwhm=4.0, bkgann=(2, 3), bkg_order=order,
+                bg_estimator='mean', bg=0.0, bg_err=1.0, sn=0, verbose=False,
+            )
+            assert mad_std(res['flux'] / res['fluxerr']) == pytest.approx(1.0, abs=0.07)
+
+    def test_groups_fitting_background_have_no_term(self):
+        """Grouped optimal extraction fits its own background, so the annulus noise
+        does not enter the fluxes of the group members."""
+        image = np.random.default_rng(1).normal(0, 1.0, (100, 100))
+        obj = Table({'x': [50.0, 53.0, 20.0], 'y': [50.0, 50.0, 20.0]})
+        kw = dict(aper=1.0, fwhm=3.0, optimal=True, bg=0.0, bg_err=1.0, sn=0, verbose=False,
+                  bkgann=(3, 5), bg_estimator='mode')
+        res = photometry_measure.measure_objects(obj, image, **kw)
+        ref = photometry_measure.measure_objects(obj, image, **(kw | {'bkgann': None}))
+        assert list(res['group_size']) == [2, 2, 1]
+        assert np.all(res['bg_local_err'] > 0)
+        # Isolated source gets the term, group members do not
+        assert res['fluxerr'][2] > 1.05 * ref['fluxerr'][2]
+
+
 @pytest.mark.unit
 class TestSEPPSFSampledModel:
     """SEP PSF fitting should follow the declared sampling convention of the model."""

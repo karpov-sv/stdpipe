@@ -48,6 +48,18 @@ releases up to 0.4.0 are only available in the
 
 ### Changed
 
+- `measure_objects()` and `measure_objects_sep()` include the noise of the local
+  background estimated in the `bkgann` annulus in `fluxerr` and `bg_fluxerr`,
+  and report it in the new `bg_local_err` column. It is predicted from the
+  noise map and scaled for the estimator (~2.5x the noise of the mean for the
+  default `'mode'`), and was missing before: for a 5-7 FWHM annulus the flux
+  errors of faint objects were too small by ~12% with the mode, and by up to
+  ~50% for narrow annuli. Groups of grouped optimal extraction fit their own
+  background and do not get it.
+- sep-x 1.5.3 or newer is now required (`sep-x>=1.5.3`), as earlier versions
+  did not add the noise of the sigma-clipped annulus background to the flux
+  errors of `sum_circle()` and `sum_circle_optimal()` with `bkgann`, used by
+  `get_objects_sep()` and `measure_objects_sep()`.
 - `measure_objects_sep()` now treats `err` as the full per-pixel noise, like
   `measure_objects()`: `gain` only adds the source Poisson noise when the noise
   map is built automatically (`err=None`) and is no longer passed to SEP. A

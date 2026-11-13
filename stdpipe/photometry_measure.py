@@ -189,6 +189,68 @@ def _bg_fluxerr_map(bg_err):
     return np.ascontiguousarray(np.where(np.isfinite(bg_err), bg_err**2, 0.0))
 
 
+# Noise of the local background estimators relative to the one of the mean, for
+# Gaussian noise: the median has asymptotic variance pi/2 times the mean one, and
+# the mode 3*median - 2*mean has (9*pi/2 - 8) of it, as cov(median, mean) is
+# equal to the variance of the mean.
+_LOCAL_BG_ESTIMATOR_NOISE = {
+    'mean': 1.0,
+    'median': np.sqrt(np.pi / 2),
+    'mode': np.sqrt(9 * np.pi / 2 - 8),
+}
+
+
+def _local_bg_order_factor(r_in, r_out, order):
+    """Variance of the value at the center of a polynomial of given order fitted
+    to the annulus pixels, relative to the variance of their mean."""
+    if order <= 0:
+        return 1.0
+
+    half = int(np.ceil(r_out))
+    yy, xx = np.mgrid[-half : half + 1, -half : half + 1]
+    dist = np.hypot(xx, yy)
+    idx = (dist >= r_in) & (dist <= r_out)
+    # Normalized coordinates, for the conditioning of the normal matrix
+    x, y = xx[idx] / r_out, yy[idx] / r_out
+    X = np.column_stack([x**i * y**j for i in range(order + 1) for j in range(order + 1 - i)])
+    if X.shape[0] <= X.shape[1]:
+        return 1.0
+
+    return float(X.shape[0] * np.linalg.pinv(X.T @ X)[0, 0])
+
+
+def _local_bg_err(err, x, y, r_in, r_out, mask, bg_estimator='mean', bkg_order=0):
+    """Noise of the local background level estimated in circular annuli, predicted
+    from the noise map *err*.
+
+    It is the noise of the mean of the unmasked annulus pixels,
+    ``sqrt(sum(err**2)) / N``, scaled for the estimator - its relative efficiency
+    for Gaussian noise, or the noise of the center value of the polynomial fit for
+    ``bkg_order > 0``. Radii may be per-source arrays. Returns 0 where the annulus
+    has no unmasked pixels.
+    """
+    good = ~np.asarray(mask, dtype=bool) & np.isfinite(err)
+    var = np.ascontiguousarray(np.where(good, err**2, 0.0), dtype=np.double)
+    ones = np.ascontiguousarray(good, dtype=np.double)
+    x = np.ascontiguousarray(x, dtype=np.double)
+    y = np.ascontiguousarray(y, dtype=np.double)
+
+    s2 = sep.sum_circann(var, x, y, r_in, r_out, subpix=1)[0]
+    n = sep.sum_circann(ones, x, y, r_in, r_out, subpix=1)[0]
+
+    if bkg_order > 0:
+        # Clipped least-squares fit, as efficient as the mean for the constant term
+        k2 = _local_bg_order_factor(float(np.median(r_in)), float(np.median(r_out)), bkg_order)
+    else:
+        k2 = _LOCAL_BG_ESTIMATOR_NOISE.get(bg_estimator, 1.0) ** 2
+
+    with np.errstate(divide='ignore', invalid='ignore'):
+        sb = np.sqrt(k2 * s2) / n
+    sb = np.where(np.isfinite(sb) & (n > 0), sb, 0.0)
+
+    return sb
+
+
 def _compute_magnitudes_and_filter(obj, sn, keep_negative, log):
     """Compute magnitudes from flux and apply S/N and positivity filters.
 
@@ -512,7 +574,8 @@ def _grouped_optimal_extraction(image, err, positions, psf, bg_local=None, mask=
     Returns
     -------
     results : list of tuple
-        List of (flux, fluxerr, npix, norm, reduced_chi2) for each source.
+        List of (flux, fluxerr, npix, norm, reduced_chi2, dflux_dbg) for each
+        source, see :func:`_optimal_extraction`.
     """
     K = len(positions)
     if K == 0:
@@ -577,7 +640,7 @@ def _grouped_optimal_extraction(image, err, positions, psf, bg_local=None, mask=
 
     n_pix = int(np.sum(good))
     if n_pix == 0:
-        return [(np.nan, np.nan, 0, np.nan, np.nan) for _ in range(K)]
+        return [(np.nan, np.nan, 0, np.nan, np.nan, np.nan) for _ in range(K)]
 
     # Subtract average local background to center data (fit includes residual background term)
     bg_offset = 0.0
@@ -652,6 +715,13 @@ def _grouped_optimal_extraction(image, err, positions, psf, bg_local=None, mask=
     # Solve unweighted least squares (for flux consistency with single-source)
     x_sol, cov = _solve_weighted_leastsq(A, D, W)
 
+    # Response of the fluxes to a constant offset of the subtracted local background:
+    # (A^T A)^-1 A^T 1, which is zero for them when the background term is fitted
+    dflux_dbg = np.full(K, np.nan)
+    if x_sol is not None and cov is not None:
+        with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+            dflux_dbg = (cov @ (A.T @ np.ones(n_pix)))[:K]
+
     # Propagate per-pixel variance through the unweighted solution via the
     # sandwich formula: cov = (AᵀA)⁻¹ Aᵀ diag(V) A (AᵀA)⁻¹. For a single
     # source this reduces exactly to ΣP²V/(ΣP²)², matching _optimal_extraction.
@@ -694,7 +764,7 @@ def _grouped_optimal_extraction(image, err, positions, psf, bg_local=None, mask=
     # Build results for each source
     results = []
     for k in range(K):
-        results.append((fluxes[k], flux_errors[k], n_pix, psf_norms[k], reduced_chi2))
+        results.append((fluxes[k], flux_errors[k], n_pix, psf_norms[k], reduced_chi2, dflux_dbg[k]))
 
     return results
 
@@ -740,6 +810,9 @@ def _optimal_extraction(image, err, x, y, psf, bg_local=None, mask=None, radius=
         PSF normalization factor.
     reduced_chi2 : float
         Reduced chi-squared of the fit.
+    dflux_dbg : float
+        Derivative of the flux over the level of the subtracted local
+        background, to propagate its noise.
     """
     # Get PSF stamp at object position (automatically includes sub-pixel shift)
     psf_stamp = _get_psf_stamp_at_position(psf, x, y)
@@ -757,7 +830,7 @@ def _optimal_extraction(image, err, x, y, psf, bg_local=None, mask=None, radius=
 
     # Handle edge cases (slice ends are exclusive, so == shape is still valid)
     if y0 < 0 or x0 < 0 or y1 > image.shape[0] or x1 > image.shape[1]:
-        return np.nan, np.nan, 0, np.nan, np.nan
+        return np.nan, np.nan, 0, np.nan, np.nan, np.nan
 
     data_cutout = image[y0:y1, x0:x1]
     err_cutout = err[y0:y1, x0:x1]
@@ -776,7 +849,7 @@ def _optimal_extraction(image, err, x, y, psf, bg_local=None, mask=None, radius=
         good &= dist <= radius
 
     if np.sum(good) == 0:
-        return np.nan, np.nan, 0, np.nan, np.nan
+        return np.nan, np.nan, 0, np.nan, np.nan, np.nan
 
     # Variance = err^2
     var = err_cutout**2
@@ -795,7 +868,7 @@ def _optimal_extraction(image, err, x, y, psf, bg_local=None, mask=None, radius=
     sum_P2 = np.sum(P**2)
 
     if sum_P2 <= 0:
-        return np.nan, np.nan, 0, np.nan, np.nan
+        return np.nan, np.nan, 0, np.nan, np.nan, np.nan
 
     flux = np.sum(P * D) / sum_P2
 
@@ -814,7 +887,10 @@ def _optimal_extraction(image, err, x, y, psf, bg_local=None, mask=None, radius=
     else:
         reduced_chi2 = np.nan
 
-    return flux, fluxerr, n_pix, np.sum(P), reduced_chi2
+    # Response of the flux to the level of the subtracted local background
+    dflux_dbg = np.sum(P) / sum_P2
+
+    return flux, fluxerr, n_pix, np.sum(P), reduced_chi2, dflux_dbg
 
 
 def measure_objects(
@@ -963,10 +1039,15 @@ def measure_objects(
     -------
     obj : astropy.table.Table
         Copy of original table with ``flux``, ``fluxerr``, ``mag`` and
-        ``magerr`` columns replaced with measured values, and ``bg_fluxerr``
-        (background noise inside the aperture, from ``bg_err`` or the global
-        background model, 0 if ``bg`` and ``err`` are provided without
-        ``bg_err``).
+        ``magerr`` columns replaced with measured values, ``bg_local`` and
+        ``bg_local_err`` (local background level from ``bkgann`` annulus and
+        its noise predicted from the noise map, 0 without the annulus), and
+        ``bg_fluxerr`` (background noise inside the aperture, from ``bg_err``
+        or the global background model, 0 if ``bg`` and ``err`` are provided
+        without ``bg_err``, plus the noise of the subtracted local
+        background). ``fluxerr`` includes the noise of the local background
+        too, propagated with the response of the flux to it - except for the
+        groups of grouped optimal extraction, that fit their own background.
     bg_image : ndarray
         Background image (only returned if ``get_bg=True``).
     err_image : ndarray
@@ -1157,8 +1238,9 @@ def measure_objects(
     if 'flags' not in obj.keys():
         obj['flags'] = 0
 
-    # Dedicated column for local background on top of global estimation
+    # Dedicated column for local background on top of global estimation, and its noise
     obj['bg_local'] = 0.0
+    obj['bg_local_err'] = 0.0
 
     # Local background - it has to be computed prior to optimal photometry
     # as otherwise it is too difficult to subtract it from its (weighted) results
@@ -1230,10 +1312,24 @@ def measure_objects(
                     image1, x_vals[valid_pos], y_vals[valid_pos], mask=mask | mask0
                 )
 
+        # Noise of the local background level, predicted from the noise map
+        if np.any(valid_pos):
+            obj['bg_local_err'][valid_pos] = _local_bg_err(
+                err,
+                x_vals[valid_pos],
+                y_vals[valid_pos],
+                bkgann[0],
+                bkgann[1],
+                mask | mask0,
+                bg_estimator=bg_estimator,
+                bkg_order=bkg_order,
+            )
+
         # Flag invalid positions and positions where local bg estimation failed
         idx = ~valid_pos | ~np.isfinite(obj['bg_local'])
         obj['flags'][idx] |= 0x400
         obj['bg_local'][idx] = 0
+        obj['bg_local_err'][idx] = 0
 
     # Photometric apertures
     x_vals, y_vals, valid_pos = _extract_valid_positions(obj)
@@ -1264,6 +1360,9 @@ def measure_objects(
             res = photutils.aperture.aperture_photometry(bg_est_rms**2, apertures)
             obj['bg_fluxerr'][valid_idx] = np.sqrt(res['aperture_sum'])
 
+        # ..plus the noise of the local background subtracted over the aperture
+        obj['bg_fluxerr'] = np.hypot(obj['bg_fluxerr'], obj['npix_aper'] * obj['bg_local_err'])
+
     if optimal:
         # Optimal extraction photometry (Naylor 1998)
         log('Using optimal extraction photometry')
@@ -1288,6 +1387,8 @@ def measure_objects(
         obj['npix_optimal'] = 0
         obj['chi2_optimal'] = np.nan
         obj['norm_optimal'] = np.nan
+        # Response of the fluxes to the level of the subtracted local background
+        dflux_dbg = np.full(len(obj), np.nan)
 
         if group_sources:
             # Grouped optimal extraction for crowded fields
@@ -1372,6 +1473,7 @@ def measure_objects(
                         obj['npix_optimal'][i] = res[2]
                         obj['norm_optimal'][i] = res[3]
                         obj['chi2_optimal'][i] = res[4]
+                        dflux_dbg[i] = res[5]
                         valid_idx += 1
 
             log(
@@ -1416,7 +1518,13 @@ def measure_objects(
                         o['npix_optimal'],
                         o['norm_optimal'],
                         o['chi2_optimal'],
-                    ) = res
+                    ) = res[:5]
+                    dflux_dbg[i] = res[5]
+
+        # Noise of the subtracted local background. Groups fitting their own
+        # background term do not depend on it, and have zero response.
+        idx = np.isfinite(dflux_dbg)
+        obj['fluxerr'][idx] = np.hypot(obj['fluxerr'][idx], dflux_dbg[idx] * obj['bg_local_err'][idx])
 
         # Flag objects where optimal extraction failed
         obj['flags'][~np.isfinite(obj['flux'])] |= 0x800
@@ -1436,8 +1544,11 @@ def measure_objects(
             obj['flux'][valid_idx] = res['aperture_sum']
             obj['fluxerr'][valid_idx] = res['aperture_sum_err']
 
-        # Subtract local background
+        # Subtract local background, and add the noise of its estimate
         obj['flux'][valid_pos] -= obj['bg_local'][valid_pos] * obj['npix_aper'][valid_pos]
+        obj['fluxerr'][valid_pos] = np.hypot(
+            obj['fluxerr'][valid_pos], obj['npix_aper'][valid_pos] * obj['bg_local_err'][valid_pos]
+        )
 
     obj = _compute_magnitudes_and_filter(obj, sn, keep_negative, log)
 
@@ -1676,7 +1787,10 @@ def measure_objects_sep(
         Copy of table with ``flux``, ``fluxerr``, ``mag`` and ``magerr``
         columns from SEP measurements, and ``bg_fluxerr`` (background noise
         inside the aperture, from ``bg_err`` or the global background model,
-        0 if ``bg`` and ``err`` are provided without ``bg_err``). When ``psf`` is provided, also
+        0 if ``bg`` and ``err`` are provided without ``bg_err``, plus the noise
+        of the subtracted local background), and ``bg_local_err`` (noise of the
+        local background level from ``bkgann``, predicted from the noise map;
+        also included in ``fluxerr``). When ``psf`` is provided, also
         includes ``chi2_psf``, ``niter_psf``, and ``flags_psf`` columns.
         Positions refined by centroiding or PSF fitting (with
         ``fit_positions=True``) replace ``x``, ``y``, and the input ones are
@@ -1863,6 +1977,7 @@ def measure_objects_sep(
     obj['flux'] = np.nan
     obj['fluxerr'] = np.nan
     obj['bg_fluxerr'] = 0.0  # Local background flux error inside the aperture
+    obj['bg_local_err'] = 0.0  # Noise of the local background level, if any
 
     if np.any(valid_pos):
         # Evaluate FWHM at the valid source positions. For a callable
@@ -1904,6 +2019,25 @@ def measure_objects_sep(
                 bkgann_pix = (bkgann[0] * fwhm_s, bkgann[1] * fwhm_s)
             else:
                 bkgann_pix = bkgann
+
+        # Noise of the local background level, predicted from the noise map, and its
+        # contribution to the background noise inside the aperture. PSF fitting does
+        # not use the local background.
+        bg_local_err = None
+        if bkgann_pix is not None and psf is None:
+            bg_local_err = _local_bg_err(
+                err,
+                x_vals[valid_pos],
+                y_vals[valid_pos],
+                bkgann_pix[0],
+                bkgann_pix[1],
+                mask | mask0,
+                bg_estimator=bg_estimator,
+            )
+            obj['bg_local_err'][valid_pos] = bg_local_err
+            obj['bg_fluxerr'][valid_pos] = np.hypot(
+                obj['bg_fluxerr'][valid_pos], np.pi * np.asarray(aper_arr) ** 2 * bg_local_err
+            )
 
         if psf is not None:
             # PSF fitting photometry using sep.psf_fit()
@@ -2041,6 +2175,8 @@ def measure_objects_sep(
                     np.ones_like(image1), x_vals[valid_pos], y_vals[valid_pos], aper_arr, **opt_kw
                 )
                 flux = flux - bg_local * flux1
+                # SEP adds the noise of its own (mean) annulus estimate, but not of this one
+                fluxerr = np.hypot(fluxerr, flux1 * bg_local_err)
 
             obj['flux'][valid_pos] = flux
             obj['fluxerr'][valid_pos] = fluxerr
@@ -2085,6 +2221,9 @@ def measure_objects_sep(
                 # or a per-source array, both broadcast correctly.
                 aper_area = np.pi * np.asarray(aper_arr) ** 2
                 obj['flux'][valid_pos] -= bg_local * aper_area
+                obj['fluxerr'][valid_pos] = np.hypot(
+                    obj['fluxerr'][valid_pos], aper_area * bg_local_err
+                )
 
     # Flag objects where measurement failed
     if psf is not None:
