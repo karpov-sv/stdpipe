@@ -1010,6 +1010,13 @@ def run_zogy(
     else:
         log("Initial template flux scale Fr = %.3g" % scale)
 
+    # A NaN or infinite estimate (e.g. from NaN or zero magnitude errors) makes
+    # least_squares fail on the initial point, and spoils the difference image
+    if scale is None or not np.isfinite(scale) or scale <= 0:
+        if scale is not None:
+            log("Initial template flux scale Fr = %.3g is unusable, starting from 1" % scale)
+        scale = 1.0
+
     if (fit_scale or fit_shift) and np.sum(good_regions) == 0:
         good_regions = np.ones_like(good_regions, dtype=bool)
         log("Will fit for scale/shift using whole image")
