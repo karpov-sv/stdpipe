@@ -552,6 +552,22 @@ def _augment_apass(cat, verbose=False):
         log(f"Warning: Missing required column for APASS augmentation: {e}")
 
 
+def _augment_gaiadr3(cat, verbose=False):
+    """Augment Gaia DR3 catalog with magnitude errors.
+
+    VizieR I/355/gaiadr3 provides only flux errors, while its magnitudes are the
+    same as in Gaia EDR3 (I/350/gaiaedr3), which also provides e_Gmag etc.
+    """
+    log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
+    try:
+        for band, flux in [('G', 'FG'), ('BP', 'FBP'), ('RP', 'FRP')]:
+            if 'e_' + band + 'mag' not in cat.colnames:
+                cat['e_' + band + 'mag'] = 2.5 / np.log(10) * cat['e_' + flux] / cat[flux]
+
+    except KeyError as e:
+        log(f"Warning: Missing required column for Gaia DR3 augmentation: {e}")
+
+
 def _augment_gaiadr3syn(cat, verbose=False):
     """Augment Gaia DR3 Synthetic Photometry catalog with additional bands."""
     log = (verbose if callable(verbose) else print) if verbose else lambda *args, **kwargs: None
@@ -651,7 +667,7 @@ def augment_cat_bands(cat, catalog=None, verbose=False):
         Input catalog to augment. Modified in-place.
     catalog : str, optional
         Catalog type. Magnitude conversions are defined for 'ps1', 'atlas',
-        'gaiadr2', 'skymapper', 'apass', 'gaiadr3syn', 'sdss', '2mass' and 'vhs';
+        'gaiadr2', 'gaiadr3', 'skymapper', 'apass', 'gaiadr3syn', 'sdss', '2mass' and 'vhs';
         other catalogues known to :data:`catalogs` (e.g. 'gaiaedr3', 'usnob1',
         'gsc', 'vsx') are returned unchanged. If None, auto-detect from columns.
     verbose : bool or callable, optional
@@ -682,6 +698,8 @@ def augment_cat_bands(cat, catalog=None, verbose=False):
         _augment_skymapper(cat, verbose=verbose)
     elif catalog == 'apass':
         _augment_apass(cat, verbose=verbose)
+    elif catalog == 'gaiadr3':
+        _augment_gaiadr3(cat, verbose=verbose)
     elif catalog == 'gaiadr3syn':
         _augment_gaiadr3syn(cat, verbose=verbose)
     elif catalog == 'sdss':

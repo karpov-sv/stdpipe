@@ -1646,6 +1646,34 @@ class TestMirrorColumnNames:
         assert 'Rmag' in cat.colnames
 
 
+class TestAugmentGaiaDR3:
+    """Test Gaia DR3 augmentation."""
+
+    @pytest.mark.unit
+    def test_magnitude_errors_from_flux_errors(self):
+        cat = Table()
+        cat['Gmag'] = [15.0]
+        cat['BPmag'] = [15.3]
+        cat['RPmag'] = [14.6]
+        for flux in ['FG', 'FBP', 'FRP']:
+            cat[flux] = [1000.0]
+            cat['e_' + flux] = [10.0]
+
+        catalogs.augment_cat_bands(cat, catalog='gaiadr3', verbose=False)
+
+        for band in ['G', 'BP', 'RP']:
+            assert cat['e_' + band + 'mag'][0] == pytest.approx(2.5 / np.log(10) * 0.01)
+
+    @pytest.mark.unit
+    def test_missing_flux_columns_handled(self):
+        cat = Table()
+        cat['Gmag'] = [15.0]
+
+        result = catalogs.augment_cat_bands(cat, catalog='gaiadr3', verbose=False)
+
+        assert result.colnames == ['Gmag']
+
+
 class TestXmatchSkybot:
     """Test handling of unusable SkyBoT replies."""
 
