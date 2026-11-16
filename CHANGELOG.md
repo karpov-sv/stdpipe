@@ -8,6 +8,14 @@ releases up to 0.4.0 are only available in the
 
 ### Added
 
+- `subtraction.run_hotpants(check_stamps=True)` checks after the run that the
+  kernel sum agrees with the median image to template flux ratio of isolated
+  stars. If it does not, the stamp that deviates most in the same direction
+  (typically a star saturated or non-linear in the template, e.g. in
+  Pan-STARRS stacks, which HOTPANTS keeps as its noise is large) is masked in
+  the template and HOTPANTS is run again. Masked regions are set to the fill
+  value in the difference images, and their number is stored in `NSTMASK`.
+
 - `photometry_background.estimate_noise_excess()` measures the ratio of the
   actual noise of aperture (or PSF-weighted, `optimal=True`) sums to the one
   predicted by a noise map the same way as `measure_objects()` does, from

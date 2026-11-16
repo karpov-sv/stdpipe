@@ -1,4 +1,4 @@
-import os, shutil, tempfile, shlex
+import os, re, shutil, tempfile, shlex
 import numpy as np
 
 from astropy.io import fits
@@ -15,6 +15,7 @@ pyfftw.interfaces.cache.set_keepalive_time(1.0)
 
 from scipy import ndimage
 from scipy.optimize import least_squares
+from scipy.spatial import cKDTree
 import statsmodels.api as sm
 
 try:
@@ -26,6 +27,224 @@ from . import astrometry
 from . import pipeline
 from . import psf
 from . import sfft as sfft_module
+
+
+# Minimal S/N of a star in both the image and the template to use it in the stamp check
+_STAMP_CHECK_MIN_SN = 10
+# Minimal number of such stars in a region for the stamp check
+_STAMP_CHECK_MIN_STARS = 5
+# Relative deviation of the kernel sum from the flux ratio of the stars that is always tolerated
+_STAMP_CHECK_REL_TOL = 0.02
+
+
+def _read_hotpants_stamps(filename):
+    """Centers (0-based) and half-widths of the stamps listed in HOTPANTS `-savexy` region file."""
+    xs, ys, hws = [], [], []
+
+    if os.path.exists(filename):
+        with open(filename, 'r') as f:
+            for line in f:
+                m = re.search(r'box\(\s*([-\d.]+)\s*,\s*([-\d.]+)\s*,\s*([\d.]+)', line)
+                if m:
+                    xs.append(float(m.group(1)) - 1)
+                    ys.append(float(m.group(2)) - 1)
+                    hws.append((float(m.group(3)) - 1) / 2)
+
+    return np.array(xs), np.array(ys), np.array(hws)
+
+
+def _read_hotpants_regions(header):
+    """Regions (0-based inclusive x1, x2, y1, y2) and their kernel sums from HOTPANTS output header."""
+    regions = []
+
+    for i in range(header.get('NREGION', 0)):
+        reg = header.get('REGION%02d' % i)
+        ksum = header.get('KSUM%02d' % i)
+        if reg is None or ksum is None:
+            continue
+
+        m = re.match(r'\[(\d+):(\d+),(\d+):(\d+)\]', str(reg).strip())
+        if m:
+            x1, x2, y1, y2 = [int(_) - 1 for _ in m.groups()]
+            regions.append((x1, x2, y1, y2, float(ksum)))
+
+    return regions
+
+
+def _measure_flux_ratios(image, template, good, xs, ys, r, flagged=None):
+    """Ratios of image to template fluxes in circular apertures of radius `r`.
+
+    Local background is the median of the annulus between `r` and `1.5*r`, and only the
+    pixels valid (`good`) in both images are used. Returns ratios, their errors, S/N in
+    the image and the template, all NaN where the aperture is mostly invalid, and the
+    numbers of `flagged` pixels inside the apertures.
+    """
+    n = len(xs)
+    ratio, ratio_err = np.full(n, np.nan), np.full(n, np.nan)
+    sn1, sn2 = np.full(n, np.nan), np.full(n, np.nan)
+    nflagged = np.zeros(n, dtype=int)
+
+    r_out = 1.5 * r
+    hw = int(np.ceil(r_out)) + 1
+
+    for i, (x, y) in enumerate(zip(xs, ys)):
+        x0, y0 = int(np.round(x)), int(np.round(y))
+        sx = slice(max(0, x0 - hw), min(image.shape[1], x0 + hw + 1))
+        sy = slice(max(0, y0 - hw), min(image.shape[0], y0 + hw + 1))
+
+        yy, xx = np.mgrid[sy, sx]
+        dist = np.hypot(xx - x, yy - y)
+        g = good[sy, sx]
+        aper = (dist <= r) & g
+        ann = (dist > r) & (dist <= r_out) & g
+
+        if flagged is not None:
+            nflagged[i] = np.sum(flagged[sy, sx][dist <= r])
+
+        if np.sum(aper) < 0.5 * np.pi * r**2 or np.sum(ann) < 10:
+            continue
+
+        fluxes, errs = [], []
+        for data in (image, template):
+            cut = data[sy, sx]
+            bg = np.median(cut[ann])
+            rms = mad_std(cut[ann])
+            fluxes.append(np.sum(cut[aper] - bg))
+            # Background noise inside the aperture plus the error of the median background
+            errs.append(rms * np.sqrt(np.sum(aper) * (1 + np.pi / 2 * np.sum(aper) / np.sum(ann))))
+
+        if fluxes[1] == 0 or errs[0] <= 0 or errs[1] <= 0:
+            continue
+
+        ratio[i] = fluxes[0] / fluxes[1]
+        ratio_err[i] = np.abs(ratio[i]) * np.hypot(errs[0] / fluxes[0], errs[1] / fluxes[1])
+        sn1[i], sn2[i] = fluxes[0] / errs[0], fluxes[1] / errs[1]
+
+    return ratio, ratio_err, sn1, sn2, nflagged
+
+
+def _check_hotpants_stamps(
+    image,
+    template,
+    good,
+    stampname,
+    header,
+    flagged=None,
+    obj=None,
+    aper=None,
+    sigma=3.0,
+    log=print,
+):
+    """Find the stamps that pull HOTPANTS kernel sum away from the flux ratio of the stars.
+
+    HOTPANTS rejects the stamps by their residuals normalized by the expected noise, which
+    does not catch a bright star whose profile is distorted in one of the images (e.g.
+    saturated in the template) - its noise is large, and it is the one fitted best, while
+    driving the kernel normalization for everything else. Here the kernel sum of every
+    region is compared with the robust median of image to template flux ratios of the
+    stars (from `obj` if given, else from the stamps; only isolated ones, and without
+    `flagged` pixels, e.g. outside of HOTPANTS valid ranges), and if they disagree, the stamps
+    deviating from the median in the same direction as the kernel sum are found, and
+    the most significant one per region is returned.
+
+    Returns the list of (x, y) positions of the template peaks of these stamps.
+    """
+    sx, sy, shw = _read_hotpants_stamps(stampname)
+    regions = _read_hotpants_regions(header)
+
+    if not len(sx) or not regions:
+        log('Stamp check: no stamps or kernel sums in HOTPANTS output, skipping')
+        return []
+
+    r = aper if aper else np.median(shw)
+
+    if obj is not None and len(obj):
+        rx, ry = np.asarray(obj['x'], dtype=float), np.asarray(obj['y'], dtype=float)
+        if len(rx) > 1:
+            # Isolated stars only, as neighbours in the background annulus are spread
+            # differently by the different PSFs, and bias the ratio
+            dist, _ = cKDTree(np.c_[rx, ry]).query(np.c_[rx, ry], k=2)
+            isolated = dist[:, 1] > 1.5 * r
+            rx, ry = rx[isolated], ry[isolated]
+    else:
+        rx, ry = sx, sy
+
+    rratio, _, rsn1, rsn2, rnflagged = _measure_flux_ratios(
+        image, template, good, rx, ry, r, flagged=flagged
+    )
+    sratio, serr, ssn1, ssn2, _ = _measure_flux_ratios(image, template, good, sx, sy, r)
+
+    rgood = np.isfinite(rratio) & (rsn1 > _STAMP_CHECK_MIN_SN) & (rsn2 > _STAMP_CHECK_MIN_SN)
+    rgood &= rnflagged == 0
+    sgood = np.isfinite(sratio) & (ssn1 > _STAMP_CHECK_MIN_SN) & (ssn2 > _STAMP_CHECK_MIN_SN)
+
+    positions = []
+
+    for ri, (x1, x2, y1, y2, ksum) in enumerate(regions):
+        rin = rgood & (rx >= x1) & (rx <= x2) & (ry >= y1) & (ry <= y2)
+
+        if np.sum(rin) < _STAMP_CHECK_MIN_STARS:
+            log(
+                'Stamp check: only %d stars with S/N > %g in region %d, skipping'
+                % (np.sum(rin), _STAMP_CHECK_MIN_SN, ri)
+            )
+            continue
+
+        med = np.median(rratio[rin])
+        scatter = mad_std(rratio[rin])
+        med_err = 1.253 * scatter / np.sqrt(np.sum(rin))
+
+        if not med > 0:
+            continue
+
+        dev = ksum - med
+
+        if np.abs(dev) <= max(_STAMP_CHECK_REL_TOL * med, sigma * med_err):
+            log(
+                'Stamp check: kernel sum %.4g in region %d agrees with the flux ratio %.4g +/- %.2g of %d stars'
+                % (ksum, ri, med, med_err, np.sum(rin))
+            )
+            continue
+
+        log(
+            'Stamp check: kernel sum %.4g in region %d deviates from the flux ratio %.4g +/- %.2g of %d stars'
+            % (ksum, ri, med, med_err, np.sum(rin))
+        )
+
+        sin = sgood & (sx >= x1) & (sx <= x2) & (sy >= y1) & (sy <= y2)
+        tol = sigma * np.maximum(serr, max(scatter, _STAMP_CHECK_REL_TOL * med))
+        bad = sin & (np.sign(sratio - med) == np.sign(dev)) & (np.abs(sratio - med) > tol)
+
+        if not np.any(bad):
+            log('Stamp check: no stamps deviating in the same direction found')
+            continue
+
+        # Only the most significant one is masked, the others are re-checked after the
+        # re-run, as they may well just follow the biased kernel
+        signif = np.where(bad, np.abs(sratio - med) / serr, -np.inf)
+
+        for i in [np.argmax(signif)]:
+            # Template peak of the stamp - the culprit is the brightest object there
+            x0, y0 = int(np.round(sx[i])), int(np.round(sy[i]))
+            hw = int(np.ceil(r))
+            ys_ = slice(max(0, y0 - hw), min(template.shape[0], y0 + hw + 1))
+            xs_ = slice(max(0, x0 - hw), min(template.shape[1], x0 + hw + 1))
+            yy, xx = np.mgrid[ys_, xs_]
+            cut = np.where(np.hypot(xx - sx[i], yy - sy[i]) <= r, template[ys_, xs_], -np.inf)
+            # Centroid of the pixels above half of the peak, as saturated core may be flat
+            inside = np.isfinite(cut)
+            bg = np.median(cut[inside])
+            core = inside & (cut - bg >= 0.5 * (np.max(cut[inside]) - bg))
+            px, py = np.mean(xx[core]), np.mean(yy[core])
+
+            log(
+                'Stamp check: stamp at %.0f %.0f has flux ratio %.4g, template peak at %.1f %.1f'
+                % (sx[i], sy[i], sratio[i], px, py)
+            )
+            if (px, py) not in positions:
+                positions.append((px, py))
+
+    return positions
 
 
 def run_hotpants(
@@ -45,6 +264,10 @@ def run_hotpants(
     nx=1,
     ny=None,
     obj=None,
+    check_stamps=False,
+    check_stamps_sigma=3.0,
+    check_stamps_iter=3,
+    check_stamps_radius=None,
     get_convolved=False,
     get_scaled=False,
     get_noise=False,
@@ -120,6 +343,30 @@ def run_hotpants(
     obj : astropy.table.Table, optional
         List of objects detected on science image. If provided, it will be used to
         better place the sub-stamps used to derive the convolution kernel.
+    check_stamps : bool, optional
+        Whether to check, after the run, that the kernel sum of every region agrees with
+        the robust median of image to template flux ratios of the stars (from `obj` if
+        given, else from the stamps), measured in apertures with radius of 3 image FWHMs
+        (or stamp half-width if FWHM is unknown). If it does not, the stamps deviating
+        from the median in the same direction - typically bright stars saturated or
+        non-linear in the template, that are not rejected by HOTPANTS as their noise is
+        large - are found, the most significant one per region is masked in the template,
+        and HOTPANTS is run again, until the kernel sum agrees or `check_stamps_iter`
+        re-runs are done. The newly masked regions are then set to the fill value
+        (``1e-30`` unless overridden by ``fi`` in `extra`) in the difference and
+        noise-scaled difference images, the same as other pixels HOTPANTS considers
+        invalid. The number of masked positions is stored in ``NSTMASK`` keyword of
+        the output header. The check works best with `obj` given, as only isolated
+        stars from it are used as the reference. Without it, the stamps are used
+        instead, and these are often too faint - if fewer than 5 of them have S/N > 10
+        in both images, the check is skipped.
+    check_stamps_sigma : float, optional
+        Significance threshold for both the kernel sum deviation and the stamp outliers.
+    check_stamps_iter : int, optional
+        Maximal number of HOTPANTS re-runs with the stamp check.
+    check_stamps_radius : float, optional
+        Radius of the template mask around the culprit stamps, in pixels. Default is
+        3 template FWHMs, or 3 image FWHMs if the former is unknown.
     get_convolved : bool, optional
         Whether to also return the convolved template image.
     get_scaled : bool, optional
@@ -212,7 +459,6 @@ def run_hotpants(
     templatename = os.path.join(workdir, 'template.fits')
     fits.writeto(templatename, template, overwrite=True)
     tmaskname = os.path.join(workdir, 'tmask.fits')
-    fits.writeto(tmaskname, template_mask.astype(np.uint16), overwrite=True)
 
     outname = os.path.join(workdir, 'diff.fits')
 
@@ -317,63 +563,135 @@ def run_hotpants(
     if extra is not None:
         params.update(extra)
 
-    # Set the stamp locations from detected objects
     if obj is not None and len(obj):
+        obj = Table(obj)
         log('Using %d external positions for substamps' % len(obj))
-        xyname = os.path.join(workdir, 'objects.xy')
-        np.savetxt(xyname, [[_['x'] + 1, _['y'] + 1] for _ in Table(obj)], fmt='%.1f')
-        params['ssf'] = xyname
 
-    # Build command line
-    command = [binname]
+    # Template mask, extended by the stamp check
+    template_mask_run = template_mask.copy()
+    n_stamp_masked = 0
 
-    for key in params.keys():
-        if params[key] is None:
-            pass
-        elif type(params[key]) == bool:
-            if params[key]:
-                command.append('-' + key)
-            else:
+    if check_stamps:
+        # Pixels valid in both images, and the ones outside of the ranges valid for the
+        # kernel fit, that are measured but excluded from the reference stars
+        good = ~mask & ~template_mask
+        flagged = (image < params['il']) | (image > params.get('iuk', params['iu']))
+        flagged |= (template < params['tl']) | (template > params.get('tuk', params['tu']))
+
+        check_aper = 3 * image_fwhm if image_fwhm else None
+        if check_stamps_radius is None:
+            fwhm0 = template_fwhm or image_fwhm
+            check_stamps_radius = 3 * fwhm0 if fwhm0 else params.get('rss', 15) / 2
+
+    for iteration in range(1 + (max(0, check_stamps_iter) if check_stamps else 0)):
+        fits.writeto(tmaskname, template_mask_run.astype(np.uint16), overwrite=True)
+
+        # Set the stamp locations from detected objects, except for the masked ones
+        if obj is not None and len(obj):
+            xyname = os.path.join(workdir, 'objects.xy')
+            ox = np.round(np.asarray(obj['x'])).astype(int)
+            oy = np.round(np.asarray(obj['y'])).astype(int)
+            inside = (ox >= 0) & (oy >= 0) & (ox < image.shape[1]) & (oy < image.shape[0])
+            idx = inside.copy()
+            idx[inside] = ~template_mask_run[oy[inside], ox[inside]] | template_mask[oy[inside], ox[inside]]
+            np.savetxt(
+                xyname, [[_['x'] + 1, _['y'] + 1] for _ in obj[idx]], fmt='%.1f'
+            )
+            params['ssf'] = xyname
+
+        # Build command line
+        command = [binname]
+
+        for key in params.keys():
+            if params[key] is None:
                 pass
-        else:
-            if type(params[key]) == str:
-                # Quote string if necessary
-                value = shlex.quote(params[key])
-            elif hasattr(params[key], '__len__'):
-                # List or array, for multi-valued arguments
-                value = " ".join([str(_) for _ in params[key]])
+            elif type(params[key]) == bool:
+                if params[key]:
+                    command.append('-' + key)
+                else:
+                    pass
             else:
-                value = str(params[key])
+                if type(params[key]) == str:
+                    # Quote string if necessary
+                    value = shlex.quote(params[key])
+                elif hasattr(params[key], '__len__'):
+                    # List or array, for multi-valued arguments
+                    value = " ".join([str(_) for _ in params[key]])
+                else:
+                    value = str(params[key])
 
-            command.append('-' + key + ' ' + value)
+                command.append('-' + key + ' ' + value)
 
-    command = " ".join(command)
+        command = " ".join(command)
 
-    if not verbose:
-        command += " >/dev/null 2>/dev/null"
+        if not verbose:
+            command += " >/dev/null 2>/dev/null"
 
-    log('Will run HOTPANTS like that:')
-    log(command)
+        log('Will run HOTPANTS like that:')
+        log(command)
 
-    if os.path.exists(outname):
-        os.unlink(outname)
+        if os.path.exists(outname):
+            os.unlink(outname)
 
-    # Run the command
-    os.system(command)
+        # Run the command
+        os.system(command)
 
-    if not os.path.exists(outname):
-        log('HOTPANTS run failed')
-        return None
-    elif not np.any(fits.getdata(outname, 0)):
-        log('HOTPANTS failed to perform subtraction')
-        return None
-    else:
-        log('HOTPANTS run succeeded')
+        if not os.path.exists(outname):
+            log('HOTPANTS run failed')
+            return None
+        elif not np.any(fits.getdata(outname, 0)):
+            log('HOTPANTS failed to perform subtraction')
+            return None
+        else:
+            log('HOTPANTS run succeeded')
+
+        if not check_stamps:
+            break
+
+        positions = _check_hotpants_stamps(
+            image,
+            template,
+            good,
+            stampname,
+            fits.getheader(outname),
+            flagged=flagged,
+            obj=obj,
+            aper=check_aper,
+            sigma=check_stamps_sigma,
+            log=log,
+        )
+
+        if not positions:
+            break
+
+        if iteration == check_stamps_iter:
+            log('Stamp check: maximal number of re-runs reached, keeping the last result')
+            break
+
+        yy, xx = np.mgrid[0 : image.shape[0], 0 : image.shape[1]]
+        for px, py in positions:
+            template_mask_run |= (xx - px) ** 2 + (yy - py) ** 2 <= check_stamps_radius**2
+        n_stamp_masked += len(positions)
+
+        log(
+            'Stamp check: masked %d positions in the template with radius %.1f pixels, re-running HOTPANTS'
+            % (len(positions), check_stamps_radius)
+        )
+
+    # Regions masked by the stamp check, invalid in the difference images
+    stamp_masked = template_mask_run & ~template_mask if n_stamp_masked else None
+    fill = params.get('fi', _nan)
 
     # Difference image
-    result = [fits.getdata(outname, 0)]
+    diff = fits.getdata(outname, 0)
+    if stamp_masked is not None:
+        diff[stamp_masked] = fill
+    result = [diff]
 
     header = fits.getheader(outname)
+
+    if check_stamps:
+        header['NSTMASK'] = n_stamp_masked
 
     if os.path.exists(stampname):
         with open(stampname, 'r') as f:
@@ -392,6 +710,8 @@ def run_hotpants(
     if get_scaled:
         # Noise-scaled difference image
         sdiff = fits.getdata(outname, 2)
+        if stamp_masked is not None:
+            sdiff[stamp_masked] = fill
         result.append(sdiff)
 
     if get_noise:
