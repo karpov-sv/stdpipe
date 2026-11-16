@@ -1620,6 +1620,32 @@ class TestFallbackSources:
         assert vsa_module.Vsa.TIMEOUT == original_timeout
 
 
+class TestMirrorColumnNames:
+    """Test normalization of column names returned by VizieR mirrors."""
+
+    @pytest.mark.unit
+    def test_primes_in_column_names_are_sanitized(self, monkeypatch):
+        """IDIA returns APASS columns as r'mag instead of r_mag."""
+        raw = Table()
+        raw['RAJ2000'] = [10.0]
+        raw['DEJ2000'] = [20.0]
+        for band in ['B', 'V']:
+            raw[band + 'mag'] = [15.0]
+            raw['e_' + band + 'mag'] = [0.01]
+        for band in ['g', 'r', 'i']:
+            raw[band + "'mag"] = [15.0]
+            raw['e_' + band + "'mag"] = [0.01]
+
+        monkeypatch.setattr(catalogs, '_query_vizier_region', lambda *args, **kwargs: [raw])
+
+        cat = catalogs.get_cat_vizier(10.0, 20.0, 0.1, 'apass', verbose=False)
+
+        assert not any("'" in _ for _ in cat.colnames)
+        assert {'g_mag', 'r_mag', 'i_mag', 'e_r_mag'}.issubset(cat.colnames)
+        # APASS augmentation relies on the sanitized names
+        assert 'Rmag' in cat.colnames
+
+
 class TestXmatchSkybot:
     """Test handling of unusable SkyBoT replies."""
 

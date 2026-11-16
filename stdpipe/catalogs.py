@@ -1458,6 +1458,12 @@ def get_cat_vizier(
     if cats and len(cats) == 1:
         cat = cats[0]
         cat.meta['name'] = name
+
+        # Some mirrors (e.g. IDIA) keep the primes of original column names like r'mag,
+        # which the default server sanitizes to r_mag
+        for colname in cat.colnames:
+            if "'" in colname:
+                cat.rename_column(colname, colname.replace("'", '_'))
     else:
         log('Error requesting catalogue', catalog, 'from VizieR')
         if cats is not None:
