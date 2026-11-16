@@ -1553,8 +1553,9 @@ def xmatch_objects(obj, catalog='ps1', sr=3 / 3600, col_ra='ra', col_dec='dec', 
 
     Returns
     -------
-    astropy.table.Table
-        Table of matched objects augmented with columns from the Vizier catalogue.
+    astropy.table.Table or None
+        Table of matched objects augmented with columns from the Vizier catalogue,
+        or None if the XMatch service failed.
     """
 
     if catalog in catalogs:
@@ -1562,13 +1563,22 @@ def xmatch_objects(obj, catalog='ps1', sr=3 / 3600, col_ra='ra', col_dec='dec', 
     else:
         vizier_id = catalog
 
-    xcat = XMatch().query(
-        cat1=obj,
-        cat2='vizier:' + vizier_id,
-        max_distance=sr * u.deg,
-        colRA1=col_ra,
-        colDec1=col_dec,
-    )
+    xmatch = XMatch()
+    if 'u-strasbg.fr' in xmatch.URL:
+        # Older astroquery versions use the legacy domain, which drops large uploads
+        xmatch.URL = xmatch.URL.replace('u-strasbg.fr', 'cds.unistra.fr')
+
+    try:
+        xcat = xmatch.query(
+            cat1=obj,
+            cat2='vizier:' + vizier_id,
+            max_distance=sr * u.deg,
+            colRA1=col_ra,
+            colDec1=col_dec,
+        )
+    except Exception as e:
+        warnings.warn(f"CDS XMatch query failed for catalogue {catalog}: {e}")
+        return None
 
     if augment_bands:
         # Augment catalogue with additional bandpasses

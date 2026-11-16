@@ -1674,6 +1674,41 @@ class TestAugmentGaiaDR3:
         assert result.colnames == ['Gmag']
 
 
+class TestXmatchObjects:
+    """Test handling of CDS XMatch failures."""
+
+    def _obj(self):
+        obj = Table()
+        obj['ra'] = [10.0]
+        obj['dec'] = [20.0]
+        return obj
+
+    @pytest.mark.unit
+    def test_service_failure_returns_none(self, monkeypatch):
+        def query(self, *args, **kwargs):
+            raise ConnectionError('Connection reset by peer')
+
+        monkeypatch.setattr(type(catalogs.XMatch), 'query', query)
+
+        with pytest.warns(UserWarning, match='XMatch query failed'):
+            assert catalogs.xmatch_objects(self._obj(), 'ps1') is None
+
+    @pytest.mark.unit
+    def test_legacy_domain_is_replaced(self, monkeypatch):
+        urls = []
+
+        def query(self, *args, **kwargs):
+            urls.append(self.URL)
+            return Table()
+
+        monkeypatch.setattr(type(catalogs.XMatch), 'URL', 'http://cdsxmatch.u-strasbg.fr/xmatch/api/v1/sync')
+        monkeypatch.setattr(type(catalogs.XMatch), 'query', query)
+
+        catalogs.xmatch_objects(self._obj(), 'ps1', augment_bands=False)
+
+        assert urls == ['http://cdsxmatch.cds.unistra.fr/xmatch/api/v1/sync']
+
+
 class TestXmatchSkybot:
     """Test handling of unusable SkyBoT replies."""
 
