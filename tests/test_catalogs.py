@@ -1620,5 +1620,33 @@ class TestFallbackSources:
         assert vsa_module.Vsa.TIMEOUT == original_timeout
 
 
+class TestXmatchSkybot:
+    """Test handling of unusable SkyBoT replies."""
+
+    def _obj(self):
+        obj = Table()
+        obj['ra'] = [10.0, 10.01]
+        obj['dec'] = [20.0, 20.01]
+        obj['id'] = [1, 2]
+        return obj
+
+    @pytest.mark.unit
+    def test_unparseable_reply(self, monkeypatch):
+        def cone_search(*args, **kwargs):
+            raise ValueError('No table found')
+
+        monkeypatch.setattr(catalogs.Skybot, 'cone_search', cone_search)
+
+        assert catalogs.xmatch_skybot(self._obj(), time='2026-09-26T00:00:00') is None
+
+    @pytest.mark.unit
+    def test_reply_without_coordinates(self, monkeypatch):
+        reply = Table()
+        reply['Name'] = ['flag']
+        monkeypatch.setattr(catalogs.Skybot, 'cone_search', lambda *args, **kwargs: reply)
+
+        assert catalogs.xmatch_skybot(self._obj(), time='2026-09-26T00:00:00') is None
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

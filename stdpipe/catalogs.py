@@ -1589,11 +1589,15 @@ def xmatch_skybot(obj, sr=10 / 3600, time=None, col_ra='ra', col_dec='dec', col_
         xcat = Skybot.cone_search(
             SkyCoord(ra0, dec0, unit='deg'), (sr0 + 2.0 * sr) * u.deg, Time(time)
         )
-    except (RuntimeError, KeyError, ConnectionError, OSError):
-        # Nothing found in SkyBot
+    except (RuntimeError, KeyError, ValueError, ConnectionError, OSError):
+        # Nothing found in SkyBot, or its reply is not a VOTable ("No table found")
         return None
 
     if xcat is None or len(xcat) == 0:
+        return None
+
+    if 'RA' not in xcat.colnames or 'DEC' not in xcat.colnames:
+        # Unexpected reply, e.g. an error message instead of the object list
         return None
 
     # Cross-match objects
