@@ -877,6 +877,41 @@ class TestFallbackDispatch:
         return catalogs.get_cat_vizier(10.0, 20.0, 0.1, catalog, augment_bands=False, **kwargs)
 
     @pytest.mark.unit
+    @pytest.mark.parametrize("empty_server", [DEFAULT_SERVER, MIRROR])
+    @pytest.mark.parametrize("error_type", [
+        requests.exceptions.ConnectionError, TableParseError, catalogs.VizierQueryError,
+    ])
+    def test_failed_uncached_retry_does_not_suppress_fallback(self, monkeypatch, empty_server, error_type):
+        """A cached empty result must not survive a failed fresh query."""
+        calls, fallback_calls = [], []
+        monkeypatch.setattr(catalogs, "Vizier", _fake_vizier({}))
+        monkeypatch.setattr(catalogs, "vizier_mirrors", [MIRROR])
+
+        def query(vizier, coord, radius, catalog, cache=True):
+            calls.append((vizier.VIZIER_SERVER, cache))
+            if vizier.VIZIER_SERVER == empty_server and cache:
+                return []
+            raise error_type("Query failed")
+
+        def fallback(ra0, dec0, sr0, **kwargs):
+            fallback_calls.append((ra0, dec0, sr0))
+            return _one_row_cat(1.0, 2.0)
+
+        monkeypatch.setattr(catalogs, "_query_vizier_region", query)
+        monkeypatch.setattr(catalogs, "catalog_fallbacks", {"skymapper": fallback})
+        cat = catalogs.get_cat_vizier(10.0, 20.0, 0.1, "skymapper", augment_bands=False)
+
+        assert cat is not None and cat["RAJ2000"][0] == 1.0
+        assert fallback_calls == [(10.0, 20.0, 0.1)]
+        expected = [(DEFAULT_SERVER, True)]
+        if empty_server == DEFAULT_SERVER:
+            expected.append((DEFAULT_SERVER, False))
+        expected.append((MIRROR, True))
+        if empty_server == MIRROR:
+            expected.append((MIRROR, False))
+        assert calls == expected
+
+    @pytest.mark.unit
     def test_fallback_used_when_mirrors_exhausted(self, monkeypatch):
         def fake_fallback(ra0, dec0, sr0, filters=None, timeout=None, verbose=False):
             cat = Table()

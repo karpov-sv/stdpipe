@@ -1451,6 +1451,8 @@ def get_cat_vizier(
             break
         except (requests.exceptions.RequestException, TableParseError, VizierQueryError) as e:
             # Network-level failure, an unparseable response, or an error reported by the server - try the next server
+            # A failed uncached retry must discard the preceding cached result.
+            cats = None
             log('VizieR query failed on', vizier.VIZIER_SERVER, ':', str(e)[:200])
     else:
         log('All VizieR servers failed, cannot get catalogue', catalog)
