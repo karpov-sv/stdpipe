@@ -2749,6 +2749,41 @@ class TestLocalBackgroundNoise:
 
 
 @pytest.mark.unit
+class TestQuantizedLocalBackground:
+    """Median and mode of the annulus must not be quantized with integer-valued images."""
+
+    def test_quantization_step(self):
+        rng = np.random.default_rng(0)
+        base = 100.25 + 2 * rng.normal(size=(200, 200))
+        assert photometry_measure._quantization_step(np.round(base)) == 1.0
+        assert photometry_measure._quantization_step(np.round(base).astype(np.float32)) == 1.0
+        assert photometry_measure._quantization_step(0.7 * np.round(base / 0.7)) == pytest.approx(0.7)
+        assert photometry_measure._quantization_step(base) is None
+
+    def test_grouped_median(self):
+        """Interpolated median follows the level between the grid values, unlike the plain one."""
+        rng = np.random.default_rng(1)
+        for off in [0.0, 0.25, 0.5, 0.75]:
+            values = np.round(off + 2 * rng.normal(size=100000))
+            assert np.median(values) in (0.0, 1.0)
+            assert photometry_measure._grouped_median(values, 1.0) == pytest.approx(off, abs=0.02)
+
+    @pytest.mark.parametrize('backend', ['photutils', 'sep'])
+    @pytest.mark.parametrize('bg_estimator', ['median', 'mode'])
+    def test_empty_sky_unbiased(self, backend, bg_estimator):
+        # Sky level a quarter step above an integer: the plain median was biased by
+        # 1.1 sigma, and the mode by 2.7 sigma, of the aperture noise
+        rng = np.random.default_rng(1)
+        image = np.round(100.25 + 2 * rng.normal(size=(1024, 1024)))
+        obj = Table({'x': rng.uniform(30, 994, 2000), 'y': rng.uniform(30, 994, 2000)})
+        res = _measure_backend(backend)(
+            obj, image, aper=5.6, bkgann=[15, 21], bg_estimator=bg_estimator,
+            bg_size=128, gain=1e9, verbose=False,
+        )
+        assert np.nanmedian(res['flux'] / res['fluxerr']) == pytest.approx(0, abs=0.15)
+
+
+@pytest.mark.unit
 class TestSEPPSFSampledModel:
     """SEP PSF fitting should follow the declared sampling convention of the model."""
 

@@ -1076,6 +1076,14 @@ def measure_objects(
     image1, mask0, mask = _prepare_image_and_mask(image, mask)
     bg_err = _prepare_bg_err(bg_err, image1.shape)
 
+    # Median of quantized (e.g. integer) values is quantized too, so the local background
+    # median and mode need the original values to be interpolated on their grid
+    bg_quant, image_quant = None, None
+    if bkgann is not None and len(bkgann) == 2 and bg_estimator in ('median', 'mode') and bkg_order == 0:
+        bg_quant = _quantization_step(image1, mask | mask0)
+        if bg_quant is not None:
+            image_quant = image1.copy()
+
     if bg is None or (err is None and bg_err is None) or get_bg:
         log('Estimating global background with %dx%d grid' % (bg_size, bg_size))
         bg_est = photutils.background.Background2D(
@@ -1275,7 +1283,23 @@ def measure_objects(
 
         # Only compute local background for valid positions
         if np.any(valid_pos):
-            if bkg_order == 0:
+            if bg_quant is not None:
+                log('Image values are quantized with step %g, interpolating the median on their grid' % bg_quant)
+                obj['bg_local'][valid_pos] = _annulus_bg_quantized(
+                    image_quant,
+                    image_quant - image1,
+                    x_vals[valid_pos],
+                    y_vals[valid_pos],
+                    bkgann[0],
+                    bkgann[1],
+                    mask | mask0,
+                    bg_estimator,
+                    bg_quant,
+                    # Same clipping as the estimators below
+                    clip_sigma=clip_sigma if bg_estimator == 'median' else 3.0,
+                    clip_iters=clip_iters if bg_estimator == 'median' else 10,
+                )
+            elif bkg_order == 0:
                 # Use photutils LocalBackground for order=0 (performance)
                 if bg_estimator == 'mean':
                     estimator = photutils.background.MeanBackground(
@@ -1616,8 +1640,108 @@ def _get_sep_psf(psf, fwhm, log):
     raise TypeError("Unsupported PSF type: %s. Expected sep.PSF or PSFEx dict." % type(psf))
 
 
-def _sep_annulus_bg(image, x, y, bkgann, mask, bg_estimator, clip_sigma, clip_iters):
-    """Local background in circular annuli using ``sep.stats_circann()``."""
+def _quantization_step(image, mask=None, nmax=100000):
+    """Step of the regular grid the unmasked pixel values lie on (1 for integer data,
+    BSCALE for scaled integers), or None if the values are not quantized."""
+    good = np.isfinite(image)
+    if mask is not None:
+        good &= ~mask
+    v = image[good]
+    if v.size > nmax:
+        # Deterministic subsample, enough to see the grid
+        v = v[np.linspace(0, v.size - 1, nmax).astype(int)]
+    u = np.unique(v)
+    # Continuous data has nearly all values distinct
+    if u.size < 2 or u.size > 0.5 * v.size:
+        return None
+
+    q = np.min(np.diff(u))
+    k = (u - u[0]) / q
+    if q <= 0 or np.any(np.abs(k - np.round(k)) > 1e-2):
+        return None
+
+    return float(q)
+
+
+def _grouped_median(values, q):
+    """Median of the values quantized with step `q`, interpolated within the grid cell
+    (median of grouped data). The plain median of such values is itself quantized, and
+    is biased by up to q/2 depending on where the true level is between the grid values,
+    while this one follows the level continuously."""
+    s = np.sort(values)
+    n = s.size
+    c = s[n // 2]  # Grid value containing the median
+    n_lt = np.searchsorted(s, c - 0.5 * q)
+    n_eq = np.searchsorted(s, c + 0.5 * q) - n_lt
+
+    return c - 0.5 * q + q * (0.5 * n - n_lt) / n_eq
+
+
+def _annulus_bg_quantized(
+    image, bg, x, y, r_in, r_out, mask, bg_estimator, q, clip_sigma=None, clip_iters=None
+):
+    """Local background in circular annuli for the image quantized with step `q`.
+
+    `image` is the original quantized image and `bg` the global background map to be
+    subtracted from it. The median (and the mode, 3*median - 2*mean) is computed as an
+    interpolated median of grouped data on the grid of the original values, minus the
+    mean of the global background in the annulus, after sigma clipping of
+    background-subtracted values. Pixels are selected as in photutils LocalBackground.
+    """
+    from astropy.stats import sigma_clip
+
+    x, y = np.atleast_1d(x), np.atleast_1d(y)
+    if np.ndim(r_in) == 0 and np.ndim(r_out) == 0:
+        amasks = photutils.aperture.CircularAnnulus(np.column_stack([x, y]), r_in, r_out).to_mask(
+            method='center'
+        )
+    else:
+        # Per-source radii
+        r_in, r_out = np.broadcast_to(r_in, x.shape), np.broadcast_to(r_out, x.shape)
+        amasks = [
+            photutils.aperture.CircularAnnulus((x[i], y[i]), r_in[i], r_out[i]).to_mask(method='center')
+            for i in range(x.size)
+        ]
+    result = np.full(x.size, np.nan)
+
+    for i, amask in enumerate(amasks):
+        v = amask.get_values(image, mask=mask)
+        b = amask.get_values(bg, mask=mask)
+        good = np.isfinite(v) & np.isfinite(b)
+        v, b = v[good], b[good]
+        if not v.size:
+            continue
+
+        if clip_sigma:
+            keep = ~np.ma.getmaskarray(sigma_clip(v - b, sigma=clip_sigma, maxiters=clip_iters))
+            v, b = v[keep], b[keep]
+            if not v.size:
+                continue
+
+        median = _grouped_median(v, q) - np.mean(b)
+        if bg_estimator == 'mode':
+            result[i] = 3 * median - 2 * np.mean(v - b)
+        else:
+            result[i] = median
+
+    return result
+
+
+def _sep_annulus_bg(
+    image, x, y, bkgann, mask, bg_estimator, clip_sigma, clip_iters, image_quant=None, q=None
+):
+    """Local background in circular annuli using ``sep.stats_circann()``.
+
+    If `q` is set, the median and mode are computed with :func:`_annulus_bg_quantized`
+    on the original image `image_quant` quantized with this step, of which `image` is
+    the background-subtracted version.
+    """
+    if q is not None and bg_estimator in ('median', 'mode'):
+        return _annulus_bg_quantized(
+            image_quant, image_quant - image, x, y, bkgann[0], bkgann[1], mask,
+            bg_estimator, q, clip_sigma=clip_sigma, clip_iters=clip_iters,
+        )
+
     _, _, bg_median, _, bg_mean_clip, _ = sep.stats_circann(
         image,
         x,
@@ -1839,6 +1963,15 @@ def measure_objects_sep(
     # SEP requires C-contiguous arrays
     image1 = np.ascontiguousarray(image1)
     bg_err = _prepare_bg_err(bg_err, image1.shape)
+
+    # Median of quantized (e.g. integer) values is quantized too, so the local background
+    # median and mode need the original values to be interpolated on their grid
+    bg_quant, image_quant = None, None
+    if bkgann is not None and bg_estimator in ('median', 'mode'):
+        bg_quant = _quantization_step(image1, mask | mask0)
+        if bg_quant is not None:
+            log('Image values are quantized with step %g, interpolating the local background median on their grid' % bg_quant)
+            image_quant = image1.copy()
 
     if bg is None or (err is None and bg_err is None) or get_bg:
         log('Estimating global background with SEP')
@@ -2177,6 +2310,8 @@ def measure_objects_sep(
                     bg_estimator,
                     clip_sigma,
                     clip_iters,
+                    image_quant=image_quant,
+                    q=bg_quant,
                 )
                 flux1, _, _ = sep.sum_circle_optimal(
                     np.ones_like(image1), x_vals[valid_pos], y_vals[valid_pos], aper_arr, **opt_kw
@@ -2222,6 +2357,8 @@ def measure_objects_sep(
                     bg_estimator,
                     clip_sigma,
                     clip_iters,
+                    image_quant=image_quant,
+                    q=bg_quant,
                 )
 
                 # Subtract local background. aper_arr is either a scalar
