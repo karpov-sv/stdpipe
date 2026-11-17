@@ -1999,15 +1999,20 @@ def measure_objects_sep(
 
         # Position-dependent background flux error from user-provided
         # background noise map, or from global background model, if
-        # available - same definition as in measure_objects()
+        # available - same definition as in measure_objects(). The error is
+        # propagated by SEP itself, so that it follows the same convention for
+        # the pixels on the aperture edge as fluxerr (squared overlap weights
+        # since sep-x 1.5.4, linear before)
         if bg_err is not None or bg_est is not None:
-            res, _, _ = sep.sum_circle(
-                _bg_fluxerr_map(bg_err) if bg_err is not None else np.ascontiguousarray(bg_est_rms**2),
+            bg_var = _bg_fluxerr_map(bg_err) if bg_err is not None else np.ascontiguousarray(bg_est_rms**2)
+            _, res, _ = sep.sum_circle(
+                np.zeros_like(bg_var),
                 x_vals[valid_pos],
                 y_vals[valid_pos],
                 aper_arr,
+                var=bg_var,
             )
-            obj['bg_fluxerr'][valid_pos] = np.sqrt(res)
+            obj['bg_fluxerr'][valid_pos] = res
 
         # Prepare bkgann in pixels.
         bkgann_pix = None
