@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from scipy import ndimage
 from astropy.table import Table
+from photutils.aperture import CircularAperture, aperture_photometry
 
 from stdpipe.photometry_background import estimate_noise_excess, _noise_excess_kernel
 from stdpipe import photometry_measure
@@ -37,17 +38,19 @@ def _gaussian_psf_dict(sigma, size=31):
 
 
 def _overlap_factor(radius):
-    """Excess for white noise: photutils and SEP predict aperture variance as
-    sum(w * err**2), while the actual one is sum(w**2 * err**2)."""
+    """White-noise excess relative to the installed photutils uncertainty."""
     w = _noise_excess_kernel(radius)[2]
-    return np.sqrt(np.sum(w**2) / np.sum(w))
+    half = int(np.ceil(radius))
+    data = np.zeros((2 * half + 1, 2 * half + 1))
+    aperture = CircularAperture((half, half), r=radius)
+    result = aperture_photometry(data, aperture, error=np.ones_like(data))
+    return np.sqrt(np.sum(w**2)) / result["aperture_sum_err"][0]
 
 
 def test_white_noise(white):
     excess = estimate_noise_excess(white, 1.0, bg=0, aper=[1, 3, 8])
     assert excess.shape == (3,)
     expected = [_overlap_factor(_) for _ in [1, 3, 8]]
-    assert expected[0] < expected[1] < expected[2] < 1
     assert np.allclose(excess, expected, atol=0.05)
 
 
@@ -119,7 +122,8 @@ def test_non_finite_pixels_rejected(white):
     image[100:200, 100:200] = np.nan
     err = np.ones_like(white)
     err[300:400, 300:400] = np.nan
-    excess = estimate_noise_excess(image, err, bg=0, aper=3)
+    # Stabilize the sampled MAD after excluding both non-finite regions.
+    excess = estimate_noise_excess(image, err, bg=0, aper=3, nsamples=10000)
     assert np.isfinite(excess)
     assert excess == pytest.approx(_overlap_factor(3), abs=0.05)
 
@@ -196,6 +200,21 @@ def test_measured_matches_kernel_and_sees_annulus(white):
     assert plain < mean < mode
     assert mean / plain == pytest.approx(np.sqrt(1 + 16 / (400 - 144)), abs=0.04)
     assert mode / plain > 1.04
+
+
+def test_sep_callback_keeps_sep_variance_convention(white):
+    image = 10 * white
+    def measure(objects):
+        return photometry_measure.measure_objects_sep(
+            objects, image, aper=4, bg=0, bg_err=10, sn=0, verbose=False,
+        )
+    excess = estimate_noise_excess(image, aper=4, measure=measure)
+    w = _noise_excess_kernel(4)[2]
+    _, error, _ = photometry_measure.sep.sum_circle(
+        np.zeros((25, 25)), np.array([12.0]), np.array([12.0]), 4, err=10,
+    )
+    expected = 10 * np.sqrt(np.sum(w**2)) / error[0]
+    assert excess == pytest.approx(expected, abs=0.05)
 
 
 def test_measured_positions(white):

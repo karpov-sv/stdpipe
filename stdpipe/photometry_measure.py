@@ -1353,12 +1353,14 @@ def measure_objects(
 
         # Position-dependent background flux error from user-provided background
         # noise map, or from global background model, if available
-        if bg_err is not None:
-            res = photutils.aperture.aperture_photometry(_bg_fluxerr_map(bg_err), apertures)
-            obj['bg_fluxerr'][valid_idx] = np.sqrt(res['aperture_sum'])
-        elif bg_est is not None:
-            res = photutils.aperture.aperture_photometry(bg_est_rms**2, apertures)
-            obj['bg_fluxerr'][valid_idx] = np.sqrt(res['aperture_sum'])
+        if bg_err is not None or bg_est is not None:
+            background_error = np.sqrt(_bg_fluxerr_map(bg_err)) if bg_err is not None else bg_est_rms
+            # Delegate variance propagation to the installed photutils: 3.1+
+            # squares fractional pixel weights, whereas older releases do not.
+            res = photutils.aperture.aperture_photometry(
+                image_ones, apertures, error=background_error, mask=mask0
+            )
+            obj["bg_fluxerr"][valid_idx] = res["aperture_sum_err"]
 
         # ..plus the noise of the local background subtracted over the aperture
         obj['bg_fluxerr'] = np.hypot(obj['bg_fluxerr'], obj['npix_aper'] * obj['bg_local_err'])

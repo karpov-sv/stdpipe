@@ -2606,6 +2606,13 @@ class TestBgErr:
         )
         return image, Table({'x': [64.0], 'y': [64.0]})
 
+    def test_estimated_background_errors_match_total_without_gain(self, star, backend):
+        image, obj = star
+        res = _measure_backend(backend)(
+            obj, image, aper=self.aper, gain=None, sn=0, verbose=False,
+        )
+        np.testing.assert_allclose(res["bg_fluxerr"], res["fluxerr"], rtol=1e-6)
+
     def test_bg_fluxerr_from_scalar_bg_err(self, star, backend):
         image, obj = star
         measure = _measure_backend(backend)
@@ -2615,14 +2622,13 @@ class TestBgErr:
             err=np.full_like(image, self.noise), bg_err=3.0 * self.noise,
             sn=0, verbose=False,
         )
-        expected = 3.0 * self.noise * np.sqrt(np.pi * self.aper**2)
-        assert res['bg_fluxerr'][0] == pytest.approx(expected, rel=0.02)
         # err is used as is, bg_err does not affect fluxerr
         ref = measure(
             obj, image, aper=self.aper, bg=np.full_like(image, 100.0),
             err=np.full_like(image, self.noise), sn=0, verbose=False,
         )
         assert res['fluxerr'][0] == pytest.approx(ref['fluxerr'][0], rel=1e-6)
+        assert res["bg_fluxerr"][0] == pytest.approx(3 * ref["fluxerr"][0], rel=1e-6)
 
     def test_bg_err_is_base_of_automatic_noise(self, star, backend):
         image, obj = star
@@ -2633,7 +2639,9 @@ class TestBgErr:
             gain=gain, sn=0, verbose=False,
         )
         npix = np.pi * self.aper**2
-        assert res['bg_fluxerr'][0] == pytest.approx(f * self.noise * np.sqrt(npix), rel=0.02)
+        ref = measure(obj, image, aper=self.aper, bg=100.0,
+                      err=np.full_like(image, f * self.noise), sn=0, verbose=False)
+        assert res["bg_fluxerr"][0] == pytest.approx(ref["fluxerr"][0], rel=0.02)
         expected = np.sqrt(f**2 * self.noise**2 * npix + self.flux / gain)
         assert res['fluxerr'][0] == pytest.approx(expected, rel=0.05)
 
@@ -2647,9 +2655,9 @@ class TestBgErr:
             bg_err=bg_err, sn=0, verbose=False,
         )
         assert np.isfinite(res['bg_fluxerr'][0])
-        assert res['bg_fluxerr'][0] == pytest.approx(
-            self.noise * np.sqrt(np.pi * self.aper**2), rel=0.05
-        )
+        ref = measure(obj, image, aper=self.aper, bg=0.0,
+                      err=np.where(np.isfinite(bg_err), bg_err, 0.0), sn=0, verbose=False)
+        assert res["bg_fluxerr"][0] == pytest.approx(ref["fluxerr"][0], rel=0.01)
 
     def test_bg_err_shape_mismatch(self, star, backend):
         image, obj = star

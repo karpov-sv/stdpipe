@@ -9,6 +9,7 @@ non-grid methods (percentile filtering, morphological opening).
 import numpy as np
 
 from astropy.stats import mad_std
+from astropy.utils import minversion
 
 
 def get_background_percentile(
@@ -1119,12 +1120,13 @@ def estimate_noise_excess(
     aperture scale that the background model does not follow, or if the noise
     map underestimates the noise in general.
 
-    For aperture sums, the noise is predicted as ``sqrt(sum(w * err**2))``
-    with ``w`` the fraction of the pixel inside the aperture, as photutils and
-    SEP do. It overestimates the noise of pixels on the aperture edge, so for
-    uncorrelated noise the excess is slightly below 1 (~0.97 for a radius of 5
-    pixels, ~0.94 for 3 pixels). For ``optimal=True`` the noise of the
-    weighted sum, ``sqrt(sum(w**2 * err**2))``, is used.
+    For aperture sums, the noise follows the installed photutils convention:
+    ``sqrt(sum(w**2 * err**2))`` in photutils 3.1 and later, and
+    ``sqrt(sum(w * err**2))`` in earlier versions, where ``w`` is the pixel
+    overlap fraction. The older convention overestimates edge-pixel noise,
+    giving an excess slightly below 1 for uncorrelated noise. Optimal
+    extraction always uses squared weights. For SEP aperture photometry,
+    which still uses linear overlap weights, pass that routine as *measure*.
 
     These sums use the global background only. If the photometry does more -
     e.g. subtracts a local background from an annulus, which both adds the
@@ -1284,6 +1286,7 @@ def estimate_noise_excess(
     rng = np.random.default_rng(seed)
     ny, nx = image.shape
 
+    squared_weights = optimal or minversion("photutils", "3.1")
     excesses, stats = [], []
     for radius in apers:
         radius_pix = radius * fwhm_s if fwhm_s is not None else radius
@@ -1318,10 +1321,9 @@ def estimate_noise_excess(
         yi, xi = y[:, None] + dy, x[:, None] + dx
 
         flux = np.sum(w * resid[yi, xi], axis=1)
-        # Noise predicted the same way as the photometry routines do: with the
-        # weights for optimal extraction, and with the overlap fractions (not
-        # their squares) for aperture sums, as photutils and SEP do
-        fluxerr = np.sqrt(np.sum((w**2 if optimal else w) * var[yi, xi], axis=1))
+        # Match measure_objects(), including photutils' version-dependent
+        # treatment of fractional pixels for aperture sums.
+        fluxerr = np.sqrt(np.sum((w**2 if squared_weights else w) * var[yi, xi], axis=1))
         z = flux / fluxerr
 
         excess = mad_std(z)
