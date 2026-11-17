@@ -117,6 +117,18 @@ releases up to 0.4.0 are only available in the
 
 ### Fixed
 
+- APASS band conversions in `get_cat_vizier()` and `xmatch_objects()` were
+  silently skipped since astroquery 0.4.8, which returns the original column
+  names like `r'mag`; primes are now replaced, giving `r_mag` as before.
+- `augment_cat_bands()` derives `e_Gmag`, `e_BPmag` and `e_RPmag` for
+  `gaiadr3` from flux errors when a VizieR mirror does not provide them.
+- `xmatch_objects()` returns None with a warning when CDS XMatch fails,
+  instead of raising, and uses the `https://cdsxmatch.cds.unistra.fr` URL
+  instead of astroquery's legacy one, which drops large uploads.
+  `xmatch_skybot()` returns None on replies that are not usable tables.
+- `subtraction.run_zogy()` ignores matched objects with zero or non-finite
+  magnitude errors when estimating the initial template flux scale (they
+  crashed the robust fit), and starts from 1 if the scale is still unusable.
 - ZPN-SIP fits (`astrometry_wcs.fit_wcs_from_points()` with a ZPN projection
   and `sip_degree`) keep CRPIX fixed. Moving the projection center is nearly
   degenerate with quadratic SIP terms on small fields, so CRPIX used to drift

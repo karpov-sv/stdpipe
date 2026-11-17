@@ -967,10 +967,22 @@ def run_zogy(
             fidx = (image_obj['flags'][iidx] & 0x100) == 0
             fidx &= (template_obj['flags'][tidx] & 0x100) == 0
 
+            # Photometric zero point shift between two object lists
+            ZP = np.ma.filled(
+                np.ma.asarray(template_obj['mag'][tidx] - image_obj['mag'][iidx], dtype=float),
+                np.nan,
+            )
+            dZP = np.ma.filled(
+                np.ma.asarray(
+                    np.hypot(image_obj['magerr'][iidx], template_obj['magerr'][tidx]), dtype=float
+                ),
+                np.nan,
+            )
+            # Zero or non-finite errors would give infinite weights and a NaN scale
+            fidx &= np.isfinite(ZP) & np.isfinite(dZP) & (dZP > 0)
+
             if np.sum(fidx) > 5:
-                # Compute photometric zero point shift between two object lists
-                ZP = template_obj['mag'][tidx][fidx] - image_obj['mag'][iidx][fidx]
-                dZP = np.hypot(image_obj['magerr'][iidx][fidx], template_obj['magerr'][tidx][fidx])
+                ZP, dZP = ZP[fidx], dZP[fidx]
                 X = np.ones_like(ZP).T
                 # Weighted robust regression
                 C = sm.RLM(ZP / dZP, (X.T / dZP).T).fit()

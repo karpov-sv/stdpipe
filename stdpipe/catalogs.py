@@ -1334,6 +1334,18 @@ catalog_fallbacks = {
 }
 
 
+def _sanitize_column_names(cat):
+    """Replace primes in column names (e.g. APASS ``r'mag`` -> ``r_mag``) in place.
+
+    astroquery >= 0.4.8 returns VizieR columns under their original names
+    instead of the sanitized VOTable IDs, so the primes are kept whatever
+    server answers, while the band conversions expect the sanitized names.
+    """
+    for colname in cat.colnames:
+        if "'" in colname:
+            cat.rename_column(colname, colname.replace("'", '_'))
+
+
 def get_cat_vizier(
     ra0,
     dec0,
@@ -1477,11 +1489,7 @@ def get_cat_vizier(
         cat = cats[0]
         cat.meta['name'] = name
 
-        # Some mirrors (e.g. IDIA) keep the primes of original column names like r'mag,
-        # which the default server sanitizes to r_mag
-        for colname in cat.colnames:
-            if "'" in colname:
-                cat.rename_column(colname, colname.replace("'", '_'))
+        _sanitize_column_names(cat)
     else:
         log('Error requesting catalogue', catalog, 'from VizieR')
         if cats is not None:
@@ -1563,11 +1571,19 @@ def xmatch_objects(obj, catalog='ps1', sr=3 / 3600, col_ra='ra', col_dec='dec', 
     else:
         vizier_id = catalog
 
+    for col in (col_ra, col_dec):
+        if col not in obj.colnames:
+            raise KeyError(f"Column {col} not found in the object list")
+
     xmatch = XMatch()
     if 'u-strasbg.fr' in xmatch.URL:
-        # Older astroquery versions use the legacy domain, which drops large uploads
-        xmatch.URL = xmatch.URL.replace('u-strasbg.fr', 'cds.unistra.fr')
+        # astroquery up to at least 0.4.11 uses the legacy domain, which drops
+        # large uploads; this is the URL of its development version
+        xmatch.URL = 'https://cdsxmatch.cds.unistra.fr/xmatch/api/v1/sync'
 
+    # Any failure of the service (HTTP errors, VOTable or HTML error pages that
+    # astroquery cannot parse) is reported as a warning, so that the callers
+    # may skip the cross-match
     try:
         xcat = xmatch.query(
             cat1=obj,
@@ -1579,6 +1595,8 @@ def xmatch_objects(obj, catalog='ps1', sr=3 / 3600, col_ra='ra', col_dec='dec', 
     except Exception as e:
         warnings.warn(f"CDS XMatch query failed for catalogue {catalog}: {e}")
         return None
+
+    _sanitize_column_names(xcat)
 
     if augment_bands:
         # Augment catalogue with additional bandpasses

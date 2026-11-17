@@ -1621,11 +1621,11 @@ class TestFallbackSources:
 
 
 class TestMirrorColumnNames:
-    """Test normalization of column names returned by VizieR mirrors."""
+    """Test normalization of column names returned by VizieR."""
 
     @pytest.mark.unit
     def test_primes_in_column_names_are_sanitized(self, monkeypatch):
-        """IDIA returns APASS columns as r'mag instead of r_mag."""
+        """astroquery >= 0.4.8 returns APASS columns as r'mag instead of r_mag."""
         raw = Table()
         raw['RAJ2000'] = [10.0]
         raw['DEJ2000'] = [20.0]
@@ -1706,7 +1706,27 @@ class TestXmatchObjects:
 
         catalogs.xmatch_objects(self._obj(), 'ps1', augment_bands=False)
 
-        assert urls == ['http://cdsxmatch.cds.unistra.fr/xmatch/api/v1/sync']
+        assert urls == ['https://cdsxmatch.cds.unistra.fr/xmatch/api/v1/sync']
+
+    @pytest.mark.unit
+    def test_missing_coordinate_column_raises(self):
+        """Wrong arguments are not hidden as a service failure."""
+        with pytest.raises(KeyError, match='RA'):
+            catalogs.xmatch_objects(self._obj(), 'ps1', col_ra='RA')
+
+    @pytest.mark.unit
+    def test_primes_in_column_names_are_sanitized(self, monkeypatch):
+        def query(self, *args, **kwargs):
+            xcat = Table()
+            xcat['angDist'] = [0.1]
+            xcat["r'mag"] = [15.0]
+            return xcat
+
+        monkeypatch.setattr(type(catalogs.XMatch), 'query', query)
+
+        xcat = catalogs.xmatch_objects(self._obj(), 'apass', augment_bands=False)
+
+        assert xcat.colnames == ['angDist', 'r_mag']
 
 
 class TestXmatchSkybot:
