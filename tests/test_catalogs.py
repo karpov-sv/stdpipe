@@ -1620,5 +1620,122 @@ class TestFallbackSources:
         assert vsa_module.Vsa.TIMEOUT == original_timeout
 
 
+class TestMirrorColumnNames:
+    """Test normalization of column names returned by VizieR mirrors."""
+
+    @pytest.mark.unit
+    def test_primes_in_column_names_are_sanitized(self, monkeypatch):
+        """IDIA returns APASS columns as r'mag instead of r_mag."""
+        raw = Table()
+        raw['RAJ2000'] = [10.0]
+        raw['DEJ2000'] = [20.0]
+        for band in ['B', 'V']:
+            raw[band + 'mag'] = [15.0]
+            raw['e_' + band + 'mag'] = [0.01]
+        for band in ['g', 'r', 'i']:
+            raw[band + "'mag"] = [15.0]
+            raw['e_' + band + "'mag"] = [0.01]
+
+        monkeypatch.setattr(catalogs, '_query_vizier_region', lambda *args, **kwargs: [raw])
+
+        cat = catalogs.get_cat_vizier(10.0, 20.0, 0.1, 'apass', verbose=False)
+
+        assert not any("'" in _ for _ in cat.colnames)
+        assert {'g_mag', 'r_mag', 'i_mag', 'e_r_mag'}.issubset(cat.colnames)
+        # APASS augmentation relies on the sanitized names
+        assert 'Rmag' in cat.colnames
+
+
+class TestAugmentGaiaDR3:
+    """Test Gaia DR3 augmentation."""
+
+    @pytest.mark.unit
+    def test_magnitude_errors_from_flux_errors(self):
+        cat = Table()
+        cat['Gmag'] = [15.0]
+        cat['BPmag'] = [15.3]
+        cat['RPmag'] = [14.6]
+        for flux in ['FG', 'FBP', 'FRP']:
+            cat[flux] = [1000.0]
+            cat['e_' + flux] = [10.0]
+
+        catalogs.augment_cat_bands(cat, catalog='gaiadr3', verbose=False)
+
+        for band in ['G', 'BP', 'RP']:
+            assert cat['e_' + band + 'mag'][0] == pytest.approx(2.5 / np.log(10) * 0.01)
+
+    @pytest.mark.unit
+    def test_missing_flux_columns_handled(self):
+        cat = Table()
+        cat['Gmag'] = [15.0]
+
+        result = catalogs.augment_cat_bands(cat, catalog='gaiadr3', verbose=False)
+
+        assert result.colnames == ['Gmag']
+
+
+class TestXmatchObjects:
+    """Test handling of CDS XMatch failures."""
+
+    def _obj(self):
+        obj = Table()
+        obj['ra'] = [10.0]
+        obj['dec'] = [20.0]
+        return obj
+
+    @pytest.mark.unit
+    def test_service_failure_returns_none(self, monkeypatch):
+        def query(self, *args, **kwargs):
+            raise ConnectionError('Connection reset by peer')
+
+        monkeypatch.setattr(type(catalogs.XMatch), 'query', query)
+
+        with pytest.warns(UserWarning, match='XMatch query failed'):
+            assert catalogs.xmatch_objects(self._obj(), 'ps1') is None
+
+    @pytest.mark.unit
+    def test_legacy_domain_is_replaced(self, monkeypatch):
+        urls = []
+
+        def query(self, *args, **kwargs):
+            urls.append(self.URL)
+            return Table()
+
+        monkeypatch.setattr(type(catalogs.XMatch), 'URL', 'http://cdsxmatch.u-strasbg.fr/xmatch/api/v1/sync')
+        monkeypatch.setattr(type(catalogs.XMatch), 'query', query)
+
+        catalogs.xmatch_objects(self._obj(), 'ps1', augment_bands=False)
+
+        assert urls == ['http://cdsxmatch.cds.unistra.fr/xmatch/api/v1/sync']
+
+
+class TestXmatchSkybot:
+    """Test handling of unusable SkyBoT replies."""
+
+    def _obj(self):
+        obj = Table()
+        obj['ra'] = [10.0, 10.01]
+        obj['dec'] = [20.0, 20.01]
+        obj['id'] = [1, 2]
+        return obj
+
+    @pytest.mark.unit
+    def test_unparseable_reply(self, monkeypatch):
+        def cone_search(*args, **kwargs):
+            raise ValueError('No table found')
+
+        monkeypatch.setattr(catalogs.Skybot, 'cone_search', cone_search)
+
+        assert catalogs.xmatch_skybot(self._obj(), time='2026-09-26T00:00:00') is None
+
+    @pytest.mark.unit
+    def test_reply_without_coordinates(self, monkeypatch):
+        reply = Table()
+        reply['Name'] = ['flag']
+        monkeypatch.setattr(catalogs.Skybot, 'cone_search', lambda *args, **kwargs: reply)
+
+        assert catalogs.xmatch_skybot(self._obj(), time='2026-09-26T00:00:00') is None
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
