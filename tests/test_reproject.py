@@ -389,7 +389,12 @@ class TestReprojectLanczos:
         # Center should still be flagged
         assert result[64, 64] == 0x0004
 
-    def test_is_flags_downscale_or(self):
+    # Output grid aligned with the input one (64.5), or shifted by a generic
+    # fraction of the input pixel. A shift of exactly half an input pixel
+    # (64.25) puts the sub-samples on input pixel edges, where the sampled
+    # pixel depends on the rounding noise of the sky round trip
+    @pytest.mark.parametrize('crpix', [64.5, 64.4])
+    def test_is_flags_downscale_or(self, crpix):
         """Isolated flagged pixels survive downscaling via bitwise OR."""
         wcs_in, hdr_in = _make_wcs()
         ny, nx = hdr_in['NAXIS2'], hdr_in['NAXIS1']
@@ -402,7 +407,7 @@ class TestReprojectLanczos:
 
         wcs_out, hdr_out = _make_wcs(
             cdelt=(-2.0 / 3600, 2.0 / 3600),
-            crpix=(64.25, 64.25),
+            crpix=(crpix, crpix),
             naxis=(128, 128),
         )
         result = reproject_lanczos(
