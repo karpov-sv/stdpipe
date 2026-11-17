@@ -25,6 +25,12 @@ from . import astrometry
 # small means the fit is perfect down to floating-point roundoff.
 _MIN_FIT_SCALE = 1e-8
 
+# Minimal number of stars per fitted parameter in match(). Below it the spatial
+# order of the zero point is reduced: with fewer stars the average leverage
+# p/N exceeds 1/3, residuals of the high-leverage ones are pinned near zero,
+# and the robust scale (and thus the noise model) collapses.
+_MIN_POINTS_PER_PARAM = 3
+
 
 def make_series(mul=1.0, x=1.0, y=1.0, order=1, sum=False, zero=True):
     x = np.atleast_1d(x)
@@ -432,7 +438,10 @@ def match(
     obj_y : array-like, optional
         Y coordinates of objects on the image.
     spatial_order : int
-        Order of zero point spatial polynomial (0 for constant).
+        Order of zero point spatial polynomial (0 for constant). It is
+        reduced if fewer than 3 stars per fitted parameter pass the initial
+        quality cuts, the order actually used is returned as
+        ``spatial_order``.
     bg_order : int or None
         Order of additive flux term spatial polynomial. None to disable this
         term in the model.
@@ -463,7 +472,9 @@ def match(
         least squares.
     scale_noise : bool
         Whether to re-scale the noise model (object and catalogue magnitude
-        errors) to match actual scatter of the data points. Intrinsic
+        errors) to match actual scatter of the data points. The errors are
+        only inflated this way, never shrunk, as a small robust scale of few
+        data points does not reliably mean overestimated errors. Intrinsic
         scatter term is not scaled this way.
     use_color : bool or int
         Whether to use catalogue color for deriving the color term. If
@@ -510,6 +521,8 @@ def match(
         - ``params`` -- internal parameters of the fitting polynomial.
         - ``intrinsic_rms``, ``error_scale`` -- fitted values of intrinsic
           scatter and noise scaling.
+        - ``spatial_order`` -- zero point spatial order actually used, may be
+          lower than requested if there are too few stars.
         - ``idx`` -- boolean index of matched objects/catalogue stars used in
           the final fit (not rejected during iterative thresholding, and
           passing initial quality cuts).
@@ -603,19 +616,10 @@ def match(
     if spatial_order > 0 and xy_scale > 1.0:
         log('Normalizing spatial coordinates by %.1f pixels' % xy_scale)
 
-    # Regressor
-    X = make_series(1.0, x, y, order=spatial_order)
-    log('Fitting the model with spatial_order =', spatial_order)
-
     if bg_order is not None:
-        # Spatially varying additive flux component, linearized in magnitudes
-        X += make_series(-2.5 / np.log(10) / 10 ** (-0.4 * omag), x, y, order=bg_order)
         log('Adjusting background level using polynomial with bg_order =', bg_order)
 
     if nonlin:
-        # Non-linearity
-        pos_nonlin = len(X)
-        X += make_series(omag, x, y, order=0)
         log('Fitting for simple non-linearity')
 
     if robust:
@@ -636,10 +640,6 @@ def match(
     if cat_color is not None:
         ccolor = np.asarray(np.ma.filled(cat_color[cidx], fill_value=np.nan), dtype=float)
         if fit_color_term:
-            pos_color = len(X)
-            for _ in range(int(fit_color_term)):
-                X += make_series(ccolor ** (_ + 1), x, y, order=0)
-
             log('Using color term of order', int(fit_color_term))
         elif force_color_term is not None:
             for i, val in enumerate(np.atleast_1d(force_color_term)):
@@ -647,10 +647,29 @@ def match(
             log('Using fixed color term', format_color_term(force_color_term))
     else:
         ccolor = np.zeros_like(cmag)
+        fit_color_term = False
 
-    Nparams = len(X)  # Number of parameters to be fitted
+    def make_design(order):
+        """Design matrix for a given zero point spatial order, plus the
+        positions of the non-linearity and color terms in it."""
+        X = make_series(1.0, x, y, order=order)
 
-    X = np.vstack(X).T
+        if bg_order is not None:
+            # Spatially varying additive flux component, linearized in magnitudes
+            X += make_series(-2.5 / np.log(10) / 10 ** (-0.4 * omag), x, y, order=bg_order)
+
+        pos_nonlin = len(X)
+        if nonlin:
+            X += make_series(omag, x, y, order=0)
+
+        pos_color = len(X)
+        if fit_color_term:
+            for _ in range(int(fit_color_term)):
+                X += make_series(ccolor ** (_ + 1), x, y, order=0)
+
+        return np.vstack(X).T, pos_nonlin, pos_color
+
+    X, pos_nonlin, pos_color = make_design(spatial_order)
     zero = cmag - omag  # We will build a model for this definition of zero point
     zero_err = np.hypot(omag_err, cmag_err)
     # weights = 1.0/zero_err**2
@@ -673,6 +692,22 @@ def match(
         idx0 &= omag_err < 1 / sn
 
     log('%d objects pass initial quality cuts' % np.sum(idx0))
+
+    # With too few stars per parameter, high-leverage stars pull the spatial
+    # polynomial through themselves, the robust residual scale collapses, and
+    # the fit looks far better than the data allow -- lower the spatial order
+    # until the stars constrain the model
+    while spatial_order > 0 and np.sum(idx0) < _MIN_POINTS_PER_PARAM * X.shape[1]:
+        log(
+            'Too few stars (%d) for %d parameters with spatial_order = %d, reducing it'
+            % (np.sum(idx0), X.shape[1], spatial_order)
+        )
+        spatial_order -= 1
+        X, pos_nonlin, pos_color = make_design(spatial_order)
+
+    log('Fitting the model with spatial_order =', spatial_order)
+
+    Nparams = X.shape[1]  # Number of parameters to be fitted
 
     idx = idx0.copy()
 
@@ -725,8 +760,12 @@ def match(
             # vanishing value means the model reproduces the data down to
             # roundoff, leaving no scatter information to rescale with -- keep
             # the noise model as is instead of collapsing it to zero.
+            # The noise model is only ever inflated: a robust scale below one
+            # is as likely to come from residuals pinned by high-leverage
+            # points as from overestimated errors, and shrinking the errors
+            # by it compounds over iterations into a collapsed noise model
             if fit_scale > _MIN_FIT_SCALE:
-                scale_err = scale_err * fit_scale
+                scale_err = max(scale_err * fit_scale, 1.0)
             else:
                 log('Fit scale is negligible - keeping the noise model unscaled')
 
@@ -897,6 +936,7 @@ def match(
         # scale_noise is set) times the residual scale of the final fit
         'error_scale': scale_err * fit_scale,
         'intrinsic_rms': intrinsic_rms,
+        'spatial_order': spatial_order,
         'obj_zero': zero_fn(obj_x, obj_y, mag=obj_mag),
         'ox': ox,
         'oy': oy,

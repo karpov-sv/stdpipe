@@ -460,6 +460,50 @@ class TestMatchRobust:
         )
 
 
+class TestMatchFewStars:
+    """Guards against the noise model collapsing when the stars barely constrain the fit."""
+
+    @pytest.mark.unit
+    def test_spatial_order_reduced_for_few_stars(self):
+        # 17 stars for 6 spatial + 1 color parameters: high-leverage stars
+        # would pin the residuals and collapse the robust scale
+        data = _add_noise_and_outliers(_build_match_data(n=17, include_color=True))
+
+        result = _run_match(data, spatial_order=2, use_color=1, scale_noise=True)
+
+        assert result is not None
+        assert result["spatial_order"] == 1
+        assert len(result["params"]) == 3 + 1
+        assert np.all(result["idx"])
+        zero_eval = result["zero_fn"](data["obj_x"], data["obj_y"])
+        np.testing.assert_allclose(zero_eval, data["zero_point"], atol=2e-2)
+
+    @pytest.mark.unit
+    def test_spatial_order_kept_for_enough_stars(self):
+        data = _add_noise_and_outliers(_build_match_data(n=100, include_color=True))
+
+        result = _run_match(data, spatial_order=2, use_color=1)
+
+        assert result is not None
+        assert result["spatial_order"] == 2
+        assert len(result["params"]) == 6 + 1
+
+    @pytest.mark.unit
+    def test_scale_noise_never_shrinks_errors(self):
+        # Declared errors 5x larger than the actual scatter: rescaling them
+        # down would turn 1.6-sigma (declared) deviations into 8-sigma ones
+        data = _add_noise_and_outliers(_build_match_data(n=60), sigma=0.01, n_outliers=4, outlier_offset=0.08)
+        data["obj_magerr"] = data["obj_magerr"] * 5
+        data["cat_magerr"] = data["cat_magerr"] * 5
+
+        result = _run_match(data, spatial_order=0, scale_noise=True, threshold=3.0)
+
+        assert result is not None
+        assert np.all(result["idx"])
+        # The mismatch is still reported
+        assert result["error_scale"] < 0.5
+
+
 class TestMatchRankDeficient:
     """``match()`` with a design matrix not constrained by the data."""
 
