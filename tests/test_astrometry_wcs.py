@@ -184,7 +184,8 @@ class TestFitZPNSIP:
         w_init.wcs.ctype = ['RA---ZPN', 'DEC--ZPN']
 
         # ZPN-only fit
-        wcs_zpn, _ = fit_zpn_wcs_from_points(xy, sky, w_init, pv_deg=5)
+        # CRPIX fixed when SIP follows, as in fit_wcs_from_points()
+        wcs_zpn, _ = fit_zpn_wcs_from_points(xy, sky, w_init, pv_deg=5, fit_crpix=False)
         ra1, dec1 = wcs_zpn.all_pix2world(x, y, 0)
         sep_zpn = SkyCoord(ra1, dec1, unit='deg').separation(sky).arcsec
 
@@ -230,7 +231,8 @@ class TestFitZPNSIP:
         w_init = zpn_sip_wcs.deepcopy()
         w_init.sip = None
         w_init.wcs.ctype = ['RA---ZPN', 'DEC--ZPN']
-        wcs_zpn, _ = fit_zpn_wcs_from_points(xy, sky, w_init, pv_deg=5)
+        # CRPIX fixed when SIP follows, as in fit_wcs_from_points()
+        wcs_zpn, _ = fit_zpn_wcs_from_points(xy, sky, w_init, pv_deg=5, fit_crpix=False)
 
         seps = {}
         for order in [2, 3]:
@@ -252,7 +254,8 @@ class TestFitZPNSIP:
         w_init = zpn_sip_wcs.deepcopy()
         w_init.sip = None
         w_init.wcs.ctype = ['RA---ZPN', 'DEC--ZPN']
-        wcs_zpn, _ = fit_zpn_wcs_from_points(xy, sky, w_init, pv_deg=5)
+        # CRPIX fixed when SIP follows, as in fit_wcs_from_points()
+        wcs_zpn, _ = fit_zpn_wcs_from_points(xy, sky, w_init, pv_deg=5, fit_crpix=False)
 
         seps = {}
         for n_iter in [1, 3, 5]:
@@ -426,7 +429,7 @@ class TestRoundTrip:
         w_init.sip = None
         w_init.wcs.ctype = ['RA---ZPN', 'DEC--ZPN']
 
-        wcs_zpn, _ = fit_zpn_wcs_from_points(xy, sky, w_init, pv_deg=5)
+        wcs_zpn, _ = fit_zpn_wcs_from_points(xy, sky, w_init, pv_deg=5, fit_crpix=False)
         wcs_sip = _fit_zpn_sip(wcs_zpn, xy, sky, sip_degree=2, pv_deg=5)
 
         # Forward: pix → sky

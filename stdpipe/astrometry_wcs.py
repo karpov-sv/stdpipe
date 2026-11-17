@@ -408,7 +408,10 @@ def _fit_zpn_sip(
     (coma, astigmatism, etc.) that the ZPN radial model cannot capture.
 
     Iterates between fitting SIP coefficients (pixel-space residuals) and
-    re-optimizing PV parameters with SIP applied.
+    re-optimizing PV parameters with SIP applied. CRPIX is kept fixed in these
+    re-fits: moving the projection center is nearly degenerate with the
+    quadratic SIP terms on small fields, and lets CRPIX (the center of the SIP
+    polynomials) drift far outside the image, where the fit is ill-conditioned.
 
     Parameters
     ----------
@@ -550,6 +553,7 @@ def _fit_zpn_sip(
                 sky,
                 w,
                 pv_deg=pv_deg,
+                fit_crpix=False,
                 robust_loss=robust_loss,
                 f_scale_arcsec=f_scale_arcsec,
                 max_nfev=max_nfev,
@@ -1047,7 +1051,8 @@ def fit_wcs_from_points(
     sip_degree : int or None, optional
         SIP polynomial degree.  For TAN projections, controls SIP distortion
         order.  For ZPN projections, if > 0, SIP corrections are fitted on
-        top of ZPN PV parameters to capture non-radial distortions.  For
+        top of ZPN PV parameters to capture non-radial distortions, and CRPIX
+        of the template is then kept fixed (see :func:`_fit_zpn_sip`).  For
         other projections it is ignored (SIP is not standard there).
     pv_deg : int, optional
         ZPN PV polynomial degree (``PV2_0 … PV2_pv_deg``).  Default 5.
@@ -1090,12 +1095,20 @@ def fit_wcs_from_points(
 
         # First fit ZPN PV parameters (radial distortion)
         log(f"Fitting ZPN WCS with pv_deg={zpn_deg} using {len(xy_arr)} points")
+        # With SIP following, keep CRPIX fixed: otherwise the ZPN fit absorbs
+        # the quadratic distortions by moving the projection center away
+        fit_sip = sip_degree is not None and int(sip_degree) > 0
         wcs_best, _result = fit_zpn_wcs_from_points(
-            xy_arr, world_coords, wcs_init=projection, pv_deg=zpn_deg, verbose=verbose
+            xy_arr,
+            world_coords,
+            wcs_init=projection,
+            pv_deg=zpn_deg,
+            fit_crpix=not fit_sip,
+            verbose=verbose,
         )
 
         # Then fit SIP corrections for non-radial distortions
-        if sip_degree is not None and int(sip_degree) > 0:
+        if fit_sip:
             log(f"Fitting SIP degree {int(sip_degree)} corrections on top of ZPN")
             wcs_best = _fit_zpn_sip(
                 wcs_best,

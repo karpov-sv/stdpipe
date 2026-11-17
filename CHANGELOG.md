@@ -117,6 +117,12 @@ releases up to 0.4.0 are only available in the
 
 ### Fixed
 
+- ZPN-SIP fits (`astrometry_wcs.fit_wcs_from_points()` with a ZPN projection
+  and `sip_degree`) keep CRPIX fixed. Moving the projection center is nearly
+  degenerate with quadratic SIP terms on small fields, so CRPIX used to drift
+  thousands of pixels outside the image, leaving an ill-conditioned SIP fit
+  with platform-dependent results (e.g. 0.02-0.08" residuals on exact data,
+  0.003" now).
 - `get_objects_sep(fwhm=True)` returned an empty table when every detection
   was flagged (e.g. all deblended in a crowded field): the FWHM estimate was
   NaN, and so were the apertures and fluxes. It now falls back to flagged
