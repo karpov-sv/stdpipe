@@ -64,10 +64,18 @@ releases up to 0.4.0 are only available in the
   errors of faint objects were too small by ~12% with the mode, and by up to
   ~50% for narrow annuli. Groups of grouped optimal extraction fit their own
   background and do not get it.
-- sep-x 1.5.3 or newer is now required (`sep-x>=1.5.3`), as earlier versions
-  did not add the noise of the sigma-clipped annulus background to the flux
-  errors of `sum_circle()` and `sum_circle_optimal()` with `bkgann`, used by
-  `get_objects_sep()` and `measure_objects_sep()`.
+- sep-x 1.5.4 or newer is now required (`sep-x>=1.5.4`). Version 1.5.3 fixed
+  the missing noise of the sigma-clipped annulus background in the flux errors
+  of `sum_circle()` and `sum_circle_optimal()` with `bkgann`, used by
+  `get_objects_sep()` and `measure_objects_sep()`. Version 1.5.4 propagates
+  aperture sum errors with squared pixel overlap weights, like photutils 3.1.
+- Aperture flux errors use the variance of the overlap-weighted sum,
+  `sum(w**2 * err**2)`, in all places: `bg_fluxerr` is now propagated by
+  photutils or SEP themselves, consistently with `fluxerr`, and
+  `estimate_noise_excess()` predicts the noise the same way, so it is ~1 for
+  white noise (it was ~0.94-0.97 with linear weights `w`). With photutils
+  older than 3.1, `measure_objects()` still uses linear weights, overestimating
+  the flux errors by a few percent.
 - `measure_objects_sep()` now treats `err` as the full per-pixel noise, like
   `measure_objects()`: `gain` only adds the source Poisson noise when the noise
   map is built automatically (`err=None`) and is no longer passed to SEP. A
