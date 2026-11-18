@@ -893,6 +893,40 @@ def _optimal_extraction(image, err, x, y, psf, bg_local=None, mask=None, radius=
     return flux, fluxerr, n_pix, np.sum(P), reduced_chi2, dflux_dbg
 
 
+def _masked_flux_fraction(mask, x, y, aper, fwhm=None):
+    """Fraction of the flux of a point source lost to the masked pixels of its aperture.
+
+    It is the fraction of the aperture pixels (by centre) that are masked, weighted
+    with a Gaussian PSF of given `fwhm` (scalar or per-source array), or unweighted if
+    it is not known. Pixels outside the image are ignored. `aper` may be scalar or
+    per-source array, in pixels.
+    """
+    x, y = np.atleast_1d(x), np.atleast_1d(y)
+    aper = np.broadcast_to(np.asarray(aper, dtype=float), x.shape)
+    if fwhm is not None:
+        fwhm = np.broadcast_to(np.asarray(fwhm, dtype=float), x.shape)
+
+    result = np.zeros(x.size)
+    for i in range(x.size):
+        r = aper[i]
+        x1, x2 = max(int(np.floor(x[i] - r)), 0), min(int(np.ceil(x[i] + r)) + 1, mask.shape[1])
+        y1, y2 = max(int(np.floor(y[i] - r)), 0), min(int(np.ceil(y[i] + r)) + 1, mask.shape[0])
+        if x2 <= x1 or y2 <= y1:
+            continue
+
+        yy, xx = np.mgrid[y1:y2, x1:x2]
+        d2 = (xx - x[i])**2 + (yy - y[i])**2
+        inside = d2 <= r**2
+        if fwhm is not None and np.isfinite(fwhm[i]) and fwhm[i] > 0:
+            w = np.exp(-0.5*d2[inside]/(fwhm[i]/2.3548)**2)
+        else:
+            w = np.ones(np.sum(inside))
+        if np.sum(w) > 0:
+            result[i] = np.sum(w*mask[y1:y2, x1:x2][inside])/np.sum(w)
+
+    return result
+
+
 def measure_objects(
     obj,
     image,
@@ -918,6 +952,7 @@ def measure_objects(
     centroid_method='com',
     keep_negative=True,
     get_bg=False,
+    max_masked_fraction=0.01,
     verbose=False,
 ):
     """Photometry at the positions of already detected objects.
@@ -1031,6 +1066,12 @@ def measure_objects(
         If False, measurements with negative fluxes will be discarded.
     get_bg : bool
         If True, also return estimated background and background noise images.
+    max_masked_fraction : float
+        Objects losing more than this fraction of their flux to the masked pixels of
+        the aperture, estimated with a Gaussian PSF of given `fwhm` (or as a masked area
+        fraction if `fwhm` is not set), get flag 0x200. Single masked pixels in the
+        wings, e.g. warm pixels, do not affect the flux significantly. Set to 0 to flag
+        any masked pixel in the aperture.
     verbose : bool or callable
         Whether to show verbose messages. May be boolean or a print-like
         function.
@@ -1057,7 +1098,7 @@ def measure_objects(
     -----
     Quality flags set in the ``flags`` column:
 
-    - 0x200: At least one aperture pixel is masked
+    - 0x200: More than `max_masked_fraction` of the flux is lost to masked aperture pixels
     - 0x400: Invalid position or local background estimation failed
     - 0x800: Optimal extraction failed (NaN result)
     - 0x1000: Poor fit quality (chi2 > 1000, numerical instability)
@@ -1366,9 +1407,14 @@ def measure_objects(
         positions = list(zip(x_vals[valid_pos], y_vals[valid_pos]))
         apertures = photutils.aperture.CircularAperture(positions, r=aper)
 
-        # Check whether some aperture pixels are masked, and set the flags for that
+        # Flag the objects losing significant flux to the masked aperture pixels,
+        # checking only the ones having any masked pixels there
         mres = photutils.aperture.aperture_photometry(mask | mask0, apertures, method='center')
-        obj['flags'][valid_idx[mres['aperture_sum'] > 0]] |= 0x200
+        has_masked = np.asarray(mres['aperture_sum']) > 0
+        if np.any(has_masked):
+            xm, ym = x_vals[valid_pos][has_masked], y_vals[valid_pos][has_masked]
+            masked_frac = _masked_flux_fraction(mask | mask0, xm, ym, aper, fwhm=_fwhm_at(fwhm, xm, ym))
+            obj['flags'][valid_idx[has_masked][masked_frac > max_masked_fraction]] |= 0x200
 
         # Aperture unmasked areas, in (fractional) pixels
         image_ones = np.ones(image1.shape)
@@ -1727,6 +1773,23 @@ def _annulus_bg_quantized(
     return result
 
 
+def _sep_aper_flagged(flag, mask, x, y, aper, fwhm, max_masked_fraction):
+    """Objects to be flagged with 0x200 from SEP aperture flags: truncated or fully
+    masked apertures, or masked pixels taking more than `max_masked_fraction` of the
+    flux, see :func:`_masked_flux_fraction`."""
+    flag = np.asarray(flag)
+    bad = (flag & ~int(sep.APER_HASMASKED)) > 0
+    has_masked = (flag & int(sep.APER_HASMASKED)) > 0
+    if np.any(has_masked & ~bad):
+        idx = np.where(has_masked & ~bad)[0]
+        aper = np.broadcast_to(np.asarray(aper, dtype=float), flag.shape)
+        if fwhm is not None and np.ndim(fwhm):
+            fwhm = np.asarray(fwhm)[idx]
+        frac = _masked_flux_fraction(mask, np.asarray(x)[idx], np.asarray(y)[idx], aper[idx], fwhm=fwhm)
+        bad[idx[frac > max_masked_fraction]] = True
+    return bad
+
+
 def _sep_annulus_bg(
     image, x, y, bkgann, mask, bg_estimator, clip_sigma, clip_iters, image_quant=None, q=None
 ):
@@ -1791,6 +1854,7 @@ def measure_objects_sep(
     bg_estimator='mean',
     clip_sigma=5.0,
     clip_iters=5,
+    max_masked_fraction=0.01,
     verbose=False,
 ):
     """Photometry at the positions of already detected objects using SEP routines.
@@ -1903,6 +1967,12 @@ def measure_objects_sep(
     clip_iters : int
         Maximum number of clipping iterations when ``bkgann`` is provided.
         Set to 0 to disable clipping.
+    max_masked_fraction : float
+        Objects losing more than this fraction of their flux to the masked pixels of
+        the aperture, estimated with a Gaussian PSF of given `fwhm` (or as a masked area
+        fraction if `fwhm` is not set), get flag 0x200. Single masked pixels in the
+        wings, e.g. warm pixels, do not affect the flux significantly. Set to 0 to flag
+        any masked pixel in the aperture.
     verbose : bool or callable
         Whether to show verbose messages. May be boolean or print-like
         function.
@@ -1930,7 +2000,8 @@ def measure_objects_sep(
     -----
     Quality flags set in the ``flags`` column:
 
-    - 0x200: At least one aperture pixel is masked (aperture/optimal paths)
+    - 0x200: More than `max_masked_fraction` of the flux is lost to masked aperture
+      pixels, or the aperture is truncated by the image edge (aperture/optimal paths)
     - 0x400: Invalid position
     - 0x800: Optimal extraction failed (NaN result)
     - 0x1000: PSF fit returned non-zero quality flag, or PSF fit failed (NaN result)
@@ -2322,7 +2393,10 @@ def measure_objects_sep(
 
             obj['flux'][valid_pos] = flux
             obj['fluxerr'][valid_pos] = fluxerr
-            obj['flags'][np.where(valid_pos)[0][flag > 0]] |= 0x200
+            obj['flags'][np.where(valid_pos)[0][_sep_aper_flagged(
+                flag, mask | mask0, x_vals[valid_pos], y_vals[valid_pos], aper_arr,
+                fwhm_at_pos if fwhm_at_pos is not None else fwhm_s, max_masked_fraction,
+            )]] |= 0x200
 
         else:
             # Standard aperture photometry
@@ -2342,7 +2416,10 @@ def measure_objects_sep(
 
             obj['flux'][valid_pos] = flux
             obj['fluxerr'][valid_pos] = fluxerr
-            obj['flags'][np.where(valid_pos)[0][flag > 0]] |= 0x200
+            obj['flags'][np.where(valid_pos)[0][_sep_aper_flagged(
+                flag, mask | mask0, x_vals[valid_pos], y_vals[valid_pos], aper_arr,
+                fwhm_at_pos if fwhm_at_pos is not None else fwhm_s, max_masked_fraction,
+            )]] |= 0x200
 
             # For aperture photometry, compute local background separately
             if bkgann_pix is not None:

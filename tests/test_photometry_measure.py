@@ -2749,6 +2749,48 @@ class TestLocalBackgroundNoise:
 
 
 @pytest.mark.unit
+class TestMaskedApertureFlag:
+    """0x200 is set only when masked pixels take a significant part of the flux."""
+
+    @pytest.fixture
+    def star(self):
+        rng = np.random.default_rng(2)
+        yy, xx = np.mgrid[:101, :101]
+        sigma = 4.0/2.3548
+        image = 1e4/(2*np.pi*sigma**2)*np.exp(-((xx - 50)**2 + (yy - 50)**2)/2/sigma**2)
+        image += rng.normal(0, 1.0, image.shape)
+        return image, Table({'x': [50.0], 'y': [50.0]})
+
+    @pytest.mark.parametrize('backend', ['photutils', 'sep'])
+    @pytest.mark.parametrize('pixel,max_fraction,flagged', [
+        (None, 0.01, False),
+        ((50, 57), 0.01, False),   # Single masked pixel in the wing, ~2 FWHM out
+        ((50, 50), 0.01, True),    # Masked core
+        ((50, 57), 0.0, True),     # Any masked pixel, as before
+    ])
+    def test_masked_pixel(self, star, backend, pixel, max_fraction, flagged):
+        image, obj = star
+        mask = np.zeros(image.shape, dtype=bool)
+        if pixel is not None:
+            mask[pixel] = True
+        res = _measure_backend(backend)(
+            obj, image, aper=2.0, fwhm=4.0, mask=mask, bg=0.0, err=np.ones_like(image),
+            max_masked_fraction=max_fraction, sn=0, verbose=False,
+        )
+        assert bool(res['flags'][0] & 0x200) == flagged
+
+    def test_masked_flux_fraction(self):
+        mask = np.zeros((50, 50), dtype=bool)
+        mask[25, 25] = True
+        # Unweighted: one pixel of the aperture area
+        frac = photometry_measure._masked_flux_fraction(mask, [25.0], [25.0], 5.0)
+        assert frac[0] == pytest.approx(1/np.sum(np.hypot(*np.mgrid[-5:6, -5:6]) <= 5))
+        # PSF-weighted: central pixel weight of a narrow Gaussian dominates
+        frac = photometry_measure._masked_flux_fraction(mask, [25.0], [25.0], 5.0, fwhm=1.0)
+        assert frac[0] > 0.5
+
+
+@pytest.mark.unit
 class TestQuantizedLocalBackground:
     """Median and mode of the annulus must not be quantized with integer-valued images."""
 
