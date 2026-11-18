@@ -443,3 +443,77 @@ class TestAstrometryNetIntegration:
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+
+
+def _make_sparse_scamp_data(n_obj=25, n_match=16, seed=2):
+    """Sparse field: n_obj objects, only n_match of them in the reference catalogue
+    (others too faint for it), plus unrelated catalogue stars, with slightly offset
+    initial WCS."""
+    rng = np.random.default_rng(seed)
+    wcs = WCS(naxis=2)
+    wcs.wcs.ctype = ['RA---TAN', 'DEC--TAN']
+    wcs.wcs.crval = [180.0, 30.0]
+    wcs.wcs.crpix = [512.5, 512.5]
+    wcs.wcs.cd = np.array([[-1.6e-4, 0], [0, 1.6e-4]])
+
+    x, y = rng.uniform(50, 974, n_obj), rng.uniform(50, 974, n_obj)
+    ra, dec = wcs.all_pix2world(x, y, 0)
+    mag = rng.uniform(12, 16, n_obj)
+    flux = 10**(-0.4*(mag - 25))
+    obj = Table({
+        'x': x + rng.normal(0, 0.1, n_obj), 'y': y + rng.normal(0, 0.1, n_obj),
+        'xerr': np.full(n_obj, 0.1), 'yerr': np.full(n_obj, 0.1),
+        'flux': flux, 'fluxerr': 0.01*flux, 'mag': mag - 25, 'magerr': np.full(n_obj, 0.01),
+        'flags': np.zeros(n_obj, dtype=int),
+    })
+
+    # Unrelated catalogue stars, away from the objects
+    xc, yc = rng.uniform(0, 1024, 60), rng.uniform(0, 1024, 60)
+    far = np.min(np.hypot(xc[:, None] - x[None, :], yc[:, None] - y[None, :]), axis=1) > 30
+    rac, decc = wcs.all_pix2world(xc[far], yc[far], 0)
+    cat = Table({
+        'RAJ2000': np.concatenate([ra[:n_match], rac]),
+        'DEJ2000': np.concatenate([dec[:n_match], decc]),
+        'e_RAJ2000': np.full(n_match + np.sum(far), 0.01),
+        'e_DEJ2000': np.full(n_match + np.sum(far), 0.01),
+        'rmag': np.concatenate([mag[:n_match], rng.uniform(12, 16, np.sum(far))]),
+        'e_rmag': np.full(n_match + np.sum(far), 0.01),
+    })
+
+    wcs0 = wcs.deepcopy()
+    wcs0.wcs.crval = [180.0 + 1.0/3600, 30.0 - 1.0/3600]
+    return obj, cat, wcs0
+
+
+@pytest.mark.requires_scamp
+class TestRefineWcsScampSparse:
+    """Best-effort linear solution when most objects match, though too few for the strict rule."""
+
+    def test_best_effort_accepted(self):
+        obj, cat, wcs0 = _make_sparse_scamp_data()
+        wcs = astrometry.refine_wcs_scamp(obj, cat, wcs=wcs0, sr=3/3600, order=1, verbose=False)
+        assert wcs is not None
+        ra, dec = wcs.all_pix2world(obj['x'][:16], obj['y'][:16], 0)
+        sep = astrometry.spherical_distance(ra, dec, cat['RAJ2000'][:16], cat['DEJ2000'][:16])
+        assert np.median(sep)*3600 < 0.2
+
+    def test_linear_solution_keeps_accuracy_keywords(self):
+        # Linear SCAMP solution has no PV keywords, and its header is rebuilt as TAN
+        obj, cat, wcs0 = _make_sparse_scamp_data(n_obj=60, n_match=40)
+        header = astrometry.refine_wcs_scamp(obj, cat, wcs=wcs0, sr=3/3600, order=1,
+                                             get_header=True, verbose=False)
+        assert header['CTYPE1'] == 'RA---TAN'
+        assert 0 < header['ASTRRMS1']*3600 < 0.5
+        assert 0 < header['ASTRRMS2']*3600 < 0.5
+
+    def test_best_effort_disabled(self):
+        obj, cat, wcs0 = _make_sparse_scamp_data()
+        wcs = astrometry.refine_wcs_scamp(obj, cat, wcs=wcs0, sr=3/3600, order=1,
+                                          min_match_fraction=None, verbose=False)
+        assert wcs is None
+
+    def test_too_small_fraction_rejected(self):
+        # 13 matches are enough per parameter, but only a third of 40 objects
+        obj, cat, wcs0 = _make_sparse_scamp_data(n_obj=40, n_match=13)
+        wcs = astrometry.refine_wcs_scamp(obj, cat, wcs=wcs0, sr=3/3600, order=1, verbose=False)
+        assert wcs is None

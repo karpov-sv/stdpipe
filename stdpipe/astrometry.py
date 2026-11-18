@@ -1329,6 +1329,7 @@ def refine_wcs_scamp(
     pos_err_floor=0.25,
     max_sigma=None,
     min_matches_per_param=3,
+    min_match_fraction=0.5,
     auto_max_order=5,
     auto_threshold=0.05,
     position_maxerr=None,
@@ -1394,6 +1395,13 @@ def refine_wcs_scamp(
         distortion polynomial. If the fit has less of them, it is repeated with
         lower degree, down to ``order=1``, as such fits overfit the data and thus
         have deceivingly small residuals. Default is 3.
+    min_match_fraction : float, optional
+        Best-effort acceptance of the linear (``order=1``) solution for sparse
+        fields, having less matches than ``min_matches_per_param`` requires: it is
+        still accepted, with a warning, if at least this fraction of the objects,
+        and at least 2 per free parameter, are matched to the reference catalogue
+        by it, as such a match can't be accidental. Set to None to disable.
+        Default is 0.5.
     auto_max_order : int, optional
         Largest distortion degree to try when ``order='auto'``. Default is 5.
     auto_threshold : float, optional
@@ -1682,7 +1690,13 @@ def refine_wcs_scamp(
                 )
                 h1['CTYPE1'] = 'RA---TAN'
                 h1['CTYPE2'] = 'DEC--TAN'
-                h1 = WCS(h1).to_header(relax=True)
+                h2 = WCS(h1).to_header(relax=True)
+                # Keep SCAMP solution quality keywords (ASTRRMS etc), that are not WCS
+                # ones and would be lost otherwise
+                for key in ['ASTIRMS1', 'ASTIRMS2', 'ASTRRMS1', 'ASTRRMS2', 'ASTINST']:
+                    if key in h1:
+                        h2[key] = (h1[key], h1.comments[key])
+                h1 = h2
 
         return h1, n_matches, sigma
 
@@ -1805,7 +1819,25 @@ def refine_wcs_scamp(
         if max_sigma is None:
             max_sigma = 0.5 * sr * 3600
 
-        if n_matches < min_matches_for(order):
+        enough = n_matches >= min_matches_for(order)
+
+        # Best-effort linear solution for sparse fields: the parameters are still
+        # constrained, and matching most of the objects can't happen by chance
+        if (
+            not enough
+            and max(1, order) == 1
+            and min_match_fraction is not None
+            and n_matches >= max(min_matches_for(order) * 2 / min_matches_per_param,
+                                 min_match_fraction * len(obj))
+        ):
+            log(
+                'Warning: only %d matches (< %d), but they are %d of %d objects, '
+                'accepting best-effort linear solution'
+                % (n_matches, min_matches_for(order), n_matches, len(obj))
+            )
+            enough = True
+
+        if not enough:
             log(
                 'Too few matches (%d < %d), fitting likely failed'
                 % (n_matches, min_matches_for(order))
